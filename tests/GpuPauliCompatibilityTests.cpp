@@ -1,3 +1,4 @@
+#include "../Execution/SimulatorConfig.h"
 #include "../Simulators/Core/Factory.h"
 #include "LoadedMaestro.h"
 #define INCLUDED_BY_FACTORY
@@ -26,6 +27,47 @@ template <class F> void Reject(F &&f)
         rejected = true;
     }
     Check(rejected, "uninitialized Pauli wrapper accepted a result");
+}
+
+// Python's typed tuning fields reach the GPU backend's configuration, the
+// plugin's tuning calls and the worker count of its observable batch call.
+void TypedTuningReachesPlugin(const std::shared_ptr<GpuLibrary> &library)
+{
+    GetMaestroObjectWithMute();
+    const auto handle = CreateSimpleSimulator(2);
+    Check(handle != 0, "create network for typed tuning");
+
+    struct Owner
+    {
+        unsigned long handle;
+
+        ~Owner()
+        {
+            DestroySimpleSimulator(handle);
+        }
+    } owner{handle};
+
+    MaestroExecution::SimulatorConfig config;
+    config.simulator_type = SimulatorType::kGpuSim;
+    config.simulation_type = SimulationType::kPauliPropagator;
+    config.fixed_backend = true;
+    config.pp_workers = 4;
+    config.pp_max_fused_gates = 8;
+    config.pp_memory_limit_bytes = 1 << 20;
+    config.pp_sampling_cache_nodes = 0;
+    const auto network = MaestroExecution::ConfigureNetwork(handle, config, 2);
+    const auto simulator = network ? network->GetSimulator() : nullptr;
+    Check(simulator && simulator->GetType() == SimulatorType::kGpuSim, "typed tuning created the GPU Pauli backend");
+    Check(simulator->GetConfiguration("pauli_propagator_workers") == "4" && simulator->GetConfiguration("pauli_propagator_max_fused_gates") == "8" &&
+              simulator->GetConfiguration("pauli_propagator_memory_limit_bytes") == "1048576" &&
+              simulator->GetConfiguration("pauli_propagator_sampling_cache_nodes") == "0",
+          "typed tuning stored on the GPU backend");
+
+    const auto values = simulator->ExpectationValues({"ZI", "IZ", "ZZ"});
+    long long last[5];
+    reinterpret_cast<void (*)(long long *)>(library->GetFunction("PauliTestLastTuning"))(last);
+    Check(last[0] == 1048576 && last[1] == 8 && last[2] == 0, "typed tuning reached the plugin");
+    Check(values.size() == 3 && last[3] == 4 && last[4] == 3, "pp_workers reached the GPU batch call");
 }
 
 void UninitializedResults(const std::shared_ptr<GpuLibrary> &library)
@@ -79,6 +121,7 @@ int main(int argc, char **)
             }
             failAfter(4);
             Check(!pp.ApplyCH(0, 1) && count() == 1, "nested composite rollback");
+            TypedTuningReachesPlugin(library);
         }
         else
         {

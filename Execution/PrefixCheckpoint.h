@@ -31,8 +31,8 @@ class PrefixCheckpoint
     // Sample suffix from the saved state. Terminal measurements on mixed-state
     // backends, the QCSim Pauli propagator and QCSim statevector/stabilizer/MPS
     // backends reuse one prepared suffix state per realization. QCSim path
-    // integral and extended stabilizer also preserve the saved state when
-    // multinomial counts are enabled. Pure-state suffixes with resets replay
+    // integral and extended stabilizer also preserve the saved state for
+    // counts and rows. Pure-state suffixes with resets replay
     // per shot, as the Pauli propagator does under the legacy counts policy
     // (PreservesSavedStateWhileSampling).
     // Records span
@@ -48,7 +48,7 @@ class PrefixCheckpoint
     // of calls replays without repeating a batch. On the QCSim extended
     // stabilizer, after a gate-only prefix, noisy suffixes that frames support
     // run on batched Pauli frames (extended_frame_v1) when PreferExtendedFrames
-    // admits the call: unseeded under counts_policy auto, or frame_v1.
+    // admits the call: counts_policy auto or frame_v1, with or without a seed.
     // Not safe for concurrent calls.
     MAESTRO_TRANSFORM_API ShotRecords ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
                                                     std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, size_t num_measurements,

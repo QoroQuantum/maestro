@@ -1,0 +1,1085 @@
+[
+  {
+    "id": "clean_stabilizer_seed_zero",
+    "api": "execute",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": 0,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                1,
+                3
+              ],
+              [
+                0,
+                1
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [],
+    "arguments": {
+      "shots": 137
+    }
+  },
+  {
+    "id": "clean_statevector_seed_uint64_max",
+    "api": "execute",
+    "config": {
+      "simulation_type": "Statevector",
+      "seed": 18446744073709551615,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "t",
+          [
+            0
+          ]
+        ],
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                1,
+                3
+              ],
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                2
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [],
+    "arguments": {
+      "shots": 139
+    }
+  },
+  {
+    "id": "pauli_readout_dynamic_noise_seed_zero",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": null,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "qasm": "OPENQASM 3.0; qubit[3] q; bit[5] c; h q[0]; cx q[0],q[1]; c[0] = measure q[0]; if (c[0]) { x q[2]; } reset q[0]; h q[0]; c[1] = measure q[0]; c[2] = measure q[1]; c[4] = measure q[2];"
+    },
+    "noise": [
+      [
+        "set_all_depolarizing",
+        [
+          3,
+          0.12
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.13,
+          0.23
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          1,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 97,
+      "noise_realizations": 97,
+      "noise_seed": 0
+    }
+  },
+  {
+    "id": "pauli_readout_dynamic_seed_alias_zero",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": null,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "qasm": "OPENQASM 3.0; qubit[3] q; bit[5] c; h q[0]; cx q[0],q[1]; c[0] = measure q[0]; if (c[0]) { x q[2]; } reset q[0]; h q[0]; c[1] = measure q[0]; c[2] = measure q[1]; c[4] = measure q[2];"
+    },
+    "noise": [
+      [
+        "set_all_depolarizing",
+        [
+          3,
+          0.12
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.13,
+          0.23
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          1,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 97,
+      "noise_realizations": 97,
+      "seed": 0
+    }
+  },
+  {
+    "id": "pauli_readout_dynamic_config_seed_uint64_max",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": 18446744073709551615,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "qasm": "OPENQASM 3.0; qubit[3] q; bit[5] c; h q[0]; cx q[0],q[1]; c[0] = measure q[0]; if (c[0]) { x q[2]; } reset q[0]; h q[0]; c[1] = measure q[0]; c[2] = measure q[1]; c[4] = measure q[2];"
+    },
+    "noise": [
+      [
+        "set_all_depolarizing",
+        [
+          3,
+          0.12
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.13,
+          0.23
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          1,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 101,
+      "noise_realizations": 101
+    }
+  },
+  {
+    "id": "statevector_dynamic_config_and_noise_seeds",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "Statevector",
+      "seed": 5,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "qasm": "OPENQASM 3.0; qubit[3] q; bit[5] c; h q[0]; cx q[0],q[1]; c[0] = measure q[0]; if (c[0]) { x q[2]; } reset q[0]; h q[0]; c[1] = measure q[0]; c[2] = measure q[1]; c[4] = measure q[2];"
+    },
+    "noise": [
+      [
+        "set_all_depolarizing",
+        [
+          3,
+          0.12
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.13,
+          0.23
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          1,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 103,
+      "noise_realizations": 103,
+      "noise_seed": 19
+    }
+  },
+  {
+    "id": "shared_pauli_channel_and_readout",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": 0,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "pauli_channel",
+          [
+            [
+              0
+            ],
+            [
+              0.7,
+              0.1,
+              0.15,
+              0.05
+            ]
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                2
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_readout_error",
+        [
+          0,
+          0.09,
+          0.21
+        ]
+      ],
+      [
+        "set_bit_flip",
+        [
+          1,
+          0.17
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 113,
+      "noise_realizations": 7,
+      "noise_seed": 7
+    }
+  },
+  {
+    "id": "combined_coherent_mps_dynamic",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "MatrixProductState",
+      "seed": 0,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "t",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        ],
+        [
+          "reset",
+          [
+            0
+          ]
+        ],
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            2
+          ]
+        ],
+        [
+          "h",
+          [
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                2
+              ],
+              [
+                2,
+                3
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_coherent_rotation",
+        [
+          1,
+          0.13,
+          -0.07,
+          0.09
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.05,
+          0.11
+        ]
+      ],
+      [
+        "set_all_depolarizing",
+        [
+          3,
+          0.09
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 47,
+      "noise_realizations": 47,
+      "noise_seed": 11
+    }
+  },
+  {
+    "id": "coherent_mps_shared_batches",
+    "api": "coherent_execute",
+    "config": {
+      "simulation_type": "MatrixProductState",
+      "seed": 19,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "t",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        ],
+        [
+          "reset",
+          [
+            0
+          ]
+        ],
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            2
+          ]
+        ],
+        [
+          "h",
+          [
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                2
+              ],
+              [
+                2,
+                3
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_coherent_rotation",
+        [
+          1,
+          0.13,
+          -0.07,
+          0.09
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.05,
+          0.11
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 61,
+      "noise_realizations": 7,
+      "noise_seed": 23
+    }
+  },
+  {
+    "id": "density_matrix_exact_shared_ensemble",
+    "api": "noisy_execute",
+    "config": {
+      "simulation_type": "DensityMatrix",
+      "seed": 9223372036854775825,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "x",
+          [
+            1
+          ]
+        ],
+        [
+          "pauli_channel",
+          [
+            [
+              1
+            ],
+            [
+              0.8,
+              0.1,
+              0.0,
+              0.1
+            ]
+          ]
+        ],
+        [
+          "measure_all",
+          []
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_t1",
+        [
+          0,
+          0.31
+        ]
+      ],
+      [
+        "set_dephasing",
+        [
+          1,
+          0.17
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 127,
+      "noise_realizations": 1,
+      "noise_seed": 0
+    }
+  },
+  {
+    "id": "mpo_exact_shared_ensemble",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "MatrixProductOperator",
+      "seed": 0,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "x",
+          [
+            1
+          ]
+        ],
+        [
+          "pauli_channel",
+          [
+            [
+              1
+            ],
+            [
+              0.8,
+              0.1,
+              0.0,
+              0.1
+            ]
+          ]
+        ],
+        [
+          "measure_all",
+          []
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_t1",
+        [
+          0,
+          0.31
+        ]
+      ],
+      [
+        "set_dephasing",
+        [
+          1,
+          0.17
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 131,
+      "noise_realizations": 5,
+      "noise_seed": 11
+    }
+  },
+  {
+    "id": "mpo_exact_independent_realizations",
+    "api": "full_noise_execute",
+    "config": {
+      "simulation_type": "MatrixProductOperator",
+      "seed": null,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "x",
+          [
+            1
+          ]
+        ],
+        [
+          "pauli_channel",
+          [
+            [
+              1
+            ],
+            [
+              0.8,
+              0.1,
+              0.0,
+              0.1
+            ]
+          ]
+        ],
+        [
+          "measure_all",
+          []
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_t1",
+        [
+          0,
+          0.31
+        ]
+      ],
+      [
+        "set_dephasing",
+        [
+          1,
+          0.17
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.07,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 53,
+      "noise_realizations": 53,
+      "noise_seed": 0
+    }
+  },
+  {
+    "id": "checkpoint_pauli_readout_noise_seed_zero",
+    "api": "execute_suffix",
+    "config": {
+      "simulation_type": "Stabilizer",
+      "seed": 29,
+      "max_simulators": 1,
+      "max_bond_dimension": 16
+    },
+    "circuit": {
+      "operations": [
+        [
+          "x",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                2
+              ]
+            ]
+          ]
+        ],
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                3
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "noise": [
+      [
+        "set_all_depolarizing",
+        [
+          2,
+          0.14
+        ]
+      ],
+      [
+        "set_readout_error",
+        [
+          0,
+          0.11,
+          0.19
+        ]
+      ]
+    ],
+    "arguments": {
+      "shots": 73,
+      "noise_realizations": 73,
+      "noise_seed": 0,
+      "num_measurements": 5
+    },
+    "prefix": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    },
+    "num_qubits": 2
+  },
+  {
+    "id": "crosstalk_spectators_beyond_register_statevector",
+    "api": "full_noise_execute",
+    "arguments": {
+      "shots": 64,
+      "noise_realizations": 64
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "t",
+          [
+            0
+          ]
+        ],
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "config": {
+      "max_bond_dimension": 16,
+      "max_simulators": 1,
+      "seed": 5,
+      "simulation_type": "Statevector"
+    },
+    "noise": [
+      [
+        "set_crosstalk",
+        [
+          0,
+          1,
+          0.4
+        ]
+      ],
+      [
+        "set_crosstalk",
+        [
+          0,
+          3,
+          0.2
+        ]
+      ],
+      [
+        "set_bit_flip",
+        [
+          0,
+          0.05
+        ]
+      ]
+    ]
+  },
+  {
+    "id": "crosstalk_spectators_inside_and_beyond_density_matrix",
+    "api": "full_noise_execute",
+    "arguments": {
+      "shots": 48,
+      "noise_realizations": 48
+    },
+    "circuit": {
+      "operations": [
+        [
+          "h",
+          [
+            0
+          ]
+        ],
+        [
+          "cx",
+          [
+            0,
+            2
+          ]
+        ],
+        [
+          "t",
+          [
+            2
+          ]
+        ],
+        [
+          "h",
+          [
+            2
+          ]
+        ],
+        [
+          "measure",
+          [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                1
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "config": {
+      "max_bond_dimension": 16,
+      "max_simulators": 1,
+      "seed": 11,
+      "simulation_type": "DensityMatrix"
+    },
+    "noise": [
+      [
+        "set_crosstalk",
+        [
+          0,
+          1,
+          0.3
+        ]
+      ],
+      [
+        "set_crosstalk",
+        [
+          2,
+          4,
+          0.5
+        ]
+      ],
+      [
+        "set_depolarizing",
+        [
+          2,
+          0.02
+        ]
+      ]
+    ]
+  }
+]

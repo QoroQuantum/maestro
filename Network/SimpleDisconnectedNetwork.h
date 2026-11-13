@@ -756,9 +756,15 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && !terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
+        const bool logicalTerminal = terminalSampling && shots > 1 && !UsesFullTerminalBatch(simType, method, shots, measuredWidth);
+        if (reproducibleSampling &&
+            (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
-            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex);
+            if (logicalTerminal && !optSim)
+                optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbitsResults, simType, method, executed,
+                                              nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex,
+                                     logicalTerminal);
         }
         else if (nrThreads > 1)
         {
@@ -995,9 +1001,15 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && !terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
+        const bool logicalTerminal = terminalSampling && shots > 1 && !UsesFullTerminalBatch(simType, method, shots, measuredWidth);
+        if (reproducibleSampling &&
+            (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
-            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex);
+            if (logicalTerminal && !optSim)
+                optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbits, simType, method, executed,
+                                              nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex,
+                                     logicalTerminal);
         }
         else if (nrThreads > 1)
         {
@@ -1225,9 +1237,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const std::string policy(value);
             if (policy != "block_v1" && policy != "shot_v1")
                 throw std::invalid_argument("trajectory_policy must be block_v1 or shot_v1");
-            // The constructor's default is not a request: an explicit policy also
-            // opts the non-dense QCSim methods into logical shot streams.
-            configuration.SetConfiguration("trajectory_policy_explicit", "true");
         }
         if (std::string("counts_policy") == key)
         {
@@ -3054,6 +3063,35 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
     }
 
+    // Keep adaptive terminal samplers on the full request: splitting it could
+    // put every block below the crossover. This decision must not depend on
+    // the requested worker count, since it also selects the logical RNG layout.
+    bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth) const
+    {
+        if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
+            method == Simulators::SimulationType::kDensityMatrix)
+            return true;
+        if (type != Simulators::SimulatorType::kQCSim ||
+            !Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.GetConfiguration("sampling_policy")))
+            return false;
+        if (method == Simulators::SimulationType::kExtendedStabilizer)
+            return Utils::Sampling::PreferExtendedMarginalCounts(shots, measuredWidth);
+        if (measuredWidth != 1 || !Utils::Sampling::PreferMultinomial(shots, 2))
+            return false;
+        if (method == Simulators::SimulationType::kMatrixProductState)
+            return !configuration.IsSet("mps_sample_measure_algorithm") ||
+                   configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities";
+        // A truncating MPO retains its native sampler instead of using an
+        // exact marginal contraction.
+        const auto truncates = [&](const char *key) {
+            const auto value = configuration.GetConfiguration(key);
+            return !value.empty() && std::strtod(value.c_str(), nullptr) > 0.;
+        };
+        return method == Simulators::SimulationType::kMatrixProductOperator && !truncates("matrix_product_state_max_bond_dimension") &&
+               !truncates("matrix_product_operator_max_bond_dimension") && !truncates("matrix_product_state_truncation_threshold") &&
+               !truncates("matrix_product_operator_truncation_threshold");
+    }
+
     // Shot workers for one execution. Dense states draw every terminal shot
     // from one prepared distribution, so extra workers would only repeat its
     // preparation. A CPU MPO draws each terminal shot by a serial contraction:
@@ -3069,35 +3107,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (Simulators::IsGpuSimulator(simType))
             return 1;
 #endif
-        if (simType == Simulators::SimulatorType::kQuestSim ||
-            (terminalSampling && (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
-                                  method == Simulators::SimulationType::kDensityMatrix)))
+        if (simType == Simulators::SimulatorType::kQuestSim || (terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth)))
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
-        // Splitting the batch could put every worker below the backend's
-        // crossover and independently repeat the same state preparation.
-        if (nrThreads > 1 && terminalSampling && simType == Simulators::SimulatorType::kQCSim &&
-            (method == Simulators::SimulationType::kExtendedStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
-             method == Simulators::SimulationType::kMatrixProductOperator) &&
-            Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.IsSet("sampling_policy")))
-        {
-            if (method == Simulators::SimulationType::kExtendedStabilizer && Utils::Sampling::PreferExtendedMarginalCounts(shots, measuredWidth))
-                return 1;
-            if (method == Simulators::SimulationType::kMatrixProductState && measuredWidth == 1 && Utils::Sampling::PreferMultinomial(shots, 2) &&
-                (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities"))
-                return 1;
-            // One marginal contraction replaces the per-shot chain sweeps that
-            // worker clones of the prepared MPO would otherwise share. A
-            // truncating MPO keeps the native sampler, so keep its workers.
-            const auto truncates = [&](const char *key) {
-                const auto value = configuration.GetConfiguration(key);
-                return !value.empty() && std::strtod(value.c_str(), nullptr) > 0.;
-            };
-            if (method == Simulators::SimulationType::kMatrixProductOperator && measuredWidth == 1 && Utils::Sampling::PreferMultinomial(shots, 2) &&
-                !truncates("matrix_product_state_max_bond_dimension") && !truncates("matrix_product_operator_max_bond_dimension") &&
-                !truncates("matrix_product_state_truncation_threshold") && !truncates("matrix_product_operator_truncation_threshold"))
-                return 1;
-        }
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)
         {
             if (!optSim)
@@ -3108,24 +3120,33 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return nrThreads;
     }
 
-    // A new simulator of the selected backend on exactly this register, with
-    // every non-measurement operation applied, for shot workers to clone. It
-    // does not depend on the network's simulator, which host execution may
-    // have cleared or sized for another register (whichever path selected the
-    // MPO: a fixed backend, a kept candidate or an estimator-less fallback).
+    // Prepare the selected backend on exactly this register, with every
+    // non-measurement operation applied, for shot workers to clone. Serial
+    // requests may reuse the existing simulator, including after resizing it;
+    // every repeated execution still starts from zero.
     // Null when the backend cannot hold the register.
     std::shared_ptr<Simulators::ISimulator> PrepareTerminalState(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits, size_t nrCbits,
                                                                  size_t nrResultCbits, Simulators::SimulatorType simType, Simulators::SimulationType method,
-                                                                 std::vector<bool> &executed)
+                                                                 std::vector<bool> &executed, std::shared_ptr<Simulators::ISimulator> reusable = nullptr)
     {
-        std::shared_ptr<Simulators::ISimulator> prepared = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+        auto prepared = reusable ? reusable : Simulators::SimulatorsFactory::CreateSimulator(simType, method);
         if (!prepared)
             return nullptr;
-        ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
         try
         {
-            prepared->AllocateQubits(nrQubits);
-            prepared->Initialize();
+            if (reusable && prepared->GetNumberOfQubits() == nrQubits)
+            {
+                prepared->Reset();
+                prepared->SetGatesCounter(0);
+                ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
+            }
+            else
+            {
+                prepared->Clear();
+                ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
+                prepared->AllocateQubits(nrQubits);
+                prepared->Initialize();
+            }
         }
         catch (const std::exception &)
         {
@@ -3146,26 +3167,18 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
     bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
-        if (type != Simulators::SimulatorType::kQCSim || configuration.GetConfiguration("sampling_policy") == "legacy")
-            return false;
-        if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
-            method == Simulators::SimulationType::kPathIntegral)
-            return true;
-        // Other methods keep their existing seeded sequences, whose shot
-        // partition follows the worker count, unless a trajectory policy was
-        // requested explicitly: then their streams follow logical shots too.
-        return configuration.GetConfiguration("trajectory_policy_explicit") == "true" &&
-               (method == Simulators::SimulationType::kStabilizer || method == Simulators::SimulationType::kExtendedStabilizer ||
-                method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator);
+        return configuration.GetConfiguration("sampling_policy") != "legacy" && ExecuteJob<Time>::ReproducibleMethod(type, method);
     }
 
     void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers, size_t qubits,
                                   size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
-                                  const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex)
+                                  const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex,
+                                  bool terminalSampling = false)
     {
-        // Per-shot streams are the default. block_v1 retains the original fixed
-        // logical ranges for replay. Terminal batches use one simulator instead.
-        const bool independentShots = configuration.GetConfiguration("trajectory_policy") == "shot_v1";
+        // Terminal native samplers consume one stream per batch. Fixed logical
+        // batches preserve those streams across worker counts without replaying
+        // the prepared circuit per shot. Dynamic shot_v1 uses per-shot streams.
+        const bool independentShots = !terminalSampling && configuration.GetConfiguration("trajectory_policy") == "shot_v1";
         workers = std::max<size_t>(1, workers);
 #ifdef _OPENMP
         // Outer jobs count against the same CPU budget as their internal teams.
@@ -3209,8 +3222,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         else if (method == Simulators::SimulationType::kStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
                  method == Simulators::SimulationType::kMatrixProductOperator)
         {
-            // An explicit trajectory policy brings these methods here. Budget
-            // them like dense states where their size is bounded: a tableau
+            // Budget these methods like dense states where their size is bounded: a tableau
             // always, MPS and MPO under a bond-dimension cap.
             const bool mpo = method == Simulators::SimulationType::kMatrixProductOperator;
             const auto state = method == Simulators::SimulationType::kStabilizer ? Utils::RealizationState::kStabilizer
@@ -3229,9 +3241,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             {
                 const size_t mb =
                     configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
-                // The same copies as above: a prepared source and checkpoint, or
-                // a checkpoint per worker.
-                workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(bytes), mb, prepared ? 2 : 0, prepared ? 1 : 2);
+                // Tensor/tableau clones copy their saved checkpoint rather
+                // than sharing it. Keep two copies per worker also for terminal
+                // batches: explicit MPS measurement and a wide stabilizer tail
+                // can allocate a private sampling snapshot.
+                workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(bytes), mb, prepared ? 2 : 0, 2);
             }
         }
         // shot_v1 streams do not depend on the worker count, so tiny states can
@@ -3240,7 +3254,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             workers = std::min(workers, TrajectoryWorkersForWork(circuit, shots, qubits, method, executed));
         // shot_v1 can change physical job boundaries without changing any RNG
         // stream. Keep batches bounded while exposing short requests to workers.
-        const size_t blockSize = independentShots ? std::min<size_t>(256, std::max<size_t>(1, shots / workers + (shots % workers != 0))) : 256;
+        // Terminal batches follow the shot count alone: 256 shots each, or fewer
+        // and larger ones once there would be more than 256 of them.
+        const size_t blockSize = independentShots   ? std::min<size_t>(256, std::max<size_t>(1, shots / workers + (shots % workers != 0)))
+                                 : terminalSampling ? std::max<size_t>(256, shots / 256 + (shots % 256 != 0))
+                                                    : 256;
         const uint64_t seed = configuration.IsSet("seed") ? std::stoull(configuration.GetConfiguration("seed"))
                                                           : Simulators::GenerateRandomSeed(type, configuration.GetConfigMap());
         const auto cloneMutex = std::make_shared<std::mutex>();
@@ -3253,11 +3271,27 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             prepared->SetMultithreading(false);
         if (simulator && simulator != prepared && !continueExecution)
             simulator->Clear();
-        workers = std::max<size_t>(1, std::min(workers, shots / blockSize + (shots % blockSize != 0)));
+        // Terminal batches sample without collapsing, and a sampler prepares its
+        // state once: an MPS moves the measured sites to the head of the chain, an
+        // MPO traces its suffixes, a tableau solves its distribution. The first
+        // batch therefore samples the prepared state itself, and only then do the
+        // others copy it, with that work done. One worker keeps sampling the
+        // prepared state, reseeded for each batch, and needs no copy at all.
+        const bool sampleSource = terminalSampling && prepared;
+        // Such a batch only reads what the evolution deferred, the measurements:
+        // each job gets those instead of the whole circuit to scan and copy.
+        auto jobCircuit = circuit;
+        auto jobExecuted = executed;
+        if (sampleSource && !executed.empty())
+            jobCircuit = circuit->RemoveExecutedOperations(jobExecuted);
+        // Every job runs the same configuration, apart from its seed.
+        const auto jobConfiguration = ExecutionConfiguration(type, qubits, method);
+        const size_t blocks = shots / blockSize + (shots % blockSize != 0);
+        workers = std::max<size_t>(1, std::min(workers, sampleSource && blocks > 1 ? blocks - 1 : blocks));
         if (workers > 1)
         {
             threadsPool.Resize(workers);
-            threadsPool.SetFinishLimit(shots);
+            threadsPool.SetFinishLimit(sampleSource ? shots - std::min(blockSize, shots) : shots);
         }
         // The caller's OpenMP limit is a budget shared by concurrent shot jobs.
         // std::thread workers do not inherit the caller's OpenMP ICV, so pass
@@ -3276,10 +3310,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         for (size_t begin = 0, block = 0; begin < shots; ++block)
         {
             const size_t count = std::min(blockSize, shots - begin);
-            auto job = std::make_shared<ExecuteJob<Time>>(circuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
+            auto job = std::make_shared<ExecuteJob<Time>>(jobCircuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
             // Even a one-shot tail must remove the same deterministic prefix:
             // classical instruction positions are part of shot_v1 stream IDs.
-            job->optimiseMultipleShotsExecution = independentShots || count > 1 || GetOptimizeSimulator();
+            job->optimiseMultipleShotsExecution = independentShots || terminalSampling || count > 1 || GetOptimizeSimulator();
             // Reproducible measurement retains serial scan/reduction order;
             // gates and disjoint collapse updates may use the remaining budget.
 #if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
@@ -3294,8 +3328,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 lastFusionEnabled.store(actual.IsGateFusionEnabled());
             };
             job->curMaxBondDim = &curMaxBondDim;
-            job->config = ExecutionConfiguration(type, qubits, method);
-            job->config.SetConfiguration("seed", std::to_string(Simulators::IState::DeriveSeed(seed, block)));
+            job->config = jobConfiguration;
+            const uint64_t blockSeed = Simulators::IState::DeriveSeed(seed, block);
+            job->config.SetConfiguration("seed", std::to_string(blockSeed));
             // Execute() keeps the last job's simulator, and the next run captures
             // its configuration: an unseeded network must stay unseeded.
             job->transientSeed = !configuration.IsSet("seed");
@@ -3303,9 +3338,22 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->independentShotStreams = independentShots;
             job->trajectorySeed = Simulators::IState::DeriveSeed(seed, 0x53484f545f5631ULL);
             job->firstShot = begin;
-            job->cloneSource = prepared;
-            job->cloneMutex = cloneMutex;
-            job->executedGates = executed;
+            const bool onSource = sampleSource && (block == 0 || workers == 1);
+            if (onSource)
+            {
+                // The streams a copy made for this batch would get.
+                if (job->transientSeed)
+                    prepared->SeedForExecution(blockSeed);
+                else
+                    prepared->SetSeed(blockSeed);
+                job->optSim = prepared;
+            }
+            else
+            {
+                job->cloneSource = prepared;
+                job->cloneMutex = cloneMutex;
+            }
+            job->executedGates = jobExecuted;
             if (continueExecution)
             {
                 job->optSim = simulator;
@@ -3314,7 +3362,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 job->executedGates.assign(circuit->size(), false);
             }
             last = job;
-            if (workers > 1)
+            // The batch on the prepared state finishes before any copy is taken.
+            if (workers > 1 && !onSource)
                 threadsPool.AddRunJob(std::move(job));
             else
                 job->DoWork();

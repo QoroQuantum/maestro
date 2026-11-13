@@ -626,15 +626,16 @@ void TestMultinomialCountReplay()
         Check(Call(request).at("counts") == seeded.at("counts"), "Seeded automatic counts differ from the explicit multinomial policy");
         if (std::string_view(method) == "statevector")
         {
-            // Captured from the previous seeded default, with one worker.
+            // The explicitly requested ordinary sampler is reproducible too.
             simulator["options"] = j::object{{"counts_policy", "legacy"}, {"max_simulators", 1}};
-            Check(Call(request).at("counts") == j::object{{"000", 3502}, {"100", 594}}, "Explicit legacy did not replay historical statevector counts");
+            const auto ordinary = Call(request).at("counts");
+            Check(Call(request).at("counts") == ordinary, "Explicit ordinary statevector counts did not replay");
         }
     }
 }
 
-// SimpleExecute's counts_policy: frames for unseeded Clifford counts under auto,
-// on request under frame_v1, never under legacy or for seeded auto calls.
+// SimpleExecute's counts_policy: frames for eligible Clifford counts under
+// auto with or without a seed, on request under frame_v1, never under legacy.
 void TestLegacyCountsPolicy()
 {
     GetMaestroObjectWithMute();
@@ -677,7 +678,9 @@ void TestLegacyCountsPolicy()
     };
     Check(framed(run({{"shots", 300}})), "Unseeded legacy Clifford counts did not use frames");
     Check(!framed(run({{"shots", 300}, {"counts_policy", "legacy"}})), "Legacy policy used frames");
-    Check(!framed(run({{"shots", 300}, {"seed", 5}})), "Seeded auto legacy counts changed their sequence");
+    const auto seededFrames = run({{"shots", 300}, {"seed", 5}});
+    Check(framed(seededFrames), "Seeded automatic counts did not select frames");
+    Check(run({{"shots", 300}, {"seed", 5}}).at("counts") == seededFrames.at("counts"), "Seeded automatic frame counts did not replay");
     const auto explicitFrames = run({{"shots", 300}, {"seed", 5}, {"counts_policy", "frame_v1"}});
     Check(framed(explicitFrames) && explicitFrames.at("method") == "stabilizer", "frame_v1 did not select frames");
     Check(run({{"shots", 300}, {"seed", 5}, {"counts_policy", "frame_v1"}}).at("counts") == explicitFrames.at("counts"), "Seeded legacy frames did not replay");
@@ -690,9 +693,8 @@ void TestLegacyCountsPolicy()
         Check(rejected, "Malformed legacy counts_policy was accepted");
     }
 
-    // Only a trajectory_policy in a call's configuration opts a dynamic
-    // stabilizer circuit into logical shot streams; omitting it keeps the 0.3.13
-    // sequence, on a fresh handle and on one an earlier call configured.
+    // Dynamic stabilizer execution defaults to logical shot streams. An
+    // explicit earlier policy must not leak into the next call on a handle.
     const char *dynamic = "OPENQASM 2.0; qreg q[2]; creg c[2]; h q[0]; measure q[0] -> c[0]; h q[0]; cx q[0],q[1]; measure q[1] -> c[1];";
     const auto counts = [&](unsigned long handle, const j::object &options) {
         auto *raw = SimpleExecute(handle, dynamic, j::serialize(options).c_str());
@@ -701,15 +703,17 @@ void TestLegacyCountsPolicy()
         FreeResult(raw);
         return result.at("counts");
     };
-    const j::object omitted{{"shots", 400}, {"seed", 7}, {"max_simulators", 1}};
+    const j::object omitted{{"shots", 400}, {"seed", 7}, {"max_simulators", 1}, {"counts_policy", "legacy"}};
     auto chosen = omitted;
     chosen["trajectory_policy"] = "shot_v1";
     Simulator fresh;
     Check(fresh.handle != 0 && RemoveAllOptimizationSimulatorsAndAdd(fresh.handle, backend, 2) == 1, "Cannot configure a legacy stabilizer");
-    const auto earlier = counts(fresh.handle, omitted);
+    const auto defaults = counts(fresh.handle, omitted);
     const auto logical = counts(simulator.handle, chosen);
-    Check(logical != earlier, "Omitting trajectory_policy opted a stabilizer into logical shot streams");
-    Check(counts(simulator.handle, omitted) == earlier, "A reused handle kept an earlier explicit trajectory_policy");
+    Check(logical == defaults, "Omitting trajectory_policy did not select logical shot streams");
+    chosen["trajectory_policy"] = "block_v1";
+    counts(simulator.handle, chosen);
+    Check(counts(simulator.handle, omitted) == defaults, "A reused handle kept an earlier explicit trajectory_policy");
 }
 
 void TestAutomaticMixedStateNoise()
@@ -968,11 +972,9 @@ void TestAutomaticMixedStateNoise()
           "Capabilities omit estimate, fidelity or selection rules");
 }
 
-// Batched extended-stabilizer frames: unseeded auto requests (counts, rows and
-// checkpoint suffixes) opt in before receiving their seed and report the policy
-// that replays them; seeded requests keep scalar trajectories unless
-// counts_policy is frame_v1. The frame handle compiles extended_stabilizer
-// requests too.
+// Batched extended-stabilizer frames support automatic counts, rows and
+// checkpoint suffixes with supplied or generated seeds. Metadata retains the
+// dispatch policy needed to replay a mixture of frames and fallback suffixes.
 void TestExtendedFrameRequests()
 {
     const char *body = "h q[0]; t q[0]; cx q[0],q[1]; h q[1]; t q[1]; h q[1]; measure q -> c;";
@@ -1021,7 +1023,11 @@ void TestExtendedFrameRequests()
                 total += entry.value().as_int64();
             Check(total == 400, "Native frame counts lost shots");
         }
-        Check(strategy(Call(prepare("execute", body, true, nullptr, rows))) != "extended_frame_v1", "A seeded auto request changed its sampler");
+        const auto seeded = prepare("execute", body, true, nullptr, rows);
+        const auto seededResult = Call(seeded);
+        Check(strategy(seededResult) == "extended_frame_v1", "A seeded auto request did not select frames");
+        Check(rows ? Rows(Call(seeded)) == Rows(seededResult) : Call(seeded).at("counts") == seededResult.at("counts"),
+              "Seeded automatic extended frames did not replay");
         const auto opted = Call(prepare("execute", body, true, "frame_v1", rows));
         Check(strategy(opted) == "extended_frame_v1", "frame_v1 did not opt a seeded request in");
     }
@@ -1044,7 +1050,7 @@ void TestExtendedFrameRequests()
             total += entry.value().as_int64();
         Check(total == 400, "Checkpoint frame counts lost shots");
     }
-    Check(batch.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1", "Checkpoint frames do not report their policy");
+    Check(batch.at("execution_metadata").at("configured_options").at("counts_policy") == "auto", "Checkpoint frames lost their dispatch policy");
     const auto again = replay(checkpoint, batch);
     Check(again.at("results") == batch.at("results"), "Checkpoint frame suffixes did not replay");
 
@@ -1054,20 +1060,22 @@ void TestExtendedFrameRequests()
     mixed["noise"].as_object()["realizations"] = 2;
     mixed["suffixes"].as_array().push_back(Request("execute", 2, "measure q[0] -> c[0]; if(c==1) x q[1]; measure q -> c;").at("circuit"));
     const auto mixedBatch = Call(mixed);
-    Check(mixedBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1" &&
+    Check(mixedBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "auto" &&
               mixedBatch.at("results").at(0).at("sampling_strategy") == "extended_frame_v1" &&
               mixedBatch.at("results").as_array().back().at("sampling_strategy") != "extended_frame_v1",
           "Mixed checkpoint suffixes did not preserve their frame and fallback choices");
     Check(replay(mixed, mixedBatch).at("results") == mixedBatch.at("results"), "Mixed checkpoint frame and ordinary suffixes did not replay");
 
-    // Coherent noise excludes frames for every suffix. Returning auto here
-    // would promote the replay's explicit seed to the multinomial path.
+    // Coherent noise excludes frames for every suffix. Automatic requests
+    // still use the fast terminal fallback, independent of seed presence.
     auto noFrames = checkpoint;
     noFrames["noise"] =
         j::object{{"mode", "coherent"}, {"realizations", 1}, {"channels", j::array{Channel("coherent_rotation", {{"rx", 0.1}, {"ry", 0.0}, {"rz", 0.0}})}}};
     const auto ordinaryBatch = Call(noFrames);
-    Check(ordinaryBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "legacy",
+    Check(ordinaryBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "multinomial_v1",
           "An unframed checkpoint did not record its fallback count policy");
+    for (const auto &suffix : ordinaryBatch.at("results").as_array())
+        Check(suffix.at("sampling_strategy") == "terminal_v1", "An unframed terminal checkpoint replayed its suffix");
     Check(replay(noFrames, ordinaryBatch).at("results") == ordinaryBatch.at("results"), "Unframed checkpoint suffixes did not replay");
 
     // The frame handle: any extended_stabilizer circuit, independent noise per shot.

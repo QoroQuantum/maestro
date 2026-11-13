@@ -595,7 +595,8 @@ class NoiseAdd
         return width;
     }
 
-    static size_t RealizationWorkers(size_t realizationQubits, const NetworkPtr &network, std::optional<size_t> host, size_t batches, size_t retainedQubits)
+    static size_t RealizationWorkers(size_t realizationQubits, const NetworkPtr &network, std::optional<size_t> host, size_t batches, size_t retainedQubits,
+                                     bool multipleShots)
     {
         const auto simulator = network->GetSimulator();
         // Accelerator and distributed runtimes retain their calling-thread and
@@ -629,7 +630,12 @@ class NoiseAdd
         const size_t callerQubits = retainedQubits;
         const size_t cloneQubits = simulator->GetNumberOfQubits();
         Utils::RealizationState state;
-        size_t bond = 0, copiesPerWorker = 1;
+        auto executionConfig = ExecutionBackends(network);
+        // Automatic selection can prepare a saved prefix even for one shot.
+        // Tensor/tableau execution clones own their checkpoint copies too;
+        // the per-state workspace allowance does not cover those live states.
+        executionConfig.fixed_backend = !network->GetOptimizeSimulator();
+        size_t bond = 0, copiesPerWorker = MaestroExecution::NetworkRealizationCopies(executionConfig, multipleShots);
         switch (simulator->GetSimulationType())
         {
         case Simulators::SimulationType::kStabilizer:
@@ -712,9 +718,9 @@ class NoiseAdd
         const bool admitsStabilizer = allowsStabilizer && (stabilizerMethod || !exact_channels);
         // Frames inject exact channels, which keep a calibrated T2 that the
         // trajectories clamp to T1 (and warn about): that window keeps them.
-        if (policy == "legacy" || !allowsStabilizer || (policy == "auto" && (baseSeed || !admitsStabilizer)) || !host || *host != 0 ||
-            network->GetNumHosts() != 1 || batches != shots || simulator->GetType() != Simulators::SimulatorType::kQCSim || layer == Layer::Coherent ||
-            !nm.inject_noise_covers_model() || (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
+        if (policy == "legacy" || !allowsStabilizer || (policy == "auto" && !admitsStabilizer) || !host || *host != 0 || network->GetNumHosts() != 1 ||
+            batches != shots || simulator->GetType() != Simulators::SimulatorType::kQCSim || layer == Layer::Coherent || !nm.inject_noise_covers_model() ||
+            (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
             return std::nullopt;
         const size_t width = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
         if (width > network->GetNumQubitsForHost(*host))
@@ -731,9 +737,8 @@ class NoiseAdd
         const auto plan = MaestroExecution::CompileReferenceSampler(channels, channelWidth, countWidth);
         if (!plan)
             return std::nullopt;
-        // Frame sampling is an explicit new seeded policy. Its per-call noise
-        // seed advances this object's stream; reserve the same simulator-stream
-        // indices as the realization executor before a later policy switch.
+        // The per-call noise seed advances this object's stream; reserve the same
+        // simulator-stream indices as the realization executor before a later policy switch.
         // As on the trajectories, circuit errors draw from the noise stream and
         // measurements and readout from the simulator stream, so either seed
         // can change alone; without a simulator seed both follow the noise.
@@ -772,14 +777,12 @@ class NoiseAdd
         auto execution = PrepareExecution(network);
         Circuits::Circuit<>::ExecuteResults combined;
         const NoiseInjectionPlan plan(circuit, nm);
-        // A one-shot realization depends only on its own seed, so it may run on
-        // any worker. A seeded multi-shot batch keeps the network's own shot
-        // partition, which sets its sequence. Unseeded batches that the network
-        // samples from one prepared state run single-threaded there anyway, so
-        // realization workers only add parallelism.
-        const bool independent = batches == shots || (!execution.seed && SamplesFromOnePreparedState(circuit, execution.network));
+        // A realization depends on its own circuit and derived seed. Batches
+        // sampled from one prepared state run single-threaded in the network,
+        // so realization workers supply their parallelism too.
+        const bool independent = batches == shots || SamplesFromOnePreparedState(circuit, execution.network);
         const size_t workers =
-            independent ? RealizationWorkers(RealizationWidth(circuit, plan), execution.network, host, batches, RetainedQubits(*network)) : 1;
+            independent ? RealizationWorkers(RealizationWidth(circuit, plan), execution.network, host, batches, RetainedQubits(*network), batches < shots) : 1;
         if (workers > 1)
         {
             const auto workerNetworks = WorkerNetworks(execution.network, workers);
@@ -843,7 +846,7 @@ class NoiseAdd
         // workers may evaluate them in any order. They are summed in realization
         // order, as the serial loop does.
         const size_t workers = RealizationWorkers(std::max(RealizationWidth(cleanCircuit, plan), ObservableWidth(paulis)), execution.network, host,
-                                                  static_cast<size_t>(realizations), RetainedQubits(*network));
+                                                  static_cast<size_t>(realizations), RetainedQubits(*network), false);
         if (workers > 1)
         {
             const auto workerNetworks = WorkerNetworks(execution.network, workers);

@@ -257,17 +257,11 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             String(value);
         if (name == "gpu_device")
             Require(UInt(value) <= INT_MAX, "gpu_device is too large");
-        if (name == "pp_workers")
+        if (name == "pp_workers" || name == "pp_max_fused_gates" || name == "pp_memory_limit_bytes" || name == "pp_sampling_cache_nodes")
         {
-            if (config.simulator_type == Backend::kGpuSim)
-                Require(UInt(value) >= 1 && UInt(value) <= 64, "GPU pp_workers must be in [1, 64]");
-            else
-                Require(UInt(value) <= 1024, "pp_workers exceeds 1024");
+            const auto error = PauliTuningError(name, UInt(value), config.simulator_type == Backend::kGpuSim);
+            Require(error.empty(), error);
         }
-        if (name == "pp_max_fused_gates")
-            Require(UInt(value) <= 256, "pp_max_fused_gates exceeds 256");
-        if (name == "pp_memory_limit_bytes" || name == "pp_sampling_cache_nodes")
-            Require(UInt(value) <= INT64_MAX, "Pauli memory/cache limit is too large");
         if (name == "pp_gates_between_trims" || name == "pp_gates_between_deduplications")
             Require(UInt(value) <= INT_MAX, "Pauli gate interval exceeds INT_MAX");
         if (name == "max_simulators")

@@ -28,6 +28,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         InvalidateDummyHistory();
         if (nrQubits != 0)
         {
+            InitializeSamplingSeed();
             {
                 mpsSimulator = std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits, Utils::RandomStream::FreshNativeSeed());
                 if (!useOptimalMeetingPosition)
@@ -35,6 +36,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 InstallBondSummary(*mpsSimulator, bondDimensionCallback);
                 curMaxBondDim = 1;
             }
+            SeedBackend(mpsSimulator.get(), samplingSeed);
             SetMultithreading(enableMultithreading);
             for (const auto &[key, value] : configuration.GetConfigMap())
                 if (key != "method")
@@ -106,12 +108,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         RefreshRoutingSettings();
         if (std::string("seed") == key)
         {
-            const uint64_t seed = std::stoull(value);
-            SeedAuxiliaryRng(seed);
-            nextSeedStream = 0;
-            rng.seed(seed);
-            if (mpsSimulator)
-                SeedBackend(mpsSimulator.get(), seed);
+            SeedForExecution(std::stoull(value));
             return;
         }
         if (mpsSimulator)
@@ -144,6 +141,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
         RefreshRoutingCallback();
+    }
+
+    void SeedForExecution(uint64_t seed) override
+    {
+        SeedAuxiliaryRng(seed);
+        SeedSampling(seed);
+        if (mpsSimulator)
+            SeedBackend(mpsSimulator.get(), seed);
     }
 
     size_t AllocateQubits(size_t num_qubits) override
@@ -889,6 +894,11 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     std::unique_ptr<ISimulator> Clone() override
     {
+        return CloneForExecution(NextCloneSeed());
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
         auto cloned = std::make_unique<QCSimMPSSimulator>();
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
@@ -918,7 +928,9 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
         if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
+            cloned->SetSeed(seed);
+        else
+            cloned->SeedForExecution(seed);
         cloned->RefreshRoutingCallback();
         return cloned;
     }

@@ -2,8 +2,13 @@
 
 The QCSim statevector, density-matrix and path-integral adapters use
 `sampling_policy=reproducible_v1` by default. Set `sampling_policy=legacy` to
-use the previous count-sampling algorithms. The clone reseeding fixes apply
-to both policies. QCSim composite components also use the new prepared sampler.
+select the native per-shot count algorithms. Both policies reseed clones.
+QCSim composite components also use the prepared sampler.
+
+Seeded replay is guaranteed for the same Maestro version, build, configuration
+and logical call sequence. Policy names do not freeze random sequences or
+performance thresholds across releases. Explicit seeds, including zero, do not
+disable eligible optimized execution paths.
 
 ```cpp
 sim->SetSeed(123);                         // zero and all 64 seed bits are valid
@@ -27,9 +32,9 @@ for each selected component's minimum scratch allowance and a shared draw batch.
 
 | Policy | Count execution |
 | --- | --- |
-| `auto` | Use multinomial sampling for eligible QCSim terminal count batches with or without an explicit seed. Unseeded requests can also use frames and direct trajectories as described below. |
+| `auto` | Use multinomial sampling for eligible QCSim terminal count batches with or without an explicit seed. Eligible requests can also use frames and direct trajectories, with or without seeds, as described below. |
 | `legacy` | Keep the ordinary count/trajectory executor and never select the new frame-count path. |
-| `frame_v1` | Opt into frame counts even with explicit seeds. Other requested QCSim methods can use frames when backend optimization permits a stabilizer implementation. Unsupported requests fall back. |
+| `frame_v1` | Request frame counts when backend selection and circuit semantics permit them. Other requested QCSim methods can use frames when backend optimization permits a stabilizer implementation. Unsupported requests fall back. |
 | `multinomial_v1` | Allow the terminal sampler to draw counts by conditional binomials, including with explicit seeds. Small batches and unsupported distributions use the existing backend sampler. |
 
 The adaptive count policy supports QCSim statevector, density matrix, retained
@@ -40,7 +45,8 @@ concentrated distribution with a long tail of tiny amplitudes also qualifies.
 A bare simulator applies the same cost thresholds to `SampleCounts` and
 `SampleCountsMany` by default, including after `SetSeed`. A QCSim composite
 with one component forwards its count request to that component's sampler.
-An explicit low-level `sampling_policy` pins the earlier sampler. Seeded
+Explicit `sampling_policy="reproducible_v1"` also permits adaptive counts.
+Only `sampling_policy="legacy"` overrides the multinomial choice. Seeded
 `multinomial_v1` sequences use Boost.Random's binomial generator. The
 [implementation report](multinomial-sampling.md) describes the measured
 crossovers, scope of each backend, tensor-size costs and commands for
@@ -72,10 +78,11 @@ it.
 
 Seed zero is explicit, including through the Python `seed` alias for
 `noise_seed`. Repeat the same request on the same build with the same seeds
-and configuration to reproduce its histogram. Eligible seeded `auto` counts
-can differ from older releases. Use `counts_policy="legacy"` to select the
-previous per-shot count sampler. Ordered shot requests keep their separate
-sampling path. `counts_policy` is a writable, validated
+and configuration to reproduce its histogram. Counts can differ between
+releases. `counts_policy="legacy"` selects the ordinary count executor; it
+does not promise an older release's random sequence. Ordered shot requests can
+also use eligible adaptive terminal sampling, followed by a seeded permutation
+of the sampled outcomes. `counts_policy` is a writable, validated
 configuration property and survives pickling.
 
 ```python
@@ -114,8 +121,8 @@ Scratch storage is bounded by one frame batch; the returned histogram still
 grows with the number and width of distinct outcomes. Counts retain the usual
 classical-register padding, including unused zero columns.
 
-When frames do not apply, unseeded `auto` noisy counts with one independent
-realization per shot (`noise_realizations >= shots`) run each realization
+When frames do not apply, seeded or unseeded `auto` noisy counts with one
+independent realization per shot (`noise_realizations >= shots`) run each realization
 directly on a worker-owned simulator, the executor `return_samples=True`
 uses, and histogram its classical record. This skips per-realization host
 mapping, backend selection and simulator construction, and reports
@@ -124,12 +131,14 @@ density matrix, Stabilizer, extended stabilizer and path integral requests.
 MPS and MPO keep the ordinary executor, for counts and raw samples alike:
 it places their initial qubit map and lookahead swap routing per execution
 (`OptimizeMPSInitialQubitsMap`), which affects truncation accuracy, so their raw
-samples come from its histograms, shuffled within each realization, with one
-simulator per realization so that seeded rows do not depend on
-`max_simulators`. Requests with `enable_sampling_reduction=True` keep the
+samples come from its histograms, shuffled within each realization. They honor
+the requested sampler and the network's worker policy. When several realization
+workers run concurrently, each uses one inner simulator to avoid multiplying
+the worker and memory budgets. Requests with `enable_sampling_reduction=True` keep the
 ordinary executor for raw samples as well, so that it can split disjoint
-measurement cones; their rows likewise come from its histograms. Seeded,
-`legacy`, shared-realization and sampling-reduction counts are unchanged. So are circuits without
+measurement cones; their rows likewise come from its histograms.
+`legacy`, shared-realization and sampling-reduction counts keep their applicable
+ordinary execution paths, as do circuits without
 measurements: the ordinary executor keys their records by its own rule rather
 than by the padded classical width used here (with no classical operation,
 a single all-zero key; classical random operations can still write nonzero
@@ -171,14 +180,14 @@ unchanged. A spectator the circuit touches keeps its rotations.
 
 The ordinary executor still simulates the spectators, compacting each
 realization to the circuit's qubits plus the untouched spectators; its host
-spans the noisy register, as in 0.3.13. Its realization workers are budgeted
+spans the noisy register. Its realization workers are budgeted
 for that compacted width, while direct sessions are budgeted for the circuit's
-own qubits. As in 0.3.13, count keys are padded to the noisy register, so a
+own qubits. Count keys are padded to the noisy register, so a
 spectator beyond the circuit widens them with zeros; direct counts pad theirs
 the same way, so seeded and unseeded calls return the same key format. A
 distant spectator therefore gives correspondingly wide keys, and counts fail
 when the noisy register exceeds the simulator's register limit (2^31 - 1
-qubits), as 0.3.13 did. Raw sample columns keep the circuit's classical
+qubits). Raw sample columns keep the circuit's classical
 width, since spectators are not classical bits, and still run there.
 
 Realization loops (Python noisy execution, estimates and fidelity, prefix
@@ -187,13 +196,12 @@ checkpoints, native JSON requests and C++ `NoiseAdd`) build one
 parameters, each operation's qubits, two-qubit depolarizing probabilities and
 the circuit-width bookkeeping once; each realization then runs the unchanged
 injector code against those cached values. Realizations contain the same
-operations in the same order and consume the noise RNG identically, so seeded
-results do not change.
+operations in circuit order and use the assigned realization noise stream.
 
 Plan realizations share the caller's plain gates, delays, resets and channels
 instead of copying them. Measurements (which receive readout rates), classical
 random operations, conditionals and nested circuits are still copied per
-realization, so seeded results are unchanged. Gates have setters, so shared
+realization. Gates have setters, so shared
 realizations are read-only: the executors never edit them. The public
 `noise::inject_*` functions still return independent copies that a caller may
 edit.
@@ -232,8 +240,8 @@ The native JSON request API accepts the setting in
 `"frame_v1"` policy in
 `execution_metadata.configured_options.counts_policy`, along with its returned
 top-level `seed` and, when noise is enabled, `noise.seed`. Replay those seeds
-and the resolved policy together. In particular, a returned seed with
-`auto` skips automatic frame selection. Keep the
+and the resolved policy together on the same version. An explicit returned
+seed does not disable eligible automatic frame selection. Keep the
 circuit, noise configuration, backend selection and logical request unchanged.
 Native C++ `NoiseAdd` helpers accept the same network configuration key; their
 frame optimization is limited to supported local single-host execution. Their
@@ -286,7 +294,9 @@ with MPS or statevector; a fixed backend keeps the requested method, and a
 native `candidates` list (or C++ `optimization_candidates`) admits frames only
 if it includes the QCSim stabilizer, and then whatever the requested backend,
 since the list replaces it. Sampling reduction disables frames for rows as it
-does for counts. With such a list, rows that do not use
+does for counts. This reference-frame selection for ordered rows is independent
+of `counts_policy`; that option controls counts dispatch and eligible raw
+terminal, histogram-fallback and extended-frame sampling. With such a list, rows that do not use
 frames run on the network executor, which selects from it, and report the
 backend it chose. Frame
 results report the actual `Stabilizer` method in their metadata. Compilation
@@ -330,9 +340,12 @@ speed. Coherent errors remain coherent; the frame path does not replace them
 with Pauli noise.
 
 The raw-sample policy has its own seeded sequence. Repeating the same logical
-request and explicit seeds is reproducible, but its rows need not expand the
+request, configuration and explicit seeds on the same build is reproducible,
+but its rows need not expand the
 histogram obtained with `return_samples=False`, and the frame and trajectory
-policies need not produce the same seeded samples. Backend, policy, circuit,
+policies need not produce the same seeded samples. Eligible terminal batches
+and histogram fallbacks honor the counts policy, so `auto` and `legacy` raw
+requests can also return different seeded rows. Backend, policy, circuit,
 noise configuration, and logical call boundaries remain part of the replay
 contract. Direct trajectories, frames and checkpoint sampling produce complete
 classical records. Histogram fallbacks, including unsupported QCSim methods
@@ -414,8 +427,8 @@ worker count or `trajectory_max_memory_mb`. That budget is soft, as for
 draws it would have had. `maestro.sinter` therefore samples an `ExtendedStabilizer`
 task on frames.
 
-Unseeded noisy `extended_stabilizer` sampling runs on the same frames from every
-entry point:
+Eligible seeded and unseeded noisy `extended_stabilizer` sampling uses the same
+frames from every entry point:
 
 - Python: `noisy_execute` and `full_noise_execute`, and
   `PrefixCheckpointedSimulator.execute_suffix` after a gate-only prefix.
@@ -423,8 +436,8 @@ entry point:
   `Execution/SampleRecords.h` is the shared entry point.
 - Native requests: `execute` counts and rows, and `checkpoint_batch` suffixes.
 
-`counts_policy="frame_v1"` opts seeded calls in. There the memory budget is
-soft, as for trajectories: a shot that alone exceeds it runs by itself beyond it,
+`counts_policy="auto"` and `"frame_v1"` permit these frames for seeded calls too.
+There the memory budget is soft, as for trajectories: a shot that alone exceeds it runs by itself beyond it,
 with the draws it would have had, instead of a scalar retry that would draw it
 again.
 
@@ -513,24 +526,46 @@ Maestro terminal measurement batches use one statevector, density-matrix or
 path-integral simulator, letting the sampler use permitted internal threads.
 This density-matrix dispatch applies to Aer and both QCSim sampling policies.
 Terminal batches do not save an unused trajectory-restoration snapshot.
-Aer and legacy QCSim batches can therefore produce different seeded histograms
-from the former multi-simulator dispatch; their probability distributions are
-unchanged. QCSim's reproducible terminal batches already used one simulator.
+
+With `sampling_policy=reproducible_v1`, the other supported QCSim terminal
+samplers use fixed logical batches when a full-request adaptive sampler does
+not apply: 256 shots each, or at most 256 larger batches for longer requests.
+Stabilizer, extended-stabilizer, MPS and MPO circuits are evolved once. The
+first batch samples that prepared state itself, so what its sampler sets up
+once (an MPS moves the measured sites to the head of its chain) is not repeated
+per batch. One worker keeps sampling the same state, and several workers sample
+private copies taken after the first batch. Each batch's seed follows
+its logical index, so changing the worker count changes concurrency without
+changing its seeded histogram. This also preserves worker invariance for raw
+rows reconstructed from those histograms with a seeded permutation.
+Qualifying single-qubit MPS/MPO marginals and extended-stabilizer marginals
+keep the complete request on one sampler, avoiding repeated contractions or
+blocks that fall below the adaptive crossover. The choice between these paths
+does not depend on the worker count. The batch size is a current implementation
+choice, not a promise about sequences in future releases.
+
 QCSim trajectory execution defaults to `trajectory_policy=shot_v1`, which
 distributes individual shots across workers, including short dynamic requests.
 It assigns each shot separate quantum, readout and
 classical-random streams derived from the request seed and absolute shot index.
 Changing job boundaries, worker counts or the trajectory memory budget does not
-change its seeded counts. To replay the older seeded sequence, explicitly select
-`trajectory_policy=block_v1`: fixed logical blocks of 256 shots, seeded by block
-identity independently of the number of outer workers. **The new default changes
-seeded counts for dynamic circuits.** Both policies sample the same distribution.
-These controls apply to reproducible QCSim
-statevector, density-matrix and path-integral trajectories, not terminal batches
-or `sampling_policy=legacy`. Stabilizer, extended-stabilizer, MPS and MPO
-trajectories use them only when `trajectory_policy` is set explicitly; without
-it they keep their earlier, worker-dependent seeded sequences (see the limits
-below).
+change its seeded counts for supported execution paths within the same build.
+`trajectory_policy=block_v1` instead uses fixed logical blocks of 256 shots,
+seeded by block identity independently of outer worker count. Both policies
+sample the same distribution; neither promises cross-version sequences.
+These controls apply to QCSim statevector, density-matrix, path-integral,
+stabilizer, extended-stabilizer, MPS and MPO trajectories, except when
+`sampling_policy=legacy` selects the native path. Omitting `trajectory_policy`
+and explicitly setting `shot_v1` select the same scheduler. Terminal batches
+use the distribution-sampling paths above under either trajectory policy.
+
+Classical `Random` instructions with an explicit seed, including zero, retain
+their reproducible instruction streams when the request seed is omitted.
+Logical shot or block IDs and instruction positions distinguish those streams;
+fresh request entropy is supplied only to instructions without their own seed.
+An explicit request seed participates in all execution streams. Replaying an
+instruction stream requires the same logical execution sequence; replaying the
+whole circuit also requires seeds for its other random operations.
 
 For the JSON request API, put these options in `simulator.options`; for the
 legacy `SimpleExecute` API, put them in its configuration object:
@@ -591,7 +626,7 @@ restores it. Nested realization calls from worker threads run inline, and no
 budget mutex is held while a callback runs or workers join. Calls inside an
 existing OpenMP team and path-integral jobs remain serial
 internally. Measurement scans and probability sums retain serial arithmetic,
-preserving the existing block seeds and outcomes across outer pool and OpenMP
+keeping outcomes stable across outer pool and OpenMP
 team sizes. Consecutive statevector measurements visit only the subspace left
 by earlier collapses, retaining the native ordering of surviving summands,
 normalization and RNG draws (including duplicate measurements). Gates, reset,
@@ -701,21 +736,19 @@ clone boundaries. No sampler changes the process-wide OpenMP configuration.
   independent one-shot realizations in parallel on the ordinary executor and
   report `sampling_strategy` only for frames; native rows report it always.
 - Legacy `SimpleExecute` accepts `counts_policy` with the meaning it has
-  elsewhere: under `auto`, an unseeded Clifford circuit on a network that admits
-  the QCSim stabilizer is counted from reference frames and reports
-  `"sampling_strategy": "reference_frame_v1"`; seeded calls and `legacy` keep the
-  network executor. The network's own `RepeatedExecute*` methods do not select
+  elsewhere: under `auto`, an eligible Clifford circuit on a network that admits
+  the QCSim stabilizer is counted from reference frames, with or without seeds,
+  and reports `"sampling_strategy": "reference_frame_v1"`. Explicit `legacy`
+  keeps the network executor. The network's own `RepeatedExecute*` methods do not select
   frames: they execute the circuits, often single noise realizations, that the
   layers above choose for them.
 - C++ `NoiseAdd` runs Monte Carlo estimates on realization workers; each
   realization keeps its seed and values are summed in realization order, so
-  seeded estimates match the serial loop. Unseeded executions whose
-  realizations hold several shots also run on realization workers when the
-  network samples them from one prepared state (terminal measurements on a
-  dense QCSim method); seeded multi-shot batches keep the network's shot
-  partition and its sequence. `MaestroExecution::ExecuteNoisy`, and so Python's
-  noisy counts, follow the same rule; native counts run multi-shot realizations
-  in order.
+  seeded estimates match the serial loop. Eligible multi-shot realizations
+  can also run on realization workers when the network samples them from one
+  prepared state (terminal measurements on a dense QCSim method), whether
+  seeded or unseeded. Each realization retains its assigned shot count and
+  random streams; parallelism must not pool independent noise realizations.
 - Prefix checkpoints, Monte Carlo noisy estimates and noisy fidelity live in
   libmaestro (`MaestroExecution::PrefixCheckpoint`, `EstimateNoisy` and
   `NoisyFidelity`); Python's `PrefixCheckpointedSimulator`,
@@ -728,14 +761,12 @@ clone boundaries. No sampler changes the process-wide OpenMP configuration.
   unless the noise changes a circuit's multi-qubit topology between
   realizations.
 - Native `trajectory_max_memory_mb` applies to QCSim statevector, density
-  matrix, stabilizer, MPS and MPO requests. An explicit `trajectory_policy`
-  also gives stabilizer, extended-stabilizer, MPS and MPO dynamic circuits
-  logical shot streams; without it they keep their earlier, worker-dependent
-  seeded sequences. Those logical shot workers follow the memory budget as
-  dense ones do: always on the stabilizer, and on MPS and MPO under a
-  bond-dimension cap. Extended-stabilizer states have no known bound and are
-  not budgeted. Legacy `SimpleExecute` marks the policy explicit only for a
-  call whose configuration object sets it, also on a reused handle.
+  matrix, stabilizer, MPS and MPO requests. All supported methods use logical
+  shot streams by default. Those workers follow the memory budget where a
+  state-size estimate is available: always on the stabilizer, and on MPS and
+  MPO under a bond-dimension cap. Extended-stabilizer states have no known
+  bound and are not budgeted by this dispatcher. The `SimpleExecute` API
+  restores an omitted trajectory policy to `shot_v1` on each call.
 
 ## Testing and benchmarking
 
@@ -747,10 +778,11 @@ parentheses): `reference_frame_sampler_tests` (`reference_frame_sampler`),
 (`network_jobs`), `backend_specialization_tests` (`backend_specialization`) and
 `gate_fusion_tests` (`gate_fusion_tests`); `maestro_request_tests`
 (`maestro_request_api`) needs `MAESTRO_BUILD_REQUEST_TESTS=ON`. The Python
-sampling suites are `tests/python/test_sampling_*.py`; the seeded 0.3.13
-fixture (`test_sampling_legacy.py`) runs on Windows only.
-`tests/generate_sampling_legacy_fixture.py` checks or regenerates that fixture
-from an independently built 0.3.13 source tree. A build configured
+sampling suites are `tests/python/test_sampling_*.py`, including
+`test_sampling_replay.py` for current-version replay and policy selection, and
+`test_trajectory_config.py` for implicit/explicit defaults and worker settings.
+Tests compare repeated executions from the current build, not archived
+histogram fixtures from an older release. A build configured
 with `MAESTRO_ENABLE_OPENMP=OFF` exercises the serial implementation.
 
 The optional `sampling_benchmarks` target is excluded from the normal build and
@@ -780,6 +812,11 @@ not full circuit execution timings. Thresholds are conservative policy defaults,
 not a claim that one crossover is optimal on every machine.
 
 ### Measurements on 2026-10-09
+
+The measurements below record earlier implementations. Their descriptions of
+seeded dispatch and policy defaults are historical; the policy and replay
+contract above supersedes them. They are not fresh measurements of the current
+seed-independent dispatch.
 
 Windows Release build, MSVC 19.44, OpenMP, Intel Core i9-13900KS (32 logical
 processors), Aer disabled. Each result is the median of five timed calls after
@@ -890,6 +927,10 @@ composite_sampling_benchmarks 2 8 1000000 0 8 many 5 4
 ```
 
 ## Trajectory and terminal-density scheduling follow-up
+
+This section records the 2026-10-09/10 implementation work and measurements.
+Historical sequence comparisons are validation performed at that time, not a
+cross-version replay promise. The current policy section above governs defaults.
 
 The regression introduced in `b4c838f` was in network scheduling:
 `ExecuteLogicalShotBlocks` limited concurrency to one worker per 256-shot block
@@ -1067,8 +1108,8 @@ The subsequent Python/default-policy follow-up exposes `trajectory_policy`,
 `trajectory_max_memory_mb` and `max_simulators` through `SimulatorConfig`, with
 constructor/setter validation and pickle support. `shot_v1` is now the network
 and legacy-request default and is advertised by capability discovery. Explicit
-`block_v1` remains available for replay. Validation passed 49 Python tests (19
-hardware/optional-dependency skips), the native request suite, and the network
+`block_v1` remains available as a fixed-block algorithm. Validation at that time
+passed 49 Python tests (19 hardware/optional-dependency skips), the native request suite, and the network
 job suite, including omitted-versus-explicit policy checks.
 
 With 16 OpenMP threads, the Python 16-qubit random/100-shot check measured

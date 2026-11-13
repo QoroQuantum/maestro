@@ -48,13 +48,17 @@ def test_invalid_values_leave_config_unchanged(name, value):
 
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
                                     maestro.SimulationType.DensityMatrix,
-                                    maestro.SimulationType.PathIntegral])
+                                    maestro.SimulationType.PathIntegral,
+                                    maestro.SimulationType.Stabilizer,
+                                    maestro.SimulationType.ExtendedStabilizer,
+                                    maestro.SimulationType.MatrixProductState,
+                                    maestro.SimulationType.MatrixProductOperator])
 def test_seeded_policy_execution(method):
     source = """
     OPENQASM 2.0;
     include "qelib1.inc";
     qreg q[2]; creg c[3];
-    ry(0.71) q[0]; measure q[0] -> c[0];
+    h q[0]; measure q[0] -> c[0];
     if(c==1) x q[1];
     h q[0]; measure q[0] -> c[1]; measure q[1] -> c[2];
     """
@@ -72,11 +76,12 @@ def test_seeded_policy_execution(method):
         return counts
 
     baseline = run()
-    old_policy = run("block_v1", 1)
-    assert run("block_v1", 4) == old_policy
+    block_policy = run("block_v1", 1)
+    assert run("block_v1", 4) == block_policy
     per_shot = run("shot_v1", 1, 1)
     # Catches a binding that accepts the option but silently ignores it.
-    assert per_shot != old_policy
+    assert per_shot != block_policy
+    # Explicitly setting the default must select the same execution path.
     assert per_shot == baseline
     assert run("shot_v1", 4, 64) == per_shot
     assert run("shot_v1", 3, 1) == per_shot

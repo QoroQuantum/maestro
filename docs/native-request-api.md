@@ -426,7 +426,9 @@ reduction exact. `allow_reset_marginalization` averages over unobserved reset
 outcomes, preserving ensemble values but not individual trajectories.
 `enable_sampling_reduction` samples disjoint measurement cones independently for
 `execute`, counts and rows alike (neither then uses reference frames); it is
-exact but opt-in, because it changes a seeded run's random streams. Estimates report `auto_reduced`, `qubits_before`, `qubits_after`,
+exact but opt-in pending a workload-based cost model for automatic selection.
+Repeated requests with the same seed and configuration remain reproducible
+within one Maestro version. Estimates report `auto_reduced`, `qubits_before`, `qubits_after`,
 `clusters_count`, `largest_cluster_qubits`, `mean_cluster_qubits`,
 `cluster_methods`, `expectation_error_bounds` and `bounded_observables`.
 
@@ -563,15 +565,20 @@ including zero) controls measurements and readout. Otherwise, an explicit
 a fresh random uint64 seed and reports it in the result's `seed` field. Reusing
 that seed with the same request and the reported
 `execution_metadata.configured_options.counts_policy` reproduces the run. The
-policy matters for unseeded `execute` requests: under the default `auto`, an
-unseeded request that the stabilizer simulator could run uses noisy-Clifford
+policy records the selected algorithm: under the default `auto`, an eligible
+request that the stabilizer simulator could run uses noisy-Clifford
 reference frames, reports `execution_metadata.sampling_strategy:
 "reference_frame_v1"` and rewrites `configured_options.counts_policy` to
 `"frame_v1"`. Replay that policy along with the seed to use frames again.
 Seeded and unseeded QCSim count requests that resolve to adaptive terminal
 sampling report `"multinomial_v1"`. A noisy extended-stabilizer checkpoint
-reserved for frame sampling reports `"frame_v1"` if any suffix used frames
-and `"legacy"` if all suffixes used the ordinary fallback. MPI ranks share the generated
+that runs any suffix on frames keeps its requested policy, since its other
+suffixes may have used another sampler, and reports each suffix's actual
+strategy. In every case, replay uses the returned seed and the reported
+`configured_options.counts_policy`. Replay is guaranteed within the same
+Maestro version and configuration; algorithms and random sequences may change
+across versions.
+MPI ranks share the generated
 seed through their communicator; validation alone does not generate a seed or
 require MPI initialization.
 `noise.prefix: true` (`checkpoint_batch` only) also applies the noise to the saved
@@ -639,14 +646,13 @@ well as a fresh worker; omitting it leaves the simulator's seed configuration
 unchanged.
 
 `SimpleExecute` also accepts `counts_policy` (`auto`, `legacy`, `frame_v1` or `multinomial_v1`,
-as in `simulator.options`). Under `auto`, an unseeded Clifford circuit on a
+as in `simulator.options`). Under `auto`, an eligible Clifford circuit on a
 network that admits the QCSim stabilizer is counted from reference frames, and
-the result reports `"sampling_strategy": "reference_frame_v1"`; seeded calls and
-`legacy` keep the network executor. Its eligible terminal histograms use
-multinomial sampling under `auto` even with a seed. A `trajectory_policy` in the configuration
-object also gives that call's stabilizer, extended-stabilizer, MPS and MPO
-dynamic circuits logical shot streams. Omitting it keeps their 0.3.13 seeded
-sequences, even on a handle that an earlier call configured with one.
+the result reports `"sampling_strategy": "reference_frame_v1"`, with or without a seed.
+Explicit `legacy` keeps the ordinary network executor. Eligible terminal histograms use
+multinomial sampling under `auto`. Supported QCSim dynamic circuits default to
+`trajectory_policy="shot_v1"`, including stabilizer, extended-stabilizer, MPS and MPO.
+Omitting the policy uses that default even after an earlier call supplied an override.
 
 Fidelity operations use ideal inverse preparation. Delays are identity operations
 in that inverse; `noisy_fidelity` applies its noise only to the forward
@@ -741,13 +747,13 @@ when the backend can cheaply obtain a sufficiently populated distribution.
 resolved. Replay using the returned seed and the reported
 `execution_metadata.configured_options.counts_policy`. The policy permits the
 optimization; the local count sampler checks its cost for each batch.
-`auto` (the default) uses noisy-Clifford reference frames for unseeded requests
-that the ordinary executor could itself run on the stabilizer simulator. Seeded
-requests can use the adaptive histogram path on supported backends. `legacy` keeps
-the earlier executor. On the QCSim `pauli_propagator`, `checkpoint_batch`
+`auto` (the default) uses noisy-Clifford reference frames for eligible requests
+that the ordinary executor could itself run on the stabilizer simulator, with or without a seed.
+Requests can also use adaptive histograms on supported backends. `legacy` selects
+the ordinary executor explicitly. On the QCSim `pauli_propagator`, `checkpoint_batch`
 suffixes sample their terminal measurements from the saved prefix; `legacy`
-replays every shot there instead, as earlier releases did, which also keeps
-their seeded histograms (readout errors are then drawn shot by shot). `frame_v1` opts into frames even with seeds, and for
+replays every shot there instead (readout errors are then drawn shot by shot).
+It does not guarantee output from older releases. `frame_v1` requests frames, including for
 automatically selected methods. An explicit `candidates` list names every
 backend a request allows and replaces the requested one, so neither policy uses
 frames unless the list includes the QCSim stabilizer, and either may when it
@@ -765,12 +771,14 @@ the reported backend and method are `qcsim` and `stabilizer`,
 seed section above). Shot rows (below) always report `sampling_strategy`;
 counts from the ordinary executor omit it.
 
-With one realization per shot, noisy CPU QCSim `execute` requests run their
+Noisy CPU QCSim `execute` requests can run their
 realizations on several networks at once, within `max_simulators` and
 `trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
-counts do not depend on the worker count. Realizations with several shots, and
-`checkpoint_batch` suffixes, whose measurements continue one simulator stream,
-run in order.
+counts replay for the same request configuration. Multi-shot realizations keep
+their shared noise and execute as complete batches; outer workers use one inner
+simulator each. `execution_metadata.realization_workers` reports the actual
+outer concurrency for ordinary noisy execute requests. Checkpoint suffixes retain
+their defined call order.
 
 ### Shot rows
 
@@ -791,7 +799,7 @@ realization, so a leading slice draws from the first realizations only.
 | Strategy | Rows |
 | --- | --- |
 | `reference_frame_v1` | Noisy-Clifford reference frames: a Stabilizer method, or automatic selection whose `candidates`, if listed, include the QCSim stabilizer; a supported Clifford circuit and, with noise, one realization per shot |
-| `extended_frame_v1` | Batched Pauli frames for a noisy QCSim `extended_stabilizer` request without `candidates`: an unseeded request under `counts_policy: "auto"`, or any request under `"frame_v1"`. The result's `configured_options.counts_policy` is then `"frame_v1"`, which replays it with the returned `seed`. Applies to Pauli or combined noise without exact channels, with readout, measurements and resets and no classical control. Rows of one noise realization share its errors. `noise.seed` drives the circuit errors and the execution seed drives measurements and readout. Relaxation that sampled execution draws as resets (T1, or thermal or idle relaxation with a finite T1, on a qubit the circuit gates or delays) needs one realization per shot, and thermal noise with T2 > T1 on such a qubit keeps scalar trajectories. The memory budget is soft: a shot that alone exceeds it runs by itself beyond it. Noisy `execute` counts and each `checkpoint_batch` suffix after a gate-only prefix report the same strategy |
+| `extended_frame_v1` | Batched Pauli frames for an eligible noisy QCSim `extended_stabilizer` request without `candidates`, under `counts_policy: "auto"` or `"frame_v1"`, with or without a seed. Ordinary execute results report `"frame_v1"` as the resolved count policy; mixed-strategy checkpoints retain the requested policy and report per-suffix strategies. Applies to Pauli or combined noise without exact channels, with readout, measurements and resets and no classical control. Rows of one noise realization share its errors. `noise.seed` drives the circuit errors and the execution seed drives measurements and readout. Relaxation that sampled execution draws as resets (T1, or thermal or idle relaxation with a finite T1, on a qubit the circuit gates or delays) needs one realization per shot, and thermal noise with T2 > T1 on such a qubit keeps scalar trajectories. The memory budget is soft: a shot that alone exceeds it runs by itself beyond it. Noisy `execute` counts and each `checkpoint_batch` suffix after a gate-only prefix report the same strategy |
 | `terminal_v1` | One prepared state sampled for every row (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
 | `mixed_v1` | Checkpoint suffixes only: some realizations sampled from one prepared state, others shot by shot |

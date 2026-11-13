@@ -1374,15 +1374,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Resolve an omitted seed only after validation. MPI execution obtains one
     // shared random seed, while validation needs neither entropy nor collectives.
     const bool prefer_frame_counts = PreferFrameCounts(config);
-    // Extended-stabilizer frames, decided the same way: an unseeded auto
-    // request opts in before it receives the seed that replays it.
+    const std::string requested_counts_policy = EffectiveCountsPolicy(config);
+    // Eligibility depends on the circuit and policy, not whether the caller
+    // supplied the seed or receives one in the result.
     const bool prefer_extended_frames = PreferExtendedFrames(config);
-    // Frames are tried per suffix. Pin the ordinary fallback now, so that a
-    // checkpoint with no frame-compatible suffix can replay with its returned
-    // seed. If any suffix uses frames, metadata records frame_v1 for the mix.
-    if (operation == "checkpoint_batch" && config.counts_policy == "auto" && prefer_extended_frames && noise.enabled)
-        config.counts_policy = "legacy";
-    else if (((operation == "execute" && !return_samples) || operation == "checkpoint_batch") && shots > 1 && PreferMultinomialCounts(config))
+    // Frame-incompatible suffixes retain the same fast terminal fallback as
+    // other requests. Each suffix reports which strategy actually ran.
+    if (((operation == "execute" && !return_samples) || operation == "checkpoint_batch") && shots > 1 && PreferMultinomialCounts(config))
         config.counts_policy = "multinomial_v1";
     if (!config.seed)
     {
@@ -1443,7 +1441,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         executed.gate_fusion_max_qubits = records.gate_fusion_max_qubits;
         auto metadata = ReductionMetadata(executed, config);
         metadata["sampling_strategy"] = records.sampling_strategy;
-        // Replaying the returned seed also requires the resolved policy.
+        // Report the policy that ran: with the returned seed it replays this result.
         if (records.sampling_strategy == "extended_frame_v1")
             metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
         result["shots"] = shots;
@@ -1486,7 +1484,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             frame.largest_component = input.qubits;
             auto metadata = ReductionMetadata(frame, config);
             metadata["sampling_strategy"] = "reference_frame_v1";
-            // Replaying the returned seed also requires the resolved policy.
+            // Report the policy that ran: with the returned seed it replays this result.
             metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
             json::object result{{"schema_version", SchemaVersion},
                                 {"operation", operation},
@@ -1531,7 +1529,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             frame.largest_component = input.qubits;
             auto metadata = ReductionMetadata(frame, config);
             metadata["sampling_strategy"] = "extended_frame_v1";
-            // Replaying the returned seed also requires the resolved policy.
+            // Report the policy that ran: with the returned seed it replays this result.
             metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
             json::object result{{"schema_version", SchemaVersion},
                                 {"operation", operation},
@@ -1699,23 +1697,26 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
     if (operation == "execute" || operation == "checkpoint_batch")
         realizations = std::min(realizations, shots);
+    size_t realization_workers = 1;
     if (operation == "execute")
     {
         Counts counts;
-        // One shot per realization makes each realization's result depend only
-        // on its own seed, so CPU QCSim realizations may run on several networks
-        // without changing seeded counts. Realizations with several shots keep
-        // the shared network: their inner shot workers set seeded partitions.
+        // Realization seeds and shot counts are keyed by logical realization,
+        // including when several shots share the same injected circuit.
         size_t workers = 1;
-        if (realizations > 1 && realizations == shots && RunsOnlyQCSim(config))
+        if (realizations > 1 && RunsOnlyQCSim(config))
         {
             // Each worker's network maps the circuit to its own register (at most
             // the declared qubits; the network's ancilla is never allocated),
             // for whichever backend selection runs.
             if (const long double bytes = MaxRealizationBytes(config, input.qubits); bytes > 0)
-                workers = Utils::LimitRealizationWorkersByMemory(Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0)),
-                                                                 static_cast<size_t>(bytes), RealizationBudgetMB(config), 1, 2);
+                // Multi-shot batches retain their source, saved prefix and
+                // execution clone, including any clone-owned saved snapshot.
+                workers = Utils::LimitRealizationWorkersByMemory(Utils::RealizationWorkerCount(realizations, EffectiveMaxSimulators(config).value_or(0)),
+                                                                 static_cast<size_t>(bytes), RealizationBudgetMB(config), 1,
+                                                                 NetworkRealizationCopies(config, realizations != shots));
         }
+        realization_workers = workers;
         if (workers <= 1)
             for (size_t r = 0; r < realizations; ++r)
             {
@@ -1738,6 +1739,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 extra.push_back(std::make_unique<Context>(input, config));
                 contexts.push_back(extra.back().get());
             }
+            // Outer workers own the shot batches. Do not multiply their CPU
+            // and state-memory budgets with another pool of shot workers.
+            for (auto *worker : contexts)
+                worker->network->SetMaxSimulators(1);
             std::vector<Counts> local(workers);
             std::vector<size_t> latest(workers, 0);
             std::vector<char> ran(workers, 0);
@@ -1746,7 +1751,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 [&](size_t worker, size_t r, CircuitPtr noisy) {
                     auto &network = contexts[worker]->network;
                     network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
-                    for (const auto &entry : network->RepeatedExecuteOnHost(noisy, 0, 1))
+                    const auto count = shots / realizations + (r < shots % realizations ? 1 : 0);
+                    for (const auto &entry : network->RepeatedExecuteOnHost(noisy, 0, count))
                         local[worker][Bits(entry.first, input.clbits)] += entry.second;
                     latest[worker] = std::max(latest[worker], r);
                     ran[worker] = 1;
@@ -2025,8 +2031,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const TerminalCountSink writeCounts = [&](size_t count, const Circuits::OperationState &state) {
                 counts[Bits(state.GetAllBits(), input.clbits)] += count;
             };
-            const bool multinomial =
-                samples < shots && config.counts_policy == "multinomial_v1" && simulator->IsQcsim() && !simulator->GetConfigMap().count("sampling_policy");
             const bool legacy = EffectiveCountsPolicy(config) == "legacy";
             for (size_t r = 0; r < samples; ++r)
             {
@@ -2036,7 +2040,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
                 Circuits::OperationState terminal_state(input.clbits);
-                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy) &&
+                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, legacy) &&
                     SamplePreparedTerminal(
                         *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
                         [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
@@ -2129,10 +2133,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         }
     }
     result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
-    // Replaying the returned seed also requires the resolved policy.
+    if (operation == "execute")
+        result["execution_metadata"].as_object()["realization_workers"] = realization_workers;
+    // Mixed checkpoint suffixes can use frames and multinomial fallback in
+    // the same call. Preserve the requested dispatch policy for replay rather
+    // than replacing it with the policy of only the frame-compatible suffixes.
     if (frame_suffixes)
         if (auto *options = result["execution_metadata"].as_object().if_contains("configured_options"); options && options->is_object())
-            options->as_object()["counts_policy"] = "frame_v1";
+            options->as_object()["counts_policy"] = requested_counts_policy;
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.
@@ -2383,7 +2391,7 @@ std::unique_ptr<FrameSamplerHandle> CompileFrameSampler(const boost::json::objec
         Supported(plan.has_value(), "Extended frames do not apply: they need measurements, extended_stabilizer gates and Pauli-mixture channels, "
                                     "without classical control");
         handle->extended = std::move(*plan);
-        handle->workers = config.max_simulators.value_or(0);
+        handle->workers = EffectiveMaxSimulators(config).value_or(0);
         handle->budgetMB = RealizationBudgetMB(config);
         return handle;
     }

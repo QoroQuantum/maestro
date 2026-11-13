@@ -153,9 +153,9 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     // A checkpoint can alternate counts and ordered rows on the same simulator.
     // Pin the sampler for this call before cloning its workers.
     const bool multinomial =
-        !rows && shots > 1 && simulator_->IsQcsim() && !simulator_->GetConfigMap().count("sampling_policy") && PreferMultinomialCounts(config_);
+        shots > 1 && simulator_->IsQcsim() && simulator_->GetConfiguration("sampling_policy") != "legacy" && PreferMultinomialCounts(config_);
     const char *counts_policy = multinomial ? "multinomial_v1" : "legacy";
-    // What the caller asked for; the simulator is pinned to legacy for auto too.
+    // An explicitly requested ordinary sampler remains available.
     const bool legacy = EffectiveCountsPolicy(config_) == "legacy";
     if (simulator_->IsQcsim() && simulator_->GetConfiguration("counts_policy") != counts_policy)
         simulator_->Configure("counts_policy", counts_policy);
@@ -220,7 +220,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // may branch on a pure-state backend, so CanSampleTerminal sends any
         // pure-state reset to the shot path. Backends whose sampler uses the
         // save slot also replay shots, keeping the prefix intact.
-        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy))
+        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, legacy))
         {
             // Counts take occupied outcomes whole whenever readout is
             // deterministic, whatever sampler drew them; rows need each shot.
@@ -261,7 +261,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         else
             ++trajectory_calls;
     }
-    else if (frame_prefix_usable_ && !policy.exact_channels && PreferExtendedFrames(call_config, noise_seed) && [&] {
+    else if (frame_prefix_usable_ && !policy.exact_channels && PreferExtendedFrames(call_config) && [&] {
                  // Batched frames: the prefix evolves once, each batch of shots
                  // follows the noisy suffix together, realization schedule kept.
                  const size_t batches = std::min(shots, policy.realizations);

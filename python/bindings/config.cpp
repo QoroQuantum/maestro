@@ -65,6 +65,10 @@ const char *const kConfigFields[] = {
     "pp_max_pauli_weight",
     "pp_gates_between_trims",
     "pp_gates_between_deduplications",
+    "pp_workers",
+    "pp_max_fused_gates",
+    "pp_memory_limit_bytes",
+    "pp_sampling_cache_nodes",
     "path_integral_threshold",
     "gate_fusion",
     "enable_causal_cone_reduction",
@@ -129,9 +133,10 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> mps_svd_solver, std::optional<std::string> mpo_svd_solver, std::optional<std::string> tensor_network_svd_solver,
            std::optional<std::string> mpo_kraus_completeness_check, bool mpo_restore_trace_after_truncation, bool mpo_hermitize_after_truncation,
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
-           std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
-           bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits, bool auto_reduce,
-           std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
+           std::optional<int> pp_gates_between_deduplications, std::optional<uint64_t> pp_workers, std::optional<uint64_t> pp_max_fused_gates,
+           std::optional<uint64_t> pp_memory_limit_bytes, std::optional<uint64_t> pp_sampling_cache_nodes, std::optional<double> path_integral_threshold,
+           std::optional<bool> gate_fusion, bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits,
+           bool auto_reduce, std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
            std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy,
            std::optional<size_t> min_cluster_qubits, std::optional<double> observable_error_tolerance, bool enable_sampling_reduction,
            bool allow_reset_marginalization, std::string counts_policy, bool fixed_backend,
@@ -161,6 +166,10 @@ void bind_config(nb::module_ &m)
             config.pp_max_pauli_weight = pp_max_pauli_weight;
             config.pp_gates_between_trims = pp_gates_between_trims;
             config.pp_gates_between_deduplications = pp_gates_between_deduplications;
+            config.pp_workers = pp_workers;
+            config.pp_max_fused_gates = pp_max_fused_gates;
+            config.pp_memory_limit_bytes = pp_memory_limit_bytes;
+            config.pp_sampling_cache_nodes = pp_sampling_cache_nodes;
             config.path_integral_threshold = path_integral_threshold;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
@@ -189,13 +198,15 @@ void bind_config(nb::module_ &m)
         "mpo_kraus_completeness_check"_a = nb::none(), "mpo_restore_trace_after_truncation"_a = defaults.mpo_restore_trace_after_truncation,
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
-        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
-        "enable_observable_clustering"_a = defaults.enable_observable_clustering, "max_cluster_qubits"_a.noconvert() = nb::none(),
-        "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(),
-        "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none(),
-        "mps_routing_strategy"_a = nb::none(), "min_cluster_qubits"_a.noconvert() = nb::none(), "observable_error_tolerance"_a = nb::none(),
-        "enable_sampling_reduction"_a = defaults.enable_sampling_reduction, "allow_reset_marginalization"_a = defaults.allow_reset_marginalization,
-        "counts_policy"_a = defaults.counts_policy, "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates);
+        "pp_workers"_a.noconvert() = nb::none(), "pp_max_fused_gates"_a.noconvert() = nb::none(), "pp_memory_limit_bytes"_a.noconvert() = nb::none(),
+        "pp_sampling_cache_nodes"_a.noconvert() = nb::none(), "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(),
+        "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction, "enable_observable_clustering"_a = defaults.enable_observable_clustering,
+        "max_cluster_qubits"_a.noconvert() = nb::none(), "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(),
+        "trajectory_max_memory_mb"_a.noconvert() = nb::none(), "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(),
+        "mps_routing_truncation_weight"_a = nb::none(), "mps_routing_strategy"_a = nb::none(), "min_cluster_qubits"_a.noconvert() = nb::none(),
+        "observable_error_tolerance"_a = nb::none(), "enable_sampling_reduction"_a = defaults.enable_sampling_reduction,
+        "allow_reset_marginalization"_a = defaults.allow_reset_marginalization, "counts_policy"_a = defaults.counts_policy,
+        "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates);
 
     BindConfigField(config_class, "optimization_candidates", &SimulatorConfig::optimization_candidates,
                     "With fixed_backend=False, the (SimulatorType, SimulationType) pairs automatic selection may choose from, "
@@ -209,14 +220,14 @@ void bind_config(nb::module_ &m)
                     "Require the selected simulator and method; disable automatic backend replacement, including reference-frame sampling.");
 
     BindConfigField(config_class, "counts_policy", &SimulatorConfig::counts_policy,
-                    "'auto' allows adaptive multinomial terminal counts with or without a seed. Unseeded requests may also use frames or direct trajectories. "
+                    "'auto' allows eligible adaptive terminal counts, frames and direct trajectories with or without a seed. "
                     "'legacy' uses the ordinary sampler, 'frame_v1' enables frame counts, and 'multinomial_v1' selects adaptive terminal counts. "
-                    "On the same build, the same request, seed and policy reproduce the histogram.");
+                    "The same request, seed and configuration reproduce the histogram within one Maestro version; sequences may change between versions.");
 
     BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
                     "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");
     BindConfigField(config_class, "enable_sampling_reduction", &SimulatorConfig::enable_sampling_reduction,
-                    "Opt into exact independent sampling of disjoint measurement cones; changes seeded random streams.");
+                    "Opt into exact independent sampling of disjoint measurement cones; repeated seeded requests remain reproducible.");
     BindConfigField(config_class, "observable_error_tolerance", &SimulatorConfig::observable_error_tolerance,
                     "Opt-in absolute expectation error budget for bounded backward evaluation of exact noisy channels.");
     BindConfigField<false>(config_class, "min_cluster_qubits", &SimulatorConfig::min_cluster_qubits,
@@ -229,15 +240,14 @@ void bind_config(nb::module_ &m)
                     "Nonnegative overflow penalty relative to capped runtime cost. Default 1; zero charges runtime alone.");
 
     BindConfigField(config_class, "trajectory_policy", &SimulatorConfig::trajectory_policy,
-                    "QCSim dynamic circuits: 'block_v1' preserves existing seeded counts; 'shot_v1' "
+                    "QCSim dynamic circuits: 'block_v1' schedules fixed logical blocks; 'shot_v1' "
                     "distributes individual shots with streams independent of worker count. The "
-                    "policies give different seeded sequences. On statevector, density-matrix and "
-                    "path-integral runs None uses 'shot_v1'. Stabilizer, extended-stabilizer, MPS and "
-                    "MPO runs use a policy only when it is set; None keeps their earlier, "
-                    "worker-dependent seeded sequences. Terminal sampling is unaffected.");
+                    "policies can give different seeded sequences. None uses 'shot_v1' on supported "
+                    "QCSim statevector, density-matrix, path-integral, stabilizer, extended-stabilizer, "
+                    "MPS and MPO trajectories. Terminal sampling is unaffected.");
     BindConfigField<false>(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
                            "Positive MiB estimate limiting concurrent QCSim work: dense trajectory "
-                           "shots (and, under an explicit trajectory_policy, stabilizer and bounded MPS/MPO "
+                           "shots (including stabilizer and bounded MPS/MPO "
                            "shots), and parallel noise realizations (executions, estimates, fidelities) and "
                            "checkpoint suffixes of statevector, density-matrix, stabilizer and bounded MPS/MPO runs. None "
                            "uses 1024 MiB. This is a soft concurrency budget, not a process memory "
@@ -330,6 +340,26 @@ void bind_config(nb::module_ &m)
                     "and then apply both thresholds; takes precedence over a trim due on "
                     "the same operation. Must be positive. Unset, PauliPropagator "
                     "simulations use 10.");
+    BindConfigField<false>(config_class, "pp_workers", &SimulatorConfig::pp_workers,
+                           "Pauli propagation workers. On the GPU PauliPropagator, estimates "
+                           "parallelise independent observables across this many workers, each on "
+                           "its own CUDA stream, from 1 to 64; the workers share the memory budget, "
+                           "and memory pressure lowers concurrency. The CPU PauliPropagator uses this "
+                           "many threads, from 0 to 1024, where 0 picks a count from the hardware. "
+                           "The best count depends on the workload (the number of observables and "
+                           "the work per observable): more workers can add overhead on small "
+                           "batches, so measure before raising it. None uses the backend default, "
+                           "one worker on the GPU.");
+    BindConfigField<false>(config_class, "pp_max_fused_gates", &SimulatorConfig::pp_max_fused_gates,
+                           "GPU Pauli propagation: the most gates fused into one block, from 1 to "
+                           "256; 1 disables fusion. None uses 64.");
+    BindConfigField<false>(config_class, "pp_memory_limit_bytes", &SimulatorConfig::pp_memory_limit_bytes,
+                           "GPU Pauli propagation: the device memory budget in bytes within which "
+                           "buffers grow. Must be positive. None uses 90% of available device "
+                           "memory. A budget is a limit, not a reservation against other GPU users.");
+    BindConfigField<false>(config_class, "pp_sampling_cache_nodes", &SimulatorConfig::pp_sampling_cache_nodes,
+                           "Pauli propagation: the most nodes kept in the shot-sampling cache; 0 "
+                           "disables caching. None uses the backend default (8192 on the GPU).");
     BindConfigField(config_class, "path_integral_threshold", &SimulatorConfig::path_integral_threshold,
                     "Trim threshold for PathIntegral simulation; None disables "
                     "trimming.");

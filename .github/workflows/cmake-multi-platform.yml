@@ -26,7 +26,7 @@ on:
         default: base
 
 env:
-  QCSIM_VERSION: "f69b4ac979e1af877a34fd48371997dd01e9bcb3"
+  QCSIM_VERSION: "f85a46f779239f7cba6c04ea033c678699246c97"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
@@ -121,7 +121,7 @@ jobs:
         python -m pip install -r tests/python/requirements.txt
         # test_sinter.py skips itself when stim or sinter is missing; fail instead.
         python -c "import stim, sinter, pymatching"
-        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
+        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_pauli_propagation_config.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
 
     - name: Build the Python docs
       # Pages with code run against the module built above, and any Sphinx
@@ -155,7 +155,7 @@ jobs:
 
   # Full suite only. An MSVC build of the bindings, running the adjoint tests that
   # cover its Windows-specific memory guard and the sampling suites, including the
-  # MSVC-only seeded 0.3.13 fixture. The release wheels run them too.
+  # fresh-process seeded replay. The release wheels run them too.
   windows:
     name: Windows Python bindings
     if: inputs.suite == 'full' || github.event_name == 'push'
@@ -208,4 +208,4 @@ jobs:
     - name: Run adjoint and sampling Python tests
       run: |
         Copy-Item build/Release/maestro*.pyd maestro/
-        python -c "import glob, os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', *sorted(glob.glob('tests/python/test_sampling_*.py')), '-q', '-rs']))"
+        python -c "import glob, os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', 'tests/python/test_pauli_propagation_config.py', *sorted(glob.glob('tests/python/test_sampling_*.py')), '-q', '-rs']))"

@@ -139,7 +139,6 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
     try
     {
         std::string policy = "shot_v1";
-        bool explicitPolicy = false;
         uint64_t workers = 0;
         uint64_t memoryMb = 1024;
         if (config.is_object())
@@ -151,7 +150,6 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
                 policy = std::string(value->as_string());
                 if (policy != "block_v1" && policy != "shot_v1")
                     return false;
-                explicitPolicy = true;
             }
             if (const auto *value = config.as_object().if_contains("max_simulators"))
             {
@@ -182,12 +180,6 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
             network.SetMaxSimulators(static_cast<size_t>(workers));
         network.Configure("trajectory_max_memory_mb", std::to_string(memoryMb).c_str());
         network.Configure("trajectory_policy", policy.c_str());
-        // Configure marks any policy explicit, which opts the stabilizer and
-        // tensor-chain methods into logical shot streams. Only a policy in this
-        // call's configuration does so; a reused handle forgets an earlier one,
-        // so omitted policies keep those methods' 0.3.13 seeded sequences.
-        if (!explicitPolicy)
-            network.RemoveConfiguration("trajectory_policy_explicit");
         return true;
     }
     catch (const std::exception &)
@@ -211,8 +203,7 @@ static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::strin
 
 // Counts from compiled reference frames, under the rule MaestroExecution::
 // SampleCircuit applies: frame_v1 samples any circuit frames compile, auto only
-// an unseeded Clifford circuit. The
-// network must admit the QCSim stabilizer (a fixed Stabilizer method, or a
+// a Clifford circuit. The network must admit the QCSim stabilizer (a fixed Stabilizer method, or a
 // candidate set that includes it) and hold the circuit on its single host.
 static std::optional<Network::INetwork<>::ExecuteResults> LegacyFrameCounts(Network::INetwork<> &network, const std::shared_ptr<Circuits::Circuit<>> &circuit,
                                                                             size_t shots, const std::string &policy, const boost::json::value &config)
@@ -222,7 +213,7 @@ static std::optional<Network::INetwork<>::ExecuteResults> LegacyFrameCounts(Netw
     std::optional<uint64_t> seed;
     if (const auto *value = config.is_object() ? config.as_object().if_contains("seed") : nullptr)
         seed = value->is_uint64() ? value->as_uint64() : static_cast<uint64_t>(value->as_int64());
-    if (policy == "auto" && (seed || !circuit->IsClifford()))
+    if (policy == "auto" && !circuit->IsClifford())
         return std::nullopt;
     const auto simulator = network.GetSimulator();
     if (!simulator || simulator->GetType() != Simulators::SimulatorType::kQCSim || network.GetNumHosts() != 1)

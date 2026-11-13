@@ -28,9 +28,11 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     {
         if (nrQubits != 0)
         {
+            InitializeSamplingSeed();
             {
                 extendedStabilizer = std::make_unique<Simulators::QCSimExtendedStabilizer>(nrQubits);
             }
+            SeedBackend(extendedStabilizer.get(), samplingSeed);
             SetMultithreading(enableMultithreading);
             for (const auto &[key, value] : configuration.GetConfigMap())
                 if (key != "method")
@@ -57,12 +59,7 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             configuration.SetConfiguration(key, value);
         if (std::string("seed") == key)
         {
-            const uint64_t seed = std::stoull(value);
-            SeedAuxiliaryRng(seed);
-            nextSeedStream = 0;
-            rng.seed(seed);
-            if (extendedStabilizer)
-                SeedBackend(extendedStabilizer.get(), seed);
+            SeedForExecution(std::stoull(value));
             return;
         }
         if (std::string(key) == "pauli_propagator_workers")
@@ -71,6 +68,14 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             if (workers > 1024)
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
+    }
+
+    void SeedForExecution(uint64_t seed) override
+    {
+        SeedAuxiliaryRng(seed);
+        SeedSampling(seed);
+        if (extendedStabilizer)
+            SeedBackend(extendedStabilizer.get(), seed);
     }
 
     size_t AllocateQubits(size_t num_qubits) override
@@ -464,17 +469,24 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
 
     std::unique_ptr<ISimulator> Clone() override
     {
+        return CloneForExecution(NextCloneSeed());
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
         auto cloned = std::make_unique<QCSimExtendedStabilizerSimulator>();
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
         cloned->upcomingGates = upcomingGates;
         cloned->upcomingGateIndex = upcomingGateIndex;
         if (extendedStabilizer)
-            cloned->extendedStabilizer = configuration.IsSet("seed") ? extendedStabilizer->Clone() : extendedStabilizer->CloneWithSeed(rng());
+            cloned->extendedStabilizer = extendedStabilizer->Clone();
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
         if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
+            cloned->SetSeed(seed);
+        else
+            cloned->SeedForExecution(seed);
         return cloned;
     }
 

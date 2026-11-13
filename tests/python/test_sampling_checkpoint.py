@@ -104,14 +104,12 @@ def test_seeded_checkpoint_switches_between_terminal_counts_and_ordered_rows(met
     counts, rows = sequence("auto")
     repeat, repeat_rows = sequence("auto")
     adaptive, adaptive_rows = sequence("multinomial_v1")
-    historical, historical_rows = sequence("legacy")
     assert counts == repeat == adaptive
-    assert counts != historical
     for histogram in counts:
         assert set(histogram) == {"000", "101"}
         assert sum(histogram.values()) == shots
     assert (counts[0] == counts[1]) == (call_seed is not None)
-    for expected in [repeat_rows, adaptive_rows, historical_rows]:
+    for expected in [repeat_rows, adaptive_rows]:
         np.testing.assert_array_equal(rows, expected)
 
 
@@ -174,7 +172,7 @@ def test_pauli_propagator_prefix_noise_is_exact_or_refused():
 
 
 def test_pauli_propagator_checkpoint_counts_follow_the_policy():
-    """auto samples the saved prefix once; legacy keeps the per-shot replay and its seeded readout."""
+    """auto batches the saved prefix; explicit legacy selects reproducible per-shot execution."""
     prefix = QuantumCircuit()
     prefix.h(0)
     prefix.cx(0, 1)
@@ -511,7 +509,9 @@ def test_monte_carlo_estimates_and_fidelity_do_not_depend_on_worker_count(method
 
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
                                     maestro.SimulationType.Stabilizer,
-                                    maestro.SimulationType.MatrixProductState])
+                                    maestro.SimulationType.MatrixProductState,
+                                    maestro.SimulationType.PathIntegral,
+                                    maestro.SimulationType.ExtendedStabilizer])
 def test_pure_checkpoint_samples_terminal_suffix_once_and_keeps_reset_branches(method):
     checkpoint = _checkpoint(method)
     suffix = QuantumCircuit()

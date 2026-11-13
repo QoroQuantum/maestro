@@ -207,9 +207,14 @@ void MultinomialBackendCounts(SimulationType method)
     Require(historical != adaptive, "explicit legacy counts used the adaptive sampler");
     sim->Configure("sampling_policy", "reproducible_v1");
     sim->Configure("counts_policy", "auto");
-    Require(draw() == historical, "reproducible_v1 pin lost the ordinary seeded stream");
+    Require(draw() == adaptive, "explicit reproducible sampling disabled adaptive counts");
     sim->Configure("counts_policy", "multinomial_v1");
-    Require(draw() == historical, "explicit multinomial policy overrode the low-level sampler pin");
+    Require(draw() == adaptive, "explicit reproducible sampling disabled multinomial counts");
+    sim->Configure("sampling_policy", "legacy");
+    sim->Configure("counts_policy", "legacy");
+    const auto legacySampler = draw();
+    sim->Configure("counts_policy", "multinomial_v1");
+    Require(draw() == legacySampler, "explicit legacy sampling did not override adaptive counts");
 }
 
 void SingleSiteMPSMultinomial()
@@ -696,15 +701,17 @@ void ExtendedMultinomial(bool approximate)
     const auto many = sim.SampleCountsMany(selected, shots);
     Require(many.size() == 2 && many.at({false, true, false}) == packed.at(2) && many.at({true, false, true}) == packed.at(5),
             "extended count formats disagree");
+    const auto adaptiveNext = sim.SampleCountsMany(selected, 33);
     if (approximate)
-        Require(packed == original && sim.SampleCountsMany(selected, 33) == next, "multi-bit approximate measurements bypassed the native sampler");
+        Require(packed == original && adaptiveNext == next, "multi-bit approximate measurements bypassed the native sampler");
 
     sim.SetSeed(731);
     const auto single = sim.SampleCountsMany(Types::qubits_vector(75, 2), shots);
     Require(single.size() == 2 && close(single.at(std::vector<bool>(75, true))), "extended single-site marginal lost repeated bits or interference");
     sim.Configure("sampling_policy", "reproducible_v1");
     sim.SetSeed(731);
-    Require(sim.SampleCounts(selected, shots) == original && sim.SampleCountsMany(selected, 33) == next, "extended pinned policy changed seeded counts");
+    Require(sim.SampleCounts(selected, shots) == packed && sim.SampleCountsMany(selected, 33) == adaptiveNext,
+            "explicit reproducible sampling disabled extended adaptive counts");
 }
 
 void AdaptiveStreams(SimulationType method, SimulatorType type = SimulatorType::kQCSim)

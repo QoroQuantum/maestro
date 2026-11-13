@@ -32,9 +32,6 @@ class RawSamplingSession
         {
             auto fixed = config;
             fixed.fixed_backend = true;
-            // Ordered rows use the per-shot sampler, including when a terminal
-            // histogram is expanded into a seeded permutation below.
-            SetCountsPolicy(fixed, "legacy");
             // A default network simulator also allocates each host's entangled
             // qubit: one idle qubit doubles statevector and quadruples density-
             // matrix work. Allocate the circuit's register exactly, once.
@@ -105,16 +102,10 @@ class RawSamplingSession
             ++terminalCalls;
             return;
         }
-        // Save only deterministic quantum work. On pure-state backends resets,
-        // including nested ones, can consume measurement randomness even when
-        // their outcome is known; keep the legacy replay stream for those
-        // circuits. Gate-only nested circuits are prefix work like gates.
-        bool reusePrefix = shots > 1 && (simulator->SupportsQuantumChannels() ||
-                                         std::none_of(execution_circuit->GetOperations().begin(), execution_circuit->GetOperations().end(), [](const auto &op) {
-                                             return op->GetType() == Circuits::OperationType::kReset ||
-                                                    (op->GetType() == Circuits::OperationType::kComposite &&
-                                                     !std::static_pointer_cast<Circuits::Circuit<double>>(op)->HasOnlyDeterministicOperations(false));
-                                         }));
+        // ExecuteNonMeasurements shares only deterministic work from this fresh
+        // zero register. A pure-state reset after its wire was used stays in
+        // the per-shot suffix, together with operations depending on it.
+        bool reusePrefix = shots > 1;
         auto suffix = execution_circuit;
         if (reusePrefix)
         {
@@ -227,7 +218,7 @@ void CopyCountSamples(const SamplingResult &result, uint8_t *output, size_t shot
 bool RunExtendedFrames(const ExtendedFrameSampler &plan, const SimulatorConfig &config, size_t shots, size_t realizations, ExtendedFrameSampler::Seeds seeds,
                        bool rows, std::vector<uint8_t> &samples, FrameOutcomes &counts)
 {
-    return plan.SampleWithin(shots, realizations, seeds, rows, config.max_simulators.value_or(0), RealizationBudgetMB(config), samples, counts, true);
+    return plan.SampleWithin(shots, realizations, seeds, rows, EffectiveMaxSimulators(config).value_or(0), RealizationBudgetMB(config), samples, counts, true);
 }
 
 void RecordFusion(ShotRecords &records, const Simulators::ISimulator &simulator)
@@ -286,14 +277,9 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
         }
         else
         {
-            // One simulator, so seeded rows do not depend on max_simulators;
-            // terminal measurements are sampled from one prepared state.
-            auto single = config;
-            single.max_simulators = 1;
-            const auto &policy = EffectiveCountsPolicy(single);
-            if (policy == "auto" || policy == "multinomial_v1")
-                SetCountsPolicy(single, "legacy");
-            const auto result = SampleCircuit(circuit, single, shots);
+            // A seeded permutation turns the histogram into exchangeable rows.
+            // Keep the requested sampler and the network's worker policy.
+            const auto result = SampleCircuit(circuit, config, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
             terminal = shots > 1 && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config));
@@ -364,11 +350,11 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
 
     const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
     const size_t width = ClassicalWidth(*circuit);
-    // Unseeded one-shot realizations may skip per-realization network setup;
-    // seeded and shared-realization counts keep their existing executor. So do
+    // Independent one-shot realizations may skip per-realization network setup;
+    // shared-realization counts keep their existing executor. So do
     // circuits without measurements: the network keys their records by its own
     // rule, not by the padded classical width used here.
-    const bool direct_counts = !return_samples && batches == shots && PreferDirectTrajectoryCounts(config, noise_seed) && HasMeasurements(circuit);
+    const bool direct_counts = !return_samples && batches == shots && PreferDirectTrajectoryCounts(config) && HasMeasurements(circuit);
     const bool direct = return_samples || direct_counts;
     const bool direct_sessions = direct && SupportsDirectSamples(config);
     const uint64_t unseeded_measurements = direct && !config.seed && !noise_seed ? Utils::RandomStream::FreshSeed() : 0;
@@ -403,15 +389,19 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (!return_samples && host_qubits > static_cast<size_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("Circuit width exceeds the simulator limit: a crosstalk spectator lies beyond it; use return_samples=True");
     const size_t budget_qubits = compaction.Width() + (direct_sessions ? 0 : untouched_spectators);
-    // Seeded realizations with several shots keep the executor's own shot
-    // partition, which sets their sequence. Unseeded ones that it samples from
-    // one prepared state (terminal measurements on a dense method) run
-    // single-threaded there anyway, so realization workers only add parallelism.
+    // Each realization has its own derived seed. Batches sampled from one
+    // prepared state run single-threaded in the network, so realization workers
+    // supply parallelism without duplicating their deterministic preparation.
     using Method = Simulators::SimulationType;
-    const bool prepared_batches = !config.seed && !noise_seed && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config)) &&
+    const bool prepared_batches = !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config)) &&
                                   (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
                                    config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
-    const size_t workers = (return_samples || batches == shots || prepared_batches) ? SamplingWorkers(config, batches, budget_qubits) : 1;
+    // Network trajectories retain their prepared source and checkpoint plus
+    // execution clones and any clone-owned snapshots. Direct sessions need
+    // only their register and save slot.
+    const size_t workers = (return_samples || batches == shots || prepared_batches)
+                               ? SamplingWorkers(config, batches, budget_qubits, direct_sessions ? 2 : NetworkRealizationCopies(config, batches != shots))
+                               : 1;
     std::vector<SamplingResult> results(workers);
     std::vector<std::unique_ptr<SamplingSession>> sessions(workers);
     std::vector<std::unique_ptr<RawSamplingSession>> raw_sessions(workers);
@@ -445,7 +435,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // Sampling reduction keeps the network executor, as for counts.
     // Exact channels would keep a calibrated T2 that sampled execution clamps
     // to T1 (and reports clamped), so that window keeps trajectories.
-    if ((return_samples || PreferFrameCounts(config, noise_seed)) && batches == shots && AdmitsReferenceFrames(config) && !config.enable_sampling_reduction &&
+    if ((return_samples || PreferFrameCounts(config)) && batches == shots && AdmitsReferenceFrames(config) && !config.enable_sampling_reduction &&
         noise_model.inject_noise_covers_model() && layer != NoiseLayer::kCoherent && !noise_model.has_thermal_in_sampled_overdephasing_regime_on(*circuit))
     {
         auto channels = noise::inject_exact_noise(circuit, noise_model);
@@ -468,7 +458,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // of one realization share its errors. Exact channels would instead ask
     // for the channel itself, which one shared realization is not.
     bool extended = false;
-    if (!reference && !exact && PreferExtendedFrames(config, noise_seed) && layer != NoiseLayer::kCoherent)
+    if (!reference && !exact && PreferExtendedFrames(config) && layer != NoiseLayer::kCoherent)
     {
         // The scalar path's seed rules: noise_seed (else the config seed)
         // drives circuit errors, the config seed (else noise_seed) the
@@ -508,10 +498,10 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                 auto execution_config = NoiseExecutionConfig(config, noise_seed, batch);
                 // Frames are selected for the entire request. Terminal counts
                 // may be batched only within this realization's distribution.
-                const bool batched = !return_samples && count > 1;
+                const bool batched = count > 1;
                 const bool automatic = batched && !multinomial && composite_auto;
                 SetCountsPolicy(execution_config, batched && multinomial ? "multinomial_v1" : automatic ? "auto" : "legacy");
-                // Under `auto` the executor itself takes frames for an unseeded
+                // Under `auto` the executor itself takes frames for a
                 // Clifford circuit when the stabilizer is admitted (SampleCircuit).
                 // Such a realization keeps `legacy`: it then runs on that
                 // stabilizer, which does not read the policy.
@@ -519,11 +509,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                     SetCountsPolicy(execution_config, "legacy");
                 if (direct && !execution_config.seed)
                     execution_config.seed = Simulators::IState::DeriveSeed(unseeded_measurements, batch);
-                // Raw rows on the network executor (MPS, MPO, other backends) run
-                // each realization on one simulator: its own shot workers would
-                // make seeded rows depend on max_simulators. Realization workers
-                // supply the parallelism instead.
-                if (return_samples && !direct_sessions)
+                // Outer realization workers own the CPU and memory budget;
+                // do not multiply them by an inner pool of shot workers.
+                if (workers > 1 && !direct_sessions)
                     execution_config.max_simulators = 1;
                 if (direct_sessions)
                 {

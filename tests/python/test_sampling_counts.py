@@ -77,7 +77,7 @@ def test_unseeded_plain_counts_use_frames_automatically():
     maestro.SimulationType.PathIntegral, maestro.SimulationType.MatrixProductState,
     maestro.SimulationType.MatrixProductOperator, maestro.SimulationType.ExtendedStabilizer,
 ])
-def test_seeded_auto_uses_multinomial_counts_and_preserves_ordered_records(method):
+def test_seeded_auto_uses_multinomial_counts_and_replays_ordered_records(method):
     circuit = QuantumCircuit()
     circuit.h(0)
     circuit.t(0)
@@ -93,15 +93,16 @@ def test_seeded_auto_uses_multinomial_counts_and_preserves_ordered_records(metho
 
     counts = _assert_histogram(run("auto"), shots, 70)
     assert set(counts) == {"0" * 70, "001" + "0" * 66 + "1"}
+    # auto and the explicit policy are one dispatch. The native request tests
+    # assert the resolved policy itself (TestMultinomialCountReplay).
     assert counts == run("auto")["counts"] == run("multinomial_v1")["counts"]
-    assert counts != run("legacy")["counts"]
-
-    previous = run("legacy", rows=True)["samples"]
-    assert previous.shape == (shots, 70)
-    np.testing.assert_array_equal(previous[:, 2], previous[:, 69])
-    assert 0 < previous[:, 2].sum() < shots
-    for policy in ["auto", "multinomial_v1"]:
-        np.testing.assert_array_equal(run(policy, rows=True)["samples"], previous)
+    for policy in ["legacy", "auto", "multinomial_v1"]:
+        rows = run(policy, rows=True)["samples"]
+        assert rows.shape == (shots, 70)
+        np.testing.assert_array_equal(rows[:, 2], rows[:, 69])
+        assert 0 < rows[:, 2].sum() < shots
+        np.testing.assert_array_equal(run(policy, rows=True)["samples"], rows)
+    previous = run("auto", rows=True)["samples"]
     config.max_simulators = 4
     np.testing.assert_array_equal(run("auto", rows=True)["samples"], previous)
 
@@ -127,7 +128,6 @@ def test_seeded_auto_samples_each_shared_noise_realization_with_multinomial_coun
     assert automatic["noise_realizations"] == 2
     counts = _assert_histogram(automatic, 2048, 2)
     assert counts == run("auto")["counts"] == run("multinomial_v1")["counts"]
-    assert counts != run("legacy")["counts"]
 
 
 def test_seeded_auto_reaches_the_component_of_a_noisy_composite():
@@ -151,7 +151,6 @@ def test_seeded_auto_reaches_the_component_of_a_noisy_composite():
     assert automatic["noise_realizations"] == 2
     counts = _assert_histogram(automatic, 2048, 2)
     assert counts == run("auto")["counts"] == run("multinomial_v1")["counts"]
-    assert counts != run("legacy")["counts"]
     # One shot per realization has no batch to sample: every policy agrees.
     single = run("auto", 2048)["counts"]
     assert single == run("legacy", 2048)["counts"] == run("multinomial_v1", 2048)["counts"]
@@ -161,7 +160,6 @@ def test_seeded_auto_reaches_the_component_of_a_noisy_composite():
     listed = run("auto")
     assert listed["simulator"] == maestro.SimulatorType.CompositeQCSim
     assert listed["counts"] == counts == run("multinomial_v1")["counts"]
-    assert listed["counts"] != run("legacy")["counts"]
     # A fallback beside the composite changes nothing while the composite runs.
     composite = (maestro.SimulatorType.CompositeQCSim, maestro.SimulationType.Statevector)
     config = maestro.SimulatorConfig(optimization_candidates=[composite, (maestro.SimulatorType.QCSim, maestro.SimulationType.PauliPropagator)],
@@ -250,12 +248,13 @@ def test_explicit_frame_policy_may_replace_an_automatically_selected_method(meth
 
 
 @pytest.mark.parametrize("seed", [0, 29])
-def test_seeded_auto_stabilizer_counts_keep_the_ordinary_executor(seed):
+def test_seeded_auto_stabilizer_counts_use_reproducible_frames(seed):
     circuit = _bell()
     automatic = circuit.execute(config=_config("auto", seed), shots=257)
-    legacy = circuit.execute(config=_config("legacy", seed), shots=257)
-    assert automatic["counts"] == legacy["counts"]
-    assert automatic.get("sampling_strategy") != "reference_frame_v1"
+    replay = circuit.execute(config=_config("auto", seed), shots=257)
+    assert automatic["counts"] == replay["counts"]
+    assert automatic["sampling_strategy"] == "reference_frame_v1"
+    assert set(_assert_histogram(automatic, 257, 2)) == {"00", "11"}
 
 
 @pytest.mark.parametrize("config_seed,noise_seed", [(None, 0), (0, None), (0, 0), (29, 0), (0, 17)])
@@ -263,9 +262,10 @@ def test_seeded_auto_stabilizer_trajectories_honor_both_seed_sources(config_seed
     circuit, model = _noisy_bell()
     kwargs = dict(shots=257, noise_realizations=257, noise_seed=noise_seed)
     automatic = circuit.full_noise_execute(model, config=_config("auto", config_seed), **kwargs)
-    legacy = circuit.full_noise_execute(model, config=_config("legacy", config_seed), **kwargs)
-    assert automatic["counts"] == legacy["counts"]
-    assert automatic.get("sampling_strategy") != "reference_frame_v1"
+    replay = circuit.full_noise_execute(model, config=_config("auto", config_seed), **kwargs)
+    assert automatic["counts"] == replay["counts"]
+    assert automatic["sampling_strategy"] == "reference_frame_v1"
+    _assert_histogram(automatic, 257, 2)
 
 
 def test_legacy_policy_never_selects_frames_for_unseeded_counts():
@@ -301,13 +301,13 @@ def test_explicit_frame_policy_replays_noisy_counts_and_seed_alias():
     assert circuit.full_noise_execute(model, seed=0, **kwargs)["counts"] == counts
 
 
-def test_zero_seed_alias_keeps_the_stabilizer_trajectory_counts():
+def test_zero_seed_alias_replays_automatic_stabilizer_frames():
     circuit, model = _noisy_bell()
     kwargs = dict(shots=127, noise_realizations=127)
     automatic = circuit.full_noise_execute(model, config=_config(), seed=0, **kwargs)
-    legacy = circuit.full_noise_execute(model, config=_config("legacy"), noise_seed=0, **kwargs)
-    assert automatic["counts"] == legacy["counts"]
-    assert automatic.get("sampling_strategy") != "reference_frame_v1"
+    explicit = circuit.full_noise_execute(model, config=_config(), noise_seed=0, **kwargs)
+    assert automatic["counts"] == explicit["counts"]
+    assert automatic["sampling_strategy"] == "reference_frame_v1"
 
 
 @pytest.mark.parametrize("policy", ["auto", "frame_v1"])
@@ -484,20 +484,35 @@ def test_unseeded_independent_counts_run_direct_trajectories(method, api):
         assert ours == pytest.approx(theirs, abs=5 * math.sqrt(0.25 * 2 / shots))
 
 
-@pytest.mark.parametrize("seed_source", ["config", "noise", "policy", "shared", "mps"])
+@pytest.mark.parametrize("seed_source", ["policy", "shared", "mps"])
 def test_direct_trajectory_counts_leave_other_requests_on_their_executor(seed_source):
     circuit, model = _dynamic_non_clifford_circuit(), _noise_with_readout()
     method = maestro.SimulationType.MatrixProductState if seed_source == "mps" else maestro.SimulationType.Statevector
-    config = _config("legacy" if seed_source == "policy" else "auto", 3 if seed_source == "config" else None, method)
+    config = _config("legacy" if seed_source == "policy" else "auto", 3, method)
     kwargs = dict(shots=257, noise_realizations=16 if seed_source == "shared" else 257)
-    if seed_source == "noise":
-        kwargs["noise_seed"] = 0
     result = circuit.full_noise_execute(model, config=config, **kwargs)
     assert result.get("sampling_strategy") != "trajectory_v1"
     _assert_histogram(result, 257, 6)
-    if seed_source in ("config", "noise"):
-        legacy = _config("legacy", 3 if seed_source == "config" else None, method)
-        assert result["counts"] == circuit.full_noise_execute(model, config=legacy, **kwargs)["counts"]
+
+
+@pytest.mark.parametrize("seed_source", ["config", "noise", "both"])
+@pytest.mark.parametrize("seed", [0, 13])
+def test_seeded_independent_counts_use_reproducible_direct_sessions(seed_source, seed):
+    circuit, model = _dynamic_non_clifford_circuit(), _noise_with_readout()
+    config = _config(method=maestro.SimulationType.Statevector)
+    kwargs = dict(shots=257, noise_realizations=257)
+    if seed_source in ("config", "both"):
+        config.seed = seed
+    if seed_source in ("noise", "both"):
+        kwargs["noise_seed"] = seed
+    first = circuit.full_noise_execute(model, config=config, **kwargs)
+    assert first["sampling_strategy"] == "trajectory_v1"
+    _assert_histogram(first, 257, 6)
+    assert circuit.full_noise_execute(model, config=config, **kwargs)["counts"] == first["counts"]
+    config.max_simulators = 4
+    parallel = circuit.full_noise_execute(model, config=config, **kwargs)
+    assert parallel["sampling_strategy"] == "trajectory_v1"
+    assert parallel["counts"] == first["counts"]
 
 
 def test_noisy_execution_never_attaches_readout_to_the_callers_circuit():

@@ -61,8 +61,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         }
         // The dispatcher assigns this job a share of the internal thread budget.
         ConfigureTrajectoryArithmetic();
-        if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim &&
-            (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
+        if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim && UsesAssignedThreads())
             optSim->SetMultithreading(allowInternalMultithreading);
         // Multithreading off has to hold for what the simulator calls on this thread too, not only for
         // its own loops: a BLAS built on OpenMP would otherwise start a thread team for each shot worker.
@@ -103,8 +102,7 @@ template <typename Time = Types::time_type> class ExecuteJob
             if (!optSim)
                 return;
             ApplyConfiguration(optSim);
-            if (optSim->GetType() != Simulators::SimulatorType::kQCSim || method == Simulators::SimulationType::kPauliPropagator ||
-                optSim->GetConfiguration("sampling_policy") == "reproducible_v1")
+            if (optSim->GetType() != Simulators::SimulatorType::kQCSim || UsesAssignedThreads())
                 optSim->SetMultithreading(allowInternalMultithreading);
             threadBudget.Limit(SimulatorThreadLimit());
             optSim->AllocateQubits(nrQubits);
@@ -193,6 +191,9 @@ template <typename Time = Types::time_type> class ExecuteJob
 
         const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
         const auto shotCircuit = dcirc;
+        // Only classical generators own a stream; without them every shot can
+        // run the same circuit instead of a copy of its operations.
+        const bool classicalStreams = independentShotStreams && OwnsClassicalStreams(*shotCircuit);
         for (size_t i = 0; i < curCnt; ++i)
         {
             if (independentShotStreams)
@@ -203,7 +204,14 @@ template <typename Time = Types::time_type> class ExecuteJob
                     optSim->SeedForExecution(seed);
                 else
                     optSim->SetSeed(seed);
-                dcirc = shotCircuit->CloneForExecution(Simulators::IState::DeriveSeed(seed, 0x434c415353494341ULL));
+                if (classicalStreams)
+                {
+                    // An explicit instruction seed must remain reproducible even
+                    // when the request has no seed. Fresh request entropy belongs
+                    // only to instructions without their own seed.
+                    const uint64_t classicalStream = Simulators::IState::DeriveSeed(transientSeed ? firstShot + i : seed, 0x434c415353494341ULL);
+                    dcirc = shotCircuit->CloneForExecution(classicalStream, transientSeed ? seed : 0);
+                }
             }
             if (optimiseMultipleShots)
             {
@@ -472,7 +480,53 @@ template <typename Time = Types::time_type> class ExecuteJob
             sim->SeedForExecution(std::stoull(config.GetConfiguration("seed")));
     }
 
+    // The QCSim methods whose seeded samples do not depend on how the shots
+    // are split into jobs: the network schedules them as logical shot blocks.
+    static bool ReproducibleMethod(Simulators::SimulatorType type, Simulators::SimulationType method)
+    {
+        using Method = Simulators::SimulationType;
+        return type == Simulators::SimulatorType::kQCSim &&
+               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral || method == Method::kStabilizer ||
+                method == Method::kExtendedStabilizer || method == Method::kMatrixProductState || method == Method::kMatrixProductOperator);
+    }
+
   private:
+    // Whether the job's simulator samples reproducibly. Only the dense methods
+    // report that policy when it is unset, so the others count unless they were
+    // configured for the ordinary sampler: setting the default explicitly then
+    // changes nothing.
+    bool SamplesReproducibly() const
+    {
+        return optSim && ReproducibleMethod(optSim->GetType(), method) && optSim->GetConfiguration("sampling_policy") != "legacy";
+    }
+
+    // Whether the simulator may use the internal threads assigned to this job:
+    // the Pauli propagator, and the dense methods under the reproducible policy,
+    // whose measurement keeps a serial scan and reduction order.
+    bool UsesAssignedThreads() const
+    {
+        using Method = Simulators::SimulationType;
+        if (method == Method::kPauliPropagator)
+            return true;
+        return (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral) &&
+               optSim->GetConfiguration("sampling_policy") == "reproducible_v1";
+    }
+
+    // Whether the circuit has a classical random generator, nested ones
+    // included: the operations Circuit::CloneForExecution gives their own stream.
+    static bool OwnsClassicalStreams(const Circuits::Circuit<Time> &circuit)
+    {
+        for (const auto &op : circuit.GetOperations())
+        {
+            const auto type = op->GetType();
+            if (type == Circuits::OperationType::kRandomGen || type == Circuits::OperationType::kConditionalRandomGen)
+                return true;
+            if (type == Circuits::OperationType::kComposite && OwnsClassicalStreams(*std::static_pointer_cast<Circuits::Circuit<Time>>(op)))
+                return true;
+        }
+        return false;
+    }
+
     void ConfigureTrajectoryArithmetic()
     {
         // Existing and prepared simulators need the current execution mode too:
@@ -546,7 +600,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 state.Reset();
             }
         };
-        if (measurement.HasReadout() && optSim->GetConfiguration("sampling_policy") == "reproducible_v1")
+        if (measurement.HasReadout() && SamplesReproducibly())
         {
             // Histogram insertion order can change with the execution kernel.
             // Apply auxiliary readout draws in lexicographic outcome order.
@@ -565,11 +619,14 @@ template <typename Time = Types::time_type> class ExecuteJob
 
     void PrepareCircuitForExecution()
     {
-        const uint64_t stream = config.IsSet("seed") ? std::stoull(config.GetConfiguration("seed")) : randomStream;
+        const bool explicitSeed = config.IsSet("seed") && !transientSeed;
+        const uint64_t stream = explicitSeed ? std::stoull(config.GetConfiguration("seed")) : randomStream;
         // Only unseeded instructions need fresh entropy. For MPI the helper shares
         // it across ranks, so classical controls follow the same execution path.
         const uint64_t defaultSeed =
-            !config.IsSet("seed") && dcirc->HasUnseededRandomOperations() ? Simulators::GenerateRandomSeed(simType, config.GetConfigMap()) : 0;
+            !explicitSeed && dcirc->HasUnseededRandomOperations()
+                ? transientSeed ? std::stoull(config.GetConfiguration("seed")) : Simulators::GenerateRandomSeed(simType, config.GetConfigMap())
+                : 0;
         dcirc = dcirc->CloneForExecution(stream, defaultSeed);
     }
 

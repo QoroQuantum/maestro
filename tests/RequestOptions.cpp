@@ -232,19 +232,17 @@ void TestFixedBackendShotReuse()
                         // to the shared evolution. Genuine classical branches still
                         // replay their suffix per shot.
                         const bool exactChannels = config.simulation_type == Method::kDensityMatrix || config.simulation_type == Method::kMatrixProductOperator;
-                        const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
                         const bool terminal = scenario == 0 || scenario == 4 || (exactChannels && (scenario == 2 || scenario == 5));
                         const std::string context = std::string(method) + " scenario=" + std::to_string(scenario) + " workers=" + std::to_string(workers) +
                                                     " shots=" + std::to_string(shots) + " on_host=" + std::to_string(onHost);
                         Check(circuit->HasOpsAfterMeasurements(exactChannels) != terminal, "Terminal classification disagrees with backend reset semantics");
-                        // SetMaxSimulators caps the workers at the hardware thread count.
-                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : network->GetMaxSimulators();
+                        // Terminal workers share one prepared prefix. Dynamic
+                        // logical jobs prepare once per active worker here.
+                        size_t jobs = terminal ? 1 : network->GetMaxSimulators();
 #ifdef _OPENMP
-                        if (reproducibleSampling)
+                        if (!terminal)
                             jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
 #endif
-                        if (!reproducibleSampling && jobs > 1)
-                            jobs = (shots + shots / jobs - 1) / (shots / jobs);
                         for (int repeat = 0; repeat < 2; ++repeat)
                         {
                             *prefix = 0;
@@ -379,6 +377,47 @@ void TestPauliPropagatorDedupDefault()
     Check(cadence(SimulatorConfig{}).empty(), "A statevector simulation got a deduplication cadence");
 }
 
+void TestPauliTuningForwarding()
+{
+    using namespace MaestroExecution;
+    GetMaestroObjectWithMute();
+    const std::pair<std::optional<uint64_t> SimulatorConfig::*, const char *> fields[] = {
+        {&SimulatorConfig::pp_workers, "pauli_propagator_workers"},
+        {&SimulatorConfig::pp_max_fused_gates, "pauli_propagator_max_fused_gates"},
+        {&SimulatorConfig::pp_memory_limit_bytes, "pauli_propagator_memory_limit_bytes"},
+        {&SimulatorConfig::pp_sampling_cache_nodes, "pauli_propagator_sampling_cache_nodes"}};
+    const auto stored = [&](const SimulatorConfig &config) {
+        struct NetworkHandle
+        {
+            unsigned long handle = CreateSimpleSimulator(2);
+            ~NetworkHandle()
+            {
+                DestroySimpleSimulator(handle);
+            }
+        } owner;
+        Check(owner.handle != 0, "Cannot create network for Pauli tuning");
+        const auto network = ConfigureNetwork(owner.handle, config);
+        Check(bool(network) && network->GetSimulator(), "Cannot configure Pauli tuning network");
+        std::vector<std::string> values;
+        for (const auto &field : fields)
+            values.push_back(network->GetSimulator()->GetConfiguration(field.second));
+        return values;
+    };
+
+    SimulatorConfig config;
+    config.simulation_type = Method::kPauliPropagator;
+    config.fixed_backend = true;
+    for (const auto &value : stored(config))
+        Check(value.empty(), "An unset Pauli tuning option reached the backend");
+
+    // Zero is a valid cache size (caching off) and must not be dropped as unset.
+    config.pp_workers = 3;
+    config.pp_max_fused_gates = 17;
+    config.pp_memory_limit_bytes = 1ull << 33;
+    config.pp_sampling_cache_nodes = 0;
+    Check(stored(config) == std::vector<std::string>{"3", "17", "8589934592", "0"}, "Typed Pauli tuning options did not reach the backend");
+}
+
 void TestAutomaticGpuMixedStateFallback()
 {
     using namespace MaestroExecution;
@@ -488,7 +527,9 @@ void TestFrameCountPolicy()
         Check(PreferMultinomialCounts(configured) == (std::string(policy) == "multinomial_v1"), "A native count policy was ignored");
     }
     configured.native_options["sampling_policy"] = "reproducible_v1";
-    Check(!PreferMultinomialCounts(configured), "A low-level sampler pin was ignored");
+    Check(PreferMultinomialCounts(configured), "Explicit reproducible sampling disabled multinomial counts");
+    configured.native_options["sampling_policy"] = "legacy";
+    Check(!PreferMultinomialCounts(configured), "Explicit legacy sampling did not override multinomial counts");
     SetCountsPolicy(configured, "legacy");
     Check(EffectiveCountsPolicy(configured) == "legacy" && !configured.native_options.count("counts_policy"), "A resolved counts policy was overridden");
     for (const char *policy : {"auto", "legacy", "frame_v1"})
@@ -497,7 +538,7 @@ void TestFrameCountPolicy()
         Check(config.counts_policy == policy, "Counts policy parser lost the option");
         auto seeded = config;
         seeded.seed = 0;
-        Check(PreferFrameCounts(seeded) == (std::string(policy) == "frame_v1"), "Counts policy treated seed zero as unseeded");
+        Check(PreferFrameCounts(seeded) == (std::string(policy) != "legacy"), "Seed zero disabled eligible frame counts");
         Check(PreferFrameCounts(config) == (std::string(policy) != "legacy"), "Unseeded counts policy selection");
         // auto keeps a requested non-Stabilizer method unless the automatic
         // candidates admit the stabilizer; frame_v1 needs automatic selection.
@@ -517,7 +558,7 @@ void TestFrameCountPolicy()
             Check(PreferFrameCounts(statevector) == expected, "Unseeded non-Stabilizer counts policy selection");
             auto seededStatevector = statevector;
             seededStatevector.seed = 0;
-            Check(PreferFrameCounts(seededStatevector) == (automatic && std::string(policy) == "frame_v1"), "Seeded non-Stabilizer counts policy selection");
+            Check(PreferFrameCounts(seededStatevector) == expected, "Seeded non-Stabilizer counts policy selection");
         }
         // An explicit candidate list names every allowed backend. It replaces a
         // requested Stabilizer method too, and binds frame_v1 as well as auto.
@@ -948,9 +989,11 @@ void TestNetworkSimulatorPlaceholders()
         // Composer's cost model ranks lists with pure-state candidates; one
         // candidate, or only mixed-state ones, are resolved without it.
 #ifdef MAESTRO_ENABLE_COMPOSER
-        const bool ranked = std::any_of(candidates.begin(), candidates.end(), [](const auto &candidate) {
-            return candidate.second != Method::kDensityMatrix && candidate.second != Method::kMatrixProductOperator;
-        }) && candidates.size() > 1;
+        const bool ranked = std::any_of(candidates.begin(), candidates.end(),
+                                        [](const auto &candidate) {
+                                            return candidate.second != Method::kDensityMatrix && candidate.second != Method::kMatrixProductOperator;
+                                        }) &&
+                            candidates.size() > 1;
 #else
         const bool ranked = false;
 #endif
@@ -961,19 +1004,14 @@ void TestNetworkSimulatorPlaceholders()
 
     // Every CPU backend runs a one-qubit circuit (the register a one-qubit
     // circuit maps to), through the network and directly.
-    Candidates backends{{Backend::kQCSim, Method::kStatevector},
-                        {Backend::kQCSim, Method::kMatrixProductState},
-                        {Backend::kQCSim, Method::kStabilizer},
-                        {Backend::kQCSim, Method::kTensorNetwork},
-                        {Backend::kQCSim, Method::kPauliPropagator},
-                        {Backend::kQCSim, Method::kExtendedStabilizer},
-                        {Backend::kQCSim, Method::kDensityMatrix},
-                        {Backend::kQCSim, Method::kMatrixProductOperator},
-                        {Backend::kQCSim, Method::kPathIntegral},
-                        {Backend::kCompositeQCSim, Method::kStatevector}};
+    Candidates backends{{Backend::kQCSim, Method::kStatevector},     {Backend::kQCSim, Method::kMatrixProductState},
+                        {Backend::kQCSim, Method::kStabilizer},      {Backend::kQCSim, Method::kTensorNetwork},
+                        {Backend::kQCSim, Method::kPauliPropagator}, {Backend::kQCSim, Method::kExtendedStabilizer},
+                        {Backend::kQCSim, Method::kDensityMatrix},   {Backend::kQCSim, Method::kMatrixProductOperator},
+                        {Backend::kQCSim, Method::kPathIntegral},    {Backend::kCompositeQCSim, Method::kStatevector}};
 #ifndef NO_QISKIT_AER
-    for (const auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kStabilizer, Method::kTensorNetwork, Method::kExtendedStabilizer,
-                              Method::kDensityMatrix})
+    for (const auto method :
+         {Method::kStatevector, Method::kMatrixProductState, Method::kStabilizer, Method::kTensorNetwork, Method::kExtendedStabilizer, Method::kDensityMatrix})
         backends.emplace_back(Backend::kQiskitAer, method);
     backends.emplace_back(Backend::kCompositeQiskitAer, Method::kStatevector);
 #endif

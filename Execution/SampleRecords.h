@@ -57,29 +57,29 @@ inline bool SupportsDirectSamples(const SimulatorConfig &config)
            config.simulation_type != Method::kMatrixProductState && config.simulation_type != Method::kMatrixProductOperator;
 }
 
-// Unseeded independent-realization counts have no sequence to preserve, so
-// auto may run each one-shot realization directly on a worker's simulator and
-// histogram its record, instead of mapping, optimizing and allocating a backend
-// per realization.
-inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
+// Auto may run each independent one-shot realization directly on a worker's
+// simulator and histogram its record, instead of mapping, optimizing and
+// allocating a backend per realization. Its derived seed makes either path repeatable.
+inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config)
 {
-    return SupportsDirectSamples(config) && EffectiveCountsPolicy(config) == "auto" && !EffectiveSamplingSeed(config) && !noise_seed;
+    return SupportsDirectSamples(config) && EffectiveCountsPolicy(config) == "auto";
 }
 
-inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits)
+inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits, size_t copies_per_worker = 2)
 {
     if (!RunsOnlyQCSim(config))
         return 1;
-    auto workers = Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0));
+    const auto requested = EffectiveMaxSimulators(config);
+    auto workers = Utils::RealizationWorkerCount(realizations, requested.value_or(0));
     // Unknown/unbounded state sizes cannot promise a memory limit. A candidate
     // list is sized for the largest register any of its entries needs.
     const long double state_bytes = MaxRealizationBytes(config, qubits);
     if (!(state_bytes > 0))
         return 1;
-    workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(state_bytes), RealizationBudgetMB(config), 0, 2);
+    workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(state_bytes), RealizationBudgetMB(config), 0, copies_per_worker);
     // A default ceiling only: an explicit max_simulators is honored, within
     // the CPU budget RealizationWorkerCount already applies.
-    return config.max_simulators ? workers : std::min(workers, size_t{16});
+    return requested ? workers : std::min(workers, size_t{16});
 }
 
 // Dense backends allocate every index up to the highest qubit. The network
