@@ -46,9 +46,10 @@ print(f"logical error rate: {stats.errors / stats.shots:.4f}")
 
 The plugin is a separate package,
 [deltakit-maestro](https://github.com/QoroQuantum/deltakit-maestro), which
-installs Deltakit and `qoro-maestro[sinter]` for you. It needs Python 3.10 to
-3.13. `MaestroBackend` accepts a Deltakit `Circuit` or a `stim.Circuit`, and is
-built on Maestro's Sinter samplers ({doc}`/user-guide/qec-sinter`):
+installs Deltakit and `qoro-maestro[sinter]` for you. It needs Python 3.10 or
+later, within the versions Deltakit supports. `MaestroBackend` accepts a
+Deltakit `Circuit` or a `stim.Circuit`, and is built on Maestro's Sinter
+samplers ({doc}`/user-guide/qec-sinter`):
 
 | Method | Returns |
 |---|---|
