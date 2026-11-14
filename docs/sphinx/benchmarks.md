@@ -8,12 +8,12 @@ the same bond-dimension cap, and the same number of CPU threads.
 
 ```{image} _static/benchmarks/overview.png
 :class: only-light
-:alt: Bar chart of Maestro's speed-up for seven workloads. Against Qiskit Aer it ranges from 1.8 times for statevector sampling to 608 times for exact noisy simulation; against PennyLane's own devices from 11 to 638 times.
+:alt: Bar chart of Maestro's speed-up for seven workloads. Against Qiskit Aer it ranges from 1.8 times for statevector sampling to 1,002 times for exact noisy simulation; against PennyLane's own devices from 11 to 638 times.
 ```
 
 ```{image} _static/benchmarks/overview-dark.png
 :class: only-dark
-:alt: Bar chart of Maestro's speed-up for seven workloads. Against Qiskit Aer it ranges from 1.8 times for statevector sampling to 608 times for exact noisy simulation; against PennyLane's own devices from 11 to 638 times.
+:alt: Bar chart of Maestro's speed-up for seven workloads. Against Qiskit Aer it ranges from 1.8 times for statevector sampling to 1,002 times for exact noisy simulation; against PennyLane's own devices from 11 to 638 times.
 ```
 
 Each bar is the competitor's time divided by Maestro's, at the largest size
@@ -278,12 +278,12 @@ faster than Aer.
 
 ```{image} _static/benchmarks/noise_mpo.png
 :class: only-light
-:alt: Time against qubits for exact noisy simulation. Density matrices stop at 15 to 16 qubits (out of memory, or over an hour for default.mixed); Maestro's MPO takes under a second at 16 qubits and 6.5 s at 100.
+:alt: Time against qubits for exact noisy simulation. Aer's and Maestro's density matrices both run out of memory at 17 qubits, and default.mixed passes an hour at 15; Maestro's MPO takes 0.4 s at 16 qubits and 3.9 s at 100.
 ```
 
 ```{image} _static/benchmarks/noise_mpo-dark.png
 :class: only-dark
-:alt: Time against qubits for exact noisy simulation. Density matrices stop at 15 to 16 qubits (out of memory, or over an hour for default.mixed); Maestro's MPO takes under a second at 16 qubits and 6.5 s at 100.
+:alt: Time against qubits for exact noisy simulation. Aer's and Maestro's density matrices both run out of memory at 17 qubits, and default.mixed passes an hour at 15; Maestro's MPO takes 0.4 s at 16 qubits and 3.9 s at 100.
 ```
 
 A depth-6 random brickwork with amplitude damping (γ = 10⁻³) and depolarizing
@@ -294,26 +294,28 @@ state and keeps going:
 
 | Qubits | Aer density matrix | Maestro density matrix | `default.mixed` | Maestro MPO | MPO against Aer |
 |---:|---:|---:|---:|---:|---:|
-| 15 | 93 s, 16 GB | 621 s, 64 GB | over 1 h | 0.60 s | 3 × 10⁻⁶ |
-| 16 | 404 s, 64 GB | out of memory | not run | 0.67 s | 2 × 10⁻⁶ |
-| 17 | out of memory | not run | not run | 0.68 s | no reference |
-| 50 | not run | not run | not run | 3.2 s | no reference |
-| 100 | not run | not run | not run | 6.5 s | no reference |
+| 15 | 93 s, 16 GB | 117 s, 16 GB | over 1 h | 0.37 s | 2 × 10⁻⁶ |
+| 16 | 404 s, 64 GB | 502 s, 64 GB | not run | 0.40 s | 1 × 10⁻⁶ |
+| 17 | out of memory | out of memory | not run | 0.41 s | no reference |
+| 50 | not run | not run | not run | 2.0 s | no reference |
+| 100 | not run | not run | not run | 3.9 s | no reference |
 
 Once a simulator runs out of memory or time, larger sizes are not run for it.
 The last column is the largest difference in any ⟨Z⟩ between the MPO, with
-its bond dimension capped at 128, and Aer's exact density matrix.
+its bond dimension capped at 128, and Aer's exact density matrix. On a
+10-step Trotter circuit with the same noise, Maestro's density matrix is the
+faster one: 260 s against Aer's 309 s at 15 qubits.
 
 ### Exact MPO against trajectories
 
 ```{image} _static/benchmarks/noise_time_to_accuracy.png
 :class: only-light
-:alt: Time to get every expectation value within 0.001 of the exact answer. Maestro's MPO takes 0.87 to 3.1 s in all four cases; Aer's MPS trajectories take 1.9 s to 14 minutes.
+:alt: Time to get every expectation value within 0.001 of the exact answer. Maestro's MPO takes 0.53 to 1.9 s in all four cases; Aer's MPS trajectories take 1.9 s to 14 minutes, and Maestro's 2.4 to 11 s.
 ```
 
 ```{image} _static/benchmarks/noise_time_to_accuracy-dark.png
 :class: only-dark
-:alt: Time to get every expectation value within 0.001 of the exact answer. Maestro's MPO takes 0.87 to 3.1 s in all four cases; Aer's MPS trajectories take 1.9 s to 14 minutes.
+:alt: Time to get every expectation value within 0.001 of the exact answer. Maestro's MPO takes 0.53 to 1.9 s in all four cases; Aer's MPS trajectories take 1.9 s to 14 minutes, and Maestro's 2.4 to 11 s.
 ```
 
 The usual alternative to a density matrix is to average many noisy pure-state
@@ -323,26 +325,27 @@ absolute error) of a bond-dimension-512 MPO. At 10⁻⁴:
 
 | Noise, qubits | Maestro MPO | Aer MPS trajectories | Maestro MPS trajectories |
 |---|---:|---:|---:|
-| Depolarizing, 20 | 0.87 s | 185 s | 299 s |
-| Depolarizing, 50 | 3.0 s | 430 s | 692 s |
-| Depolarizing and damping, 20 | 0.87 s | about 3.8 h (extrapolated) | not run |
-| Depolarizing and damping, 50 | 3.1 s | about 17 h (extrapolated) | not run |
+| Depolarizing, 20 | 0.53 s | 185 s | 258 s |
+| Depolarizing, 50 | 1.9 s | 430 s | 663 s |
+| Depolarizing and damping, 20 | 0.54 s | about 3.8 h (extrapolated) | 523 s |
+| Depolarizing and damping, 50 | 1.9 s | about 17 h (extrapolated) | 1,530 s |
 
 Extrapolated times assume the error keeps falling as one over the square root
 of the number of trajectories; the runs themselves stopped at the 1-hour limit.
-Maestro's trajectories ran with depolarizing noise only, because its pure-state
-amplitude damping is a reset approximation.
+With amplitude damping, Maestro's trajectories sample the damping channel
+exactly and reach 10⁻⁴ 26 and 40 times sooner than Aer's. With depolarizing
+noise alone, Aer's trajectories are 1.4 to 1.5 times faster.
 
 ### Noisy shot sampling
 
 ```{image} _static/benchmarks/noise_sampling.png
 :class: only-light
-:alt: Time to draw 1,000,000 noisy shots at 20, 32 and 50 qubits. Maestro's MPO takes 14, 38 and 68 seconds; Aer's MPS takes 831 and 2,032 seconds at 20 and 32 qubits and passes one hour at 50.
+:alt: Time to draw 1,000,000 noisy shots at 20, 32 and 50 qubits. Maestro's MPO takes 17, 54 and 159 seconds; Aer's MPS takes 831 and 2,032 seconds at 20 and 32 qubits and passes one hour at 50.
 ```
 
 ```{image} _static/benchmarks/noise_sampling-dark.png
 :class: only-dark
-:alt: Time to draw 1,000,000 noisy shots at 20, 32 and 50 qubits. Maestro's MPO takes 14, 38 and 68 seconds; Aer's MPS takes 831 and 2,032 seconds at 20 and 32 qubits and passes one hour at 50.
+:alt: Time to draw 1,000,000 noisy shots at 20, 32 and 50 qubits. Maestro's MPO takes 17, 54 and 159 seconds; Aer's MPS takes 831 and 2,032 seconds at 20 and 32 qubits and passes one hour at 50.
 ```
 
 Sampling shots from a noisy circuit: depolarizing noise (10⁻³ on one qubit,
@@ -352,17 +355,17 @@ two (MPS and statevector):
 
 | Qubits | Shots | Aer MPS | Maestro MPS | Maestro MPO | MPO against Aer MPS |
 |---:|---:|---:|---:|---:|---:|
-| 20 | 10,000 | 8.1 s | 1.9 s | 0.76 s | 11× |
-| 20 | 1,000,000 | 831 s | 218 s | 14 s | 60× |
-| 32 | 10,000 | 20 s | 3.3 s | 1.6 s | 13× |
-| 32 | 1,000,000 | 2,032 s | 368 s | 38 s | 53× |
-| 50 | 10,000 | 49 s | 5.4 s | 2.8 s | 17× |
-| 50 | 100,000 | 491 s | 55 s | 8.7 s | 56× |
-| 50 | 1,000,000 | over 1 h | 613 s | 68 s | over 50× |
+| 20 | 10,000 | 8.1 s | 2.0 s | 0.51 s | 16× |
+| 20 | 1,000,000 | 831 s | 225 s | 17 s | 50× |
+| 32 | 10,000 | 20 s | 3.4 s | 1.2 s | 17× |
+| 32 | 1,000,000 | 2,032 s | 377 s | 54 s | 38× |
+| 50 | 10,000 | 49 s | 5.6 s | 2.7 s | 18× |
+| 50 | 100,000 | 491 s | 56 s | 17 s | 29× |
+| 50 | 1,000,000 | over 1 h | 612 s | 159 s | over 22× |
 
 Maestro's MPS is 4 to 9 times faster than Aer's. On statevectors, at 20 qubits
-and 10,000 shots, Maestro took 127 s against Aer's 615 s. At 100,000 shots
-Aer's statevector passed the 1-hour limit while Maestro's took 1,270 s. At 32
+and 10,000 shots, Maestro took 269 s against Aer's 615 s. At 100,000 shots
+Aer's statevector passed the 1-hour limit while Maestro's took 2,650 s. At 32
 qubits Aer's statevector failed with `No counts for experiment "0"` and
 Maestro's passed 1 hour.
 
@@ -424,15 +427,15 @@ threshold, limited its accuracy there. Its best error was 0.043.
 - **Memory in parameter sweeps.** `qiskit-maestro` runs one circuit per
   thread, so a 28-qubit sweep peaked at 60 GB against Aer's 4 GB. It is also
   the reason it is 3× faster.
-- **Maestro's own density matrix** is 5 to 7 times slower than Aer's and uses
-  four times the memory, running out at 16 qubits. Use the MPO for exact noisy
+- **Maestro's own density matrix** is 1.25 times slower than Aer's on the
+  noisy brickwork (117 s against 93 s at 15 qubits), with the same memory, though
+  1.2 times faster on the Trotter circuit. Use the MPO for exact noisy
   simulation instead.
-- **MPS trajectories.** With depolarizing noise, Maestro's MPS trajectories are
-  1.2 to 1.6 times slower than Aer's. Its statevector trajectories are about 3
-  times faster.
+- **MPS trajectories with depolarizing noise only.** Aer's are 1.4 to 1.5 times
+  faster. With amplitude damping, Maestro's are 26 to 40 times faster, and its
+  statevector trajectories are about twice as fast as Aer's.
 - **Loose accuracy with depolarizing noise.** If an error of 10⁻² is enough,
-  trajectories (0.03 to 0.09 s) beat the exact MPO (0.3 to 3 s). With
-  amplitude damping as well, the MPO is faster at every accuracy.
+  trajectories (0.03 to 0.08 s) beat the exact MPO (0.2 to 1.9 s).
 - **Pauli propagation on hard angles.** At θ = π/4 on the 28-qubit chain,
   Maestro and `pauli-prop` are about level: neither converges in an hour.
 - **Shallow circuits with the shortcuts off.** Aer is 2× faster on the
@@ -447,7 +450,12 @@ threshold, limited its accuracy there. Its best error was 0.043.
   check workload to within 4%. CPU only.
 - **Software.** Python 3.12.16, Qiskit 2.6.2, Qiskit Aer 0.18.2, PennyLane
   0.45.1, PennyLane Lightning 0.45.0, quimb 1.15.0, qoro-maestro 0.3.14,
-  qiskit-maestro 0.1.0 and pennylane-maestro 0.6.0.
+  qiskit-maestro 0.1.0 and pennylane-maestro 0.6.0. The noise results use a
+  pre-release build of Maestro
+  [pull request #55](https://github.com/QoroQuantum/maestro/pull/55) (commit
+  `88de526`, with QCSim `b3c8945`), which samples noise channels exactly on
+  pure-state simulators. It runs the noiseless MPS workloads within 1% of
+  0.3.14.
 - **Timing.** The median of five runs after a warm-up run (three runs for a
   case over 60 s, one over 300 s, and the warm-up alone over 900 s), timing the
   whole call, including circuit conversion. Each run had a 1-hour limit and a
