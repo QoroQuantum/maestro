@@ -36,7 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the realization schedule, and the two seeds together determine the
   branches there as well. The C++ `NoiseAdd` follows the same rule: its
   `seed` joins a seed configured on the network for those branches, where the
-  configured seed alone decided them. On a 24-core desktop with
+  configured seed alone decided them. It keeps channels for the backend only
+  on a network that runs a circuit's operations as they are
+  (`kSimpleDisconnectedNetwork`, `kSimpleNetwork`): a network kind that
+  translates the circuit first (netqasm, discrete events) has no instruction
+  for a channel and gets realizations made of gates and resets, as before.
+  On a 24-core desktop with
   a device-like noise model, these trajectories ran 1.6 to 5.3 times as fast as
   Qiskit Aer's on the statevector at 8 to 20 qubits, and took 0.25 s, 2.6 s and
   18.6 s on the matrix product state at 8, 12 and 16 qubits (bond limit 64, 200

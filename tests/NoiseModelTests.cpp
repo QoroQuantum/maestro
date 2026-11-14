@@ -95,6 +95,21 @@ double SampledCoherence(const noise::NoiseModel &noiseModel, size_t realizations
     return total / static_cast<double>(realizations);
 }
 
+/**
+ * Stands for a network kind that translates a circuit before it runs it, as
+ * Composer's netqasm and discrete-event networks do: it reports their type.
+ */
+class TranslatingNetwork : public Network::SimpleDisconnectedNetwork<>
+{
+  public:
+    using Network::SimpleDisconnectedNetwork<>::SimpleDisconnectedNetwork;
+
+    Network::NetworkType GetType() const override
+    {
+        return Network::NetworkType::kSimpleDESNetwork;
+    }
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(noise_model_tests)
@@ -1302,6 +1317,72 @@ BOOST_AUTO_TEST_CASE(NoiseAddReportsThermalApproximationOncePerCall)
         add.inject(circuit, model);
         BOOST_CHECK_EQUAL(warnings, 1);
     }
+}
+
+/**
+ * A netqasm or discrete-event network translates the realizations into its own
+ * instructions or events, which exist for gates, resets and measurements only.
+ * Its realizations keep no channel for the backend to draw, on a statevector or
+ * a matrix product state either: the noise is drawn into gates and resets, as
+ * on a method that does not sample channels.
+ */
+BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
+{
+    noise::NoiseModel thermal, relaxing, damping;
+    thermal.set_thermal_relaxation(0, 0.5, 1.0, 1.8);
+    relaxing.set_t1(0, 0.3);
+    damping.set_generalized_amplitude_damping(0, 0.3, 0.0);
+    auto flipped = std::make_shared<Circuits::Circuit<>>();
+    flipped->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    flipped->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+
+    for (const auto method : {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState})
+    {
+        int warnings = 0;
+        auto network = std::make_shared<TranslatingNetwork>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        noise::NoiseAdd add;
+        add.set_warning_handler([&](const std::string &message) {
+            BOOST_CHECK(message.find("T2 clamped to T1") != std::string::npos);
+            ++warnings;
+        });
+        add.seed(7);
+
+        // Relaxation with T2 > T1 is a reset and a phase flip with T2 = T1, and
+        // the call says so once.
+        const auto values = add.noisy_estimate_montecarlo(HadamardCircuit(), network, 0, {"X"}, thermal, 4000);
+        BOOST_CHECK(!add.last_realization_policy().runtime_channels);
+        BOOST_CHECK_EQUAL(warnings, 1);
+        BOOST_REQUIRE_EQUAL(values.size(), 1u);
+        BOOST_CHECK_SMALL(values[0] - std::exp(-0.5), 0.05);
+
+        // T1 is a reset with probability gamma, one draw per realization.
+        const auto counts = add.noisy_execute(flipped, network, 0, relaxing, 4000, 4000);
+        BOOST_CHECK(!add.last_realization_policy().runtime_channels);
+        size_t ones = 0, total = 0;
+        for (const auto &[bits, shots] : counts)
+        {
+            total += shots;
+            if (!bits.empty() && bits[0])
+                ones += shots;
+        }
+        BOOST_CHECK_EQUAL(total, 4000u);
+        BOOST_CHECK_SMALL(static_cast<double>(ones) / 4000.0 - 0.7, 0.04);
+
+        // Generalized amplitude damping has no form in gates and resets.
+        BOOST_CHECK_THROW(add.full_noise_execute(flipped, network, 0, damping, 100, 1), std::invalid_argument);
+        BOOST_CHECK_EQUAL(warnings, 1);
+    }
+
+    // The same rule where the policy is resolved without a network.
+    MaestroExecution::SimulatorConfig config;
+    config.fixed_backend = true;
+    config.simulation_type = Simulators::SimulationType::kMatrixProductState;
+    const auto runs = MaestroExecution::ResolveNoiseRealizations(std::nullopt, relaxing, config, MaestroExecution::NoiseLayer::kPauli, 64, flipped);
+    BOOST_CHECK(runs.runtime_channels && runs.chain_order == Circuits::ChainOrder::kSampledChannels);
+    const auto translates = MaestroExecution::ResolveNoiseRealizations(std::nullopt, relaxing, config, MaestroExecution::NoiseLayer::kPauli, 64, flipped, false,
+                                                                       std::nullopt, true, false);
+    BOOST_CHECK(!translates.runtime_channels && translates.chain_order == Circuits::ChainOrder::kNone);
 }
 
 /** Each coherent setter replaces only its own component, so axes compose. */

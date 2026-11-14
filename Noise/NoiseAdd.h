@@ -291,6 +291,17 @@ class NoiseAdd
 
     using Backend = std::pair<Simulators::SimulatorType, Simulators::SimulationType>;
 
+    // A simple network runs a circuit's operations on its simulator as they
+    // are. The other kinds (netqasm, discrete events) first translate the
+    // circuit into their own instructions or events, which exist for gates,
+    // resets, measurements and classical operations only: a channel
+    // instruction has no translation there.
+    static bool IsSimpleNetwork(const Network::INetwork<> &network)
+    {
+        const auto type = network.GetType();
+        return type == Network::NetworkType::kSimpleDisconnectedNetwork || type == Network::NetworkType::kSimpleNetwork;
+    }
+
     // The backends automatic selection may run instead of the network's
     // simulator, in the order it tries them: the configured candidates
     // (INetwork::GetOptimizationCandidates). Empty when execution keeps that
@@ -349,8 +360,11 @@ class NoiseAdd
         const auto selected = layer == Layer::Pauli      ? MaestroExecution::NoiseLayer::kPauli
                               : layer == Layer::Coherent ? MaestroExecution::NoiseLayer::kCoherent
                                                          : MaestroExecution::NoiseLayer::kCombined;
+        // Only a simple network runs the channel instructions a realization
+        // may keep for a backend that samples them (IsSimpleNetwork).
         return MaestroExecution::ResolveNoiseRealizations(requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt, model, config,
-                                                          selected, estimation ? 100 : 64, circuit, estimation, exact_channels_override);
+                                                          selected, estimation ? 100 : 64, circuit, estimation, exact_channels_override, true,
+                                                          IsSimpleNetwork(*network));
     }
 
     struct ExecutionContext
@@ -466,8 +480,7 @@ class NoiseAdd
         if (!cloned)
             return cloned;
         // A simple network whose clone still copied a larger register drops it.
-        const auto type = cloned->GetType();
-        if (type != Network::NetworkType::kSimpleDisconnectedNetwork && type != Network::NetworkType::kSimpleNetwork)
+        if (!IsSimpleNetwork(*cloned))
             return cloned;
         auto simulator = cloned->GetSimulator();
         if (!simulator || Simulators::IsDistributedGpuSimulator(simulator->GetType()) ||
@@ -503,8 +516,12 @@ class NoiseAdd
     static bool SamplesFromOnePreparedState(const CircuitPtr &circuit, const NetworkPtr &network)
     {
         const auto backend = PinnedBackend(network);
-        if (!backend || backend->first != Simulators::SimulatorType::kQCSim ||
-            circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(Simulators::SamplesQuantumChannels(backend->first, backend->second)),
+        if (!backend || backend->first != Simulators::SimulatorType::kQCSim)
+            return false;
+        // As the realizations are built (ResolvePolicy): channels stay for the
+        // backend to draw only on a simple network.
+        const bool runtime_channels = IsSimpleNetwork(*network) && Simulators::SamplesQuantumChannels(backend->first, backend->second);
+        if (circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(runtime_channels),
                                                  MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
             return false;
         const auto method = backend->second;
@@ -679,8 +696,7 @@ class NoiseAdd
         // each worker's register is the whole layout, entanglement qubits
         // included, and the execution clone keeps one more. The caller's
         // simulator stays allocated while workers run, at whatever width it has.
-        const auto type = network->GetType();
-        const bool simple = type == Network::NetworkType::kSimpleDisconnectedNetwork || type == Network::NetworkType::kSimpleNetwork;
+        const bool simple = IsSimpleNetwork(*network);
         const size_t layoutQubits = network->GetNumQubits() + network->GetNumNetworkEntangledQubits();
         const size_t qubits = std::max<size_t>(std::max<size_t>(1, realizationQubits), simple ? 0 : layoutQubits);
         const size_t callerQubits = retainedQubits;

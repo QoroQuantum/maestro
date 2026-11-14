@@ -365,18 +365,23 @@ struct NoiseRealizationPolicy
 // when injection is deterministic; estimates must also average circuit branches.
 // Counts already sample those branches in their ordinary per-shot execution.
 // fresh_register=false describes a circuit that continues a saved state (a
-// checkpoint suffix).
+// checkpoint suffix). runs_channels=false describes an executor that translates
+// the realizations before it runs them, as a netqasm or discrete-event network
+// does: what it translates into exists for gates, resets, measurements and
+// classical operations only, so its sampled realizations keep no channel for
+// the backend to draw, whatever that backend samples.
 inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> requested, const noise::NoiseModel &model, const SimulatorConfig &config,
                                                        NoiseLayer layer, size_t fallback, const std::shared_ptr<Circuits::Circuit<double>> &circuit = {},
-                                                       bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true)
+                                                       bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true,
+                                                       bool runs_channels = true)
 {
     if ((requested && *requested == 0) || fallback == 0)
         throw std::invalid_argument("noise_realizations must be >= 1.");
     NoiseRealizationPolicy result;
     result.requested = requested;
     result.exact_channels = exact_channels ? *exact_channels : circuit ? InjectsExactChannels(config, model, *circuit) : InjectsExactChannels(config, model);
-    result.runtime_channels = InjectsRuntimeChannels(config, result.exact_channels);
-    result.chain_order = OrdersForChain(config, result.exact_channels);
+    result.runtime_channels = runs_channels && InjectsRuntimeChannels(config, result.exact_channels);
+    result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels) : Circuits::ChainOrder::kNone;
     result.stochastic_noise = (layer != NoiseLayer::kPauli && model.has_coherent()) || (layer == NoiseLayer::kCombined && model.has_correlated());
     if (!result.exact_channels)
         result.stochastic_noise = result.stochastic_noise || model.has_non_readout_noise() || (circuit && circuit->HasDrawnChannels());
