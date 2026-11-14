@@ -60,6 +60,11 @@ class NoiseAdd
      * for automatic selection holds only a placeholder simulator). An inferred
      * exact backend is pinned on the execution clone. Injection without a
      * network remains sampled until set_exact_channels(true) is called.
+     *
+     * A netqasm or discrete-event network translates its circuits and has no
+     * instruction for a channel: exact channels are not inferred for it, so a
+     * mixed-state backend runs sampled realizations there too, and a request
+     * for them is refused once a realization would hold a channel.
      */
     // Bindings may supply a language-level warning (e.g. Python RuntimeWarning).
     void set_warning_handler(std::function<void(const std::string &)> handler)
@@ -603,6 +608,23 @@ class NoiseAdd
         return shared;
     }
 
+    // A network that translates its circuits (IsSimpleNetwork) has no
+    // instruction for a channel. Its realizations hold none unless the caller
+    // asked for exact channels, or the circuit itself holds a channel that
+    // stays one. The first realization tells: it is drawn here when no one
+    // drew it yet, and runs first as it would have.
+    void RequireNoChannelToTranslate(const Network::INetwork<> &network, const NoiseInjectionPlan &plan, Layer layer, CircuitPtr &first)
+    {
+        if (IsSimpleNetwork(network))
+            return;
+        if (!first)
+            first = Inject(plan, layer);
+        if (first && first->HasQuantumChannels())
+            throw std::invalid_argument("A netqasm or discrete-event network has no instruction for a quantum channel: it runs noise as gates and "
+                                        "resets. Do not ask it for exact channels (set_exact_channels(true)) and do not place channel "
+                                        "instructions in its circuits.");
+    }
+
     // Inject(plan.circuit(), plan.model(), layer), without per-realization lookups.
     CircuitPtr Inject(const NoiseInjectionPlan &plan, Layer layer)
     {
@@ -855,6 +877,7 @@ class NoiseAdd
         // execution of the network whose shots are the realizations.
         CircuitPtr first_realization;
         const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, layer, first_realization);
+        RequireNoChannelToTranslate(*network, plan, layer, first_realization);
         // Whether the executions draw channel branches, sharing one circuit or
         // not: this object's seed then joins a configured one (ExecutionSeed).
         MaestroExecution::RuntimeDraws draws(exact_channels ? nullptr : &plan, runtime_circuit, first_realization);
@@ -938,6 +961,7 @@ class NoiseAdd
         // one circuit and differ by seed.
         CircuitPtr first_realization;
         const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, layer, first_realization);
+        RequireNoChannelToTranslate(*network, plan, layer, first_realization);
         // Whether the executions draw channel branches, sharing one circuit or
         // not: this object's seed then joins a configured one (ExecutionSeed).
         MaestroExecution::RuntimeDraws draws(exact_channels ? nullptr : &plan, runtime_circuit, first_realization);

@@ -166,6 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its shot workers, as a request's counts and `NoiseAdd` already did: 8 to
   17 times as fast on 12 and 14 qubits. Seeded results of those calls differ
   from before. With a bond limit nothing changes.
+- `NoiseAdd` on a network kind that translates its circuits (netqasm,
+  discrete events) with a density matrix or a matrix product operator chose
+  exact channels by itself, and the network, which has no instruction for a
+  channel, failed with any noise model. Exact channels are no longer chosen
+  for such a network: the mixed-state methods run sampled realizations there,
+  as the pure states do. `set_exact_channels(true)` is refused with a message
+  once a realization would hold a channel.
 
 
 ## [0.3.14] - 2026-11-11

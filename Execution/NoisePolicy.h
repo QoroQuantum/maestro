@@ -369,7 +369,8 @@ struct NoiseRealizationPolicy
 // the realizations before it runs them, as a netqasm or discrete-event network
 // does: what it translates into exists for gates, resets, measurements and
 // classical operations only, so its sampled realizations keep no channel for
-// the backend to draw, whatever that backend samples.
+// the backend to draw, whatever that backend samples, and exact channels are
+// not chosen for it: only a caller who asks for them gets them.
 inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> requested, const noise::NoiseModel &model, const SimulatorConfig &config,
                                                        NoiseLayer layer, size_t fallback, const std::shared_ptr<Circuits::Circuit<double>> &circuit = {},
                                                        bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true,
@@ -379,7 +380,12 @@ inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> req
         throw std::invalid_argument("noise_realizations must be >= 1.");
     NoiseRealizationPolicy result;
     result.requested = requested;
-    result.exact_channels = exact_channels ? *exact_channels : circuit ? InjectsExactChannels(config, model, *circuit) : InjectsExactChannels(config, model);
+    if (exact_channels)
+        result.exact_channels = *exact_channels;
+    else if (!runs_channels)
+        result.exact_channels = false;
+    else
+        result.exact_channels = circuit ? InjectsExactChannels(config, model, *circuit) : InjectsExactChannels(config, model);
     result.runtime_channels = runs_channels && InjectsRuntimeChannels(config, result.exact_channels);
     result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels) : Circuits::ChainOrder::kNone;
     result.stochastic_noise = (layer != NoiseLayer::kPauli && model.has_coherent()) || (layer == NoiseLayer::kCombined && model.has_correlated());

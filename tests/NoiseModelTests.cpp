@@ -1324,7 +1324,9 @@ BOOST_AUTO_TEST_CASE(NoiseAddReportsThermalApproximationOncePerCall)
  * instructions or events, which exist for gates, resets and measurements only.
  * Its realizations keep no channel for the backend to draw, on a statevector or
  * a matrix product state either: the noise is drawn into gates and resets, as
- * on a method that does not sample channels.
+ * on a method that does not sample channels. Exact channels are not chosen for
+ * it either, so a density matrix or a matrix product operator runs the same
+ * realizations, and asking for exact channels is refused in words.
  */
 BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
 {
@@ -1336,7 +1338,8 @@ BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
     flipped->AddOperation(std::make_shared<Circuits::XGate<>>(0));
     flipped->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
 
-    for (const auto method : {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState})
+    for (const auto method : {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState,
+                              Simulators::SimulationType::kDensityMatrix, Simulators::SimulationType::kMatrixProductOperator})
     {
         int warnings = 0;
         auto network = std::make_shared<TranslatingNetwork>(Types::qubits_vector{1}, std::vector<size_t>{1});
@@ -1351,7 +1354,7 @@ BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
         // Relaxation with T2 > T1 is a reset and a phase flip with T2 = T1, and
         // the call says so once.
         const auto values = add.noisy_estimate_montecarlo(HadamardCircuit(), network, 0, {"X"}, thermal, 4000);
-        BOOST_CHECK(!add.last_realization_policy().runtime_channels);
+        BOOST_CHECK(!add.last_realization_policy().runtime_channels && !add.last_realization_policy().exact_channels);
         BOOST_CHECK_EQUAL(warnings, 1);
         BOOST_REQUIRE_EQUAL(values.size(), 1u);
         BOOST_CHECK_SMALL(values[0] - std::exp(-0.5), 0.05);
@@ -1372,6 +1375,21 @@ BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
         // Generalized amplitude damping has no form in gates and resets.
         BOOST_CHECK_THROW(add.full_noise_execute(flipped, network, 0, damping, 100, 1), std::invalid_argument);
         BOOST_CHECK_EQUAL(warnings, 1);
+
+        // Asked for exact channels, the network is not handed one: the call
+        // says what such a network runs. Without noise there is no channel, and
+        // the request alone is no error.
+        add.set_exact_channels(true);
+        BOOST_CHECK_EXCEPTION(add.noisy_execute(flipped, network, 0, relaxing, 100, 1), std::invalid_argument, [](const std::invalid_argument &error) {
+            return std::string(error.what()).find("no instruction for a quantum channel") != std::string::npos;
+        });
+        BOOST_CHECK_EXCEPTION(
+            add.noisy_estimate_montecarlo(HadamardCircuit(), network, 0, {"X"}, relaxing, 10), std::invalid_argument,
+            [](const std::invalid_argument &error) { return std::string(error.what()).find("no instruction for a quantum channel") != std::string::npos; });
+        const auto clean = add.noisy_execute(flipped, network, 0, noise::NoiseModel(), 100, 1);
+        BOOST_REQUIRE_EQUAL(clean.size(), 1u);
+        BOOST_CHECK_EQUAL(clean.begin()->second, 100u);
+        add.set_automatic_channels();
     }
 
     // The same rule where the policy is resolved without a network.
