@@ -538,6 +538,9 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
                 throw std::invalid_argument("Local map qubit is out of range");
         if (qubits.empty() || qubits.size() > 3)
             throw std::invalid_argument("A local map with its norm acts on one to three distinct qubits");
+        // Distinct: the state refuses a repeated qubit itself, with
+        // std::invalid_argument, before it writes anything. Every block of
+        // every trajectory comes through here, so the test is not made twice.
         double norm = 0.;
         // As a gate: cached measurement data goes, and the qubits join those the samplers read.
         RunNative([&] {
