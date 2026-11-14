@@ -2921,6 +2921,9 @@ class TestOptimizedSwappingParity:
                 f"cross-entropy {xeb:.3f}, ideal {ideal:.3f}")
 
     def _lucj_z_error(self, bond_dimension, disable):
+        # The circuit is a data file: without it the LUCJ tests cannot run.
+        if not self.LUCJ_PATH.is_file():
+            pytest.skip(f"{self.LUCJ_PATH.name} is not in tests/python/data")
         qasm = self.LUCJ_PATH.read_text()
         observables = ";".join(self._z_observables(16))
         exact = maestro.simple_estimate(
