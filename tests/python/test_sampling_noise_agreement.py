@@ -2093,3 +2093,72 @@ def test_a_checkpoint_suffix_without_noise_reports_the_channels_it_draws(name, s
         noisy = _native_request(request)
         assert noisy["ok"], noisy
         assert noisy["results"][0]["stochastic_execution"] is False
+
+
+# ---- One circuit for every shot runs once ----
+
+@pytest.mark.parametrize("bond", [None, 16])
+def test_noise_drawn_while_the_circuit_runs_on_a_matrix_product_state(bond):
+    """Channel instructions on the matrix product state are drawn while the circuit runs, so every
+    shot runs the same circuit. With a bond limit, realization workers run the shots. Without one
+    there is no state size to budget those workers with: noisy_execute then runs the circuit once
+    on the network for all the shots, as a request does, where the shots ran one after another
+    before. Either way each shot is a realization of its own, the statistics are those of the
+    channel, counts and rows alike, and a seed repeats them."""
+    shots = 4000
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    circuit.h(1)
+    circuit.cx(1, 2)
+    circuit.channel([2], maestro.QuantumChannel.amplitude_damping(0.5))
+    circuit.measure([(0, 0), (1, 1), (2, 2)])
+    options = dict(simulator_type=B.QCSim, simulation_type=S.MatrixProductState, seed=3, fixed_backend=True)
+    if bond:
+        options["max_bond_dimension"] = bond
+    config = maestro.SimulatorConfig(**options)
+
+    def check(ones_of_qubit_0, ones_of_qubit_2, where):
+        # Qubit 0 keeps its excitation with probability 0.7; qubit 2 has one half the time and keeps half of them.
+        assert abs(ones_of_qubit_0 - 0.7) < 0.04, f"{where}: qubit 0 read 1 in {ones_of_qubit_0} of the shots"
+        assert abs(ones_of_qubit_2 - 0.25) < 0.04, f"{where}: qubit 2 read 1 in {ones_of_qubit_2} of the shots"
+
+    counted = circuit.noisy_execute(maestro.NoiseModel(), config=config, shots=shots)
+    assert counted["noise_realizations"] == shots
+    # One execution of the network, whose shot workers are not realization workers.
+    assert counted["realization_workers"] == 1 if bond is None else counted["realization_workers"] >= 1
+    assert sum(counted["counts"].values()) == shots
+    check(sum(n for key, n in counted["counts"].items() if key[0] == "1") / shots,
+          sum(n for key, n in counted["counts"].items() if key[2] == "1") / shots, "counts")
+    assert circuit.noisy_execute(maestro.NoiseModel(), config=config, shots=shots)["counts"] == counted["counts"]
+
+    sampled = circuit.noisy_execute(maestro.NoiseModel(), config=config, shots=shots, return_samples=True)
+    rows = np.asarray(sampled["samples"])
+    assert rows.shape == (shots, 3)
+    assert sampled["noise_realizations"] == shots
+    assert sampled["realization_workers"] == 1 if bond is None else sampled["realization_workers"] >= 1
+    assert sampled["sampling_strategy"] == "trajectory_v1"
+    check(rows[:, 0].mean(), rows[:, 2].mean(), "rows")
+    # The rows are in no order: any leading part of them is a sample of the whole.
+    check(rows[: shots // 2, 0].mean(), rows[: shots // 2, 2].mean(), "the first half of the rows")
+
+    source = [{"name": "x", "qubits": [0]},
+              {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 0.3}]},
+              {"name": "h", "qubits": [1]}, {"name": "cx", "qubits": [1, 2]},
+              {"name": "channel", "qubits": [2], "factors": [{"kind": "amplitude_damping", "gamma": 0.5}]},
+              {"name": "measure", "qubits": [0, 1, 2], "clbits": [0, 1, 2]}]
+    simulator = {"backend": "qcsim", "method": "matrix_product_state", "selection": "fixed"}
+    if bond:
+        simulator["options"] = {"max_bond_dimension": bond}
+    request = {"schema_version": 2, "operation": "execute", "circuit": {"format": "instructions", "num_qubits": 3, "num_clbits": 3, "source": source},
+               "simulator": simulator, "noise": {"channels": []}, "execution": {"shots": shots, "seed": 3}}
+    native = _native_request(request)
+    assert native["ok"], native
+    check(sum(n for key, n in native["counts"].items() if key[0] == "1") / shots,
+          sum(n for key, n in native["counts"].items() if key[2] == "1") / shots, "a request's counts")
+    request["execution"]["return_samples"] = True
+    native = _native_request(request)
+    assert native["ok"], native
+    assert native["execution_metadata"]["realization_workers"] >= 1
+    assert native["execution_metadata"]["sampling_strategy"] == "trajectory_v1"
+    check(sum(row[0] == "1" for row in native["samples"]) / shots, sum(row[2] == "1" for row in native["samples"]) / shots, "a request's rows")

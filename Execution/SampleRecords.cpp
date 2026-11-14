@@ -403,6 +403,14 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (!return_samples && host_qubits > static_cast<size_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("Circuit width exceeds the simulator limit: a crosstalk spectator lies beyond it; use return_samples=True");
     const size_t budget_qubits = compaction.Width() + (direct_sessions ? 0 : untouched_spectators);
+    // Noise that the backend draws as the circuit runs leaves one circuit for
+    // every shot. Realization workers are budgeted by the size of a state, and
+    // a matrix product state without a bond limit has none: its shots ran one
+    // after another on a single worker. The network then executes the circuit
+    // once for all the shots, as a request and NoiseAdd do, and its shot
+    // workers run the trajectories. Where the size is known the realization
+    // workers keep the shots, within the memory budget.
+    const bool shared_execution = runtime_circuit && !direct_sessions && RunsOnlyQCSim(config) && !(MaxRealizationBytes(config, budget_qubits) > 0);
     // Each realization has its own derived seed. Batches sampled from one
     // prepared state run single-threaded in the network, so realization workers
     // supply parallelism without duplicating their deterministic preparation.
@@ -421,7 +429,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // batch has more shots than there are batches: 64 realizations of three
     // shots each fill the workers far better as 64 batches than as three shots.
     const bool many_batches = batches >= base_batch;
-    const size_t workers = (return_samples || batches == shots || prepared_batches || many_batches)
+    const size_t workers = shared_execution ? 1
+                           : (return_samples || batches == shots || prepared_batches || many_batches)
                                ? SamplingWorkers(config, batches, budget_qubits, direct_sessions ? 2 : NetworkRealizationCopies(config, batches != shots))
                                : 1;
     std::vector<SamplingResult> results(workers);
@@ -515,7 +524,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         // Whether the executions draw channel branches, shared circuit or not: the noise seed then joins their seeds.
         RuntimeDraws draws(plan.get(), runtime_circuit, first_realization);
         Utils::RunRealizations(
-            batches, workers,
+            shared_execution ? 1 : batches, workers,
             [&](size_t) -> RecordCircuitPtr {
                 // Realizations are prepared in order: the one drawn to decide is the first.
                 RecordCircuitPtr noisy = runtime_circuit     ? runtime_circuit
@@ -525,7 +534,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                 return noisy;
             },
             [&](size_t worker, size_t batch, RecordCircuitPtr noisy) {
-                const size_t count = base_batch + (batch < leftover ? 1 : 0);
+                // One execution holds every shot of a shared circuit.
+                const size_t count = shared_execution ? shots : base_batch + (batch < leftover ? 1 : 0);
                 const size_t first = batch * base_batch + std::min(batch, leftover);
                 auto execution_config = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, batch) : NoiseExecutionConfig(config, noise_seed, batch);
                 // Frames are selected for the entire request. Terminal counts

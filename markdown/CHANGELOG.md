@@ -152,6 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stochastic_execution: false` for a Pauli channel instruction on a method
   that samples channels, although each shot draws it: nothing is injected
   without noise, so the suffix runs as it is. It reports `true` now.
+- On a matrix product state without a bond limit, `noisy_execute`,
+  `full_noise_execute` and requests that return samples ran the shots of a
+  noisy circuit one after another when the backend draws all the noise while
+  the circuit runs (channel instructions): realization workers are budgeted
+  by the size of a state, and that state has none. Every shot runs the same
+  circuit there, so the network now executes it once for all the shots, on
+  its shot workers, as a request's counts and `NoiseAdd` already did: 8 to
+  17 times as fast on 12 and 14 qubits. Seeded results of those calls differ
+  from before. With a bond limit nothing changes.
 
 
 ## [0.3.14] - 2026-11-11
