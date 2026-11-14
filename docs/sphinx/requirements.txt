@@ -12,4 +12,5 @@ sinter>=1.14
 pymatching
 pennylane-maestro
 qiskit-maestro
-deltakit-maestro
+# No release for Python 3.14 yet: where it is not installed, conf.py leaves its page unexecuted.
+deltakit-maestro; python_version < "3.14"

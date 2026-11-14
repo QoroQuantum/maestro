@@ -110,7 +110,7 @@ class NoiseAdd
     std::shared_ptr<Circuits::Circuit<double>> inject(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
         if (circ)
-            WarnThermalApproximation(nm, *circ);
+            WarnThermalApproximation(nm, *circ, false);
         return Inject(circ, nm, Layer::Pauli);
     }
 
@@ -125,12 +125,16 @@ class NoiseAdd
     std::shared_ptr<Circuits::Circuit<double>> inject_combined(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
         if (circ)
-            WarnThermalApproximation(nm, *circ);
+            WarnThermalApproximation(nm, *circ, false);
         return Inject(circ, nm, Layer::Combined);
     }
 
     // Noise draws and simulator draws have independent streams. Re-seeding
     // restarts both; successive calls on this object advance the streams.
+    // A seed configured on the network drives the simulator's draws instead.
+    // Channel branches a backend draws as the circuit runs (damping on a
+    // statevector or a matrix product state) then follow both seeds together,
+    // so that this seed changes them as it changes injected errors.
     void seed(unsigned int s)
     {
         rng.seed(s);
@@ -353,17 +357,24 @@ class NoiseAdd
     {
         NetworkPtr network;
         std::optional<uint64_t> seed;
+        // This object's seed, where a seed configured on the network takes its
+        // place for the simulator's draws (ExecutionSeed).
+        std::optional<uint64_t> noise_seed;
     };
 
     ExecutionContext PrepareExecution(const NetworkPtr &network)
     {
         auto base_seed = public_seed;
+        std::optional<uint64_t> noise_seed;
         const auto simulator = network->GetSimulator();
         if (simulator)
         {
             const auto configured = simulator->GetConfiguration("seed");
             if (!configured.empty())
+            {
                 base_seed = std::stoull(configured);
+                noise_seed = public_seed;
+            }
             if (simulator->GetType() == Simulators::SimulatorType::kDistMpiGpuSim)
             {
                 if (!base_seed)
@@ -392,7 +403,23 @@ class NoiseAdd
         // network keep the setting.
         if (base_seed || exact_channels)
             execution_network->SetCostModelEnabled(false);
-        return {std::move(execution_network), base_seed};
+        return {std::move(execution_network), base_seed, noise_seed};
+    }
+
+    // The seed the executions of a call derive theirs from. Noise draws follow
+    // this object's seed and simulator draws a seed configured on the network.
+    // Where the executions draw channel branches as they run
+    // (MaestroExecution::RuntimeDraws), injection leaves this object's seed
+    // nothing to drive for them, so it joins the configured seed, as the noise
+    // seed joins the simulator seed in the Python and JSON entry points
+    // (MaestroExecution::JoinNoiseSeed): either seed alone then changes the
+    // errors drawn. Without a configured seed this object's seed is the
+    // execution seed already.
+    static std::optional<uint64_t> ExecutionSeed(const ExecutionContext &execution, const MaestroExecution::RuntimeDraws &draws)
+    {
+        if (execution.seed && execution.noise_seed && draws)
+            return MaestroExecution::JoinNoiseSeed(*execution.seed, *execution.noise_seed);
+        return execution.seed;
     }
 
     struct Realization
@@ -402,12 +429,18 @@ class NoiseAdd
     };
 
     // The next injected realization and its simulator stream, drawn in order.
-    Realization NextRealization(const NoiseInjectionPlan &plan, Layer layer, const ExecutionContext &execution)
+    // shared: the circuit every realization runs when the backend draws all the
+    // noise itself (SharedRuntimeCircuit). first: a realization already drawn,
+    // to hand out before any other. draws: told of each realization, it says
+    // whether their executions draw channel branches (ExecutionSeed).
+    Realization NextRealization(const NoiseInjectionPlan &plan, Layer layer, const ExecutionContext &execution, const CircuitPtr &shared, CircuitPtr &first,
+                                MaestroExecution::RuntimeDraws &draws)
     {
-        auto noisy = Inject(plan, layer);
+        auto noisy = shared ? shared : first ? std::exchange(first, nullptr) : Inject(plan, layer);
+        draws.See(noisy);
         std::optional<uint64_t> seed;
-        if (execution.seed)
-            seed = Simulators::IState::DeriveSeed(*execution.seed, next_simulator_stream++);
+        if (const auto base = ExecutionSeed(execution, draws))
+            seed = Simulators::IState::DeriveSeed(*base, next_simulator_stream++);
         return Realization{std::move(noisy), seed};
     }
 
@@ -471,7 +504,8 @@ class NoiseAdd
     {
         const auto backend = PinnedBackend(network);
         if (!backend || backend->first != Simulators::SimulatorType::kQCSim ||
-            circuit->HasOpsAfterMeasurements(MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
+            circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(Simulators::SamplesQuantumChannels(backend->first, backend->second)),
+                                                 MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
             return false;
         const auto method = backend->second;
         return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
@@ -508,11 +542,12 @@ class NoiseAdd
         return networks[last];
     }
 
-    void SeedExecution(const ExecutionContext &execution)
+    void SeedExecution(const ExecutionContext &execution, const MaestroExecution::RuntimeDraws &draws)
     {
-        if (!execution.seed)
+        const auto base = ExecutionSeed(execution, draws);
+        if (!base)
             return;
-        const auto seed = Simulators::IState::DeriveSeed(*execution.seed, next_simulator_stream++);
+        const auto seed = Simulators::IState::DeriveSeed(*base, next_simulator_stream++);
         execution.network->Configure("seed", std::to_string(seed).c_str());
         // Also cover networks that execute their existing simulator directly.
         if (const auto simulator = execution.network->GetSimulator())
@@ -534,6 +569,23 @@ class NoiseAdd
         return noisy;
     }
 
+    // The circuit every execution runs when the backend draws all the noise as
+    // it runs, or null: the rule of the Python and JSON entry points
+    // (MaestroExecution::ResolveRuntimeNoise). When null, `first` may hold the
+    // first realization, already drawn, to run first.
+    CircuitPtr SharedRuntimeCircuit(const NoiseInjectionPlan &plan, Layer layer, CircuitPtr &first)
+    {
+        CircuitPtr shared;
+        if (exact_channels)
+            return shared;
+        using MaestroExecution::NoiseLayer;
+        MaestroExecution::ResolveRuntimeNoise(layer == Layer::Pauli      ? NoiseLayer::kPauli
+                                              : layer == Layer::Coherent ? NoiseLayer::kCoherent
+                                                                         : NoiseLayer::kCombined,
+                                              plan, rng, shared, first);
+        return shared;
+    }
+
     // Inject(plan.circuit(), plan.model(), layer), without per-realization lookups.
     CircuitPtr Inject(const NoiseInjectionPlan &plan, Layer layer)
     {
@@ -549,9 +601,12 @@ class NoiseAdd
     }
 
     // For the relaxation this circuit draws in the clamped window only.
-    void WarnThermalApproximation(const NoiseModel &nm, const Circuits::Circuit<double> &circuit) const
+    // runtime_channels: the execution keeps that relaxation as channels the
+    // backend samples from its state, so nothing is clamped. The one-off
+    // injectors always lower it, whatever an earlier execution resolved.
+    void WarnThermalApproximation(const NoiseModel &nm, const Circuits::Circuit<double> &circuit, bool runtime_channels) const
     {
-        if (exact_channels || nm.has_additional_quantum_channels())
+        if (exact_channels || runtime_channels || nm.has_additional_quantum_channels())
             return;
         const auto qubits = nm.thermal_approximation_qubits_on(circuit);
         if (qubits.empty())
@@ -564,8 +619,9 @@ class NoiseAdd
                 message << ", ";
             message << qubits[i];
         }
-        message << "]: effective T2 clamped to T1. Use density matrix or a "
-                   "supported MPO backend to preserve calibrated T2.";
+        message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
+                   "statevector or the matrix product state, which sample the channel itself, "
+                   "to preserve the calibrated T2.";
         if (warning_handler)
             warning_handler(message.str());
         else
@@ -769,14 +825,33 @@ class NoiseAdd
         last_policy = ResolvePolicy(circuit, network, nm, requested_realizations, layer, false);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm, *circuit);
+            WarnThermalApproximation(nm, *circuit, last_policy.runtime_channels);
         const int batches = static_cast<int>(std::min(static_cast<size_t>(shots), last_policy.realizations));
         last_policy.realizations = static_cast<size_t>(batches);
         if (auto counts = FrameCounts(circuit, network, host, nm, shots, batches, layer))
             return std::move(*counts);
         auto execution = PrepareExecution(network);
         Circuits::Circuit<>::ExecuteResults combined;
-        const NoiseInjectionPlan plan(circuit, nm);
+        // Every backend the network may run samples channels from its state:
+        // the realizations keep the channels no draw replaces.
+        const NoiseInjectionPlan plan(circuit, nm, last_policy.runtime_channels, last_policy.chain_order);
+        // Noise the backend draws as the circuit runs: one circuit, and one
+        // execution of the network whose shots are the realizations.
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, layer, first_realization);
+        // Whether the executions draw channel branches, sharing one circuit or
+        // not: this object's seed then joins a configured one (ExecutionSeed).
+        MaestroExecution::RuntimeDraws draws(exact_channels ? nullptr : &plan, runtime_circuit, first_realization);
+        if (runtime_circuit)
+        {
+            last_policy.realizations = static_cast<size_t>(shots);
+            SeedExecution(execution, draws);
+            auto counts = host ? execution.network->RepeatedExecuteOnHost(runtime_circuit, *host, static_cast<size_t>(shots))
+                               : execution.network->RepeatedExecute(runtime_circuit, static_cast<size_t>(shots));
+            if (!counts.empty())
+                last_record = Describe(*execution.network);
+            return counts;
+        }
         // A realization depends on its own circuit and derived seed. Batches
         // sampled from one prepared state run single-threaded in the network,
         // so realization workers supply their parallelism too.
@@ -790,7 +865,7 @@ class NoiseAdd
             std::vector<size_t> latest(workers, 0);
 
             Utils::RunRealizations(
-                static_cast<size_t>(batches), workers, [&](size_t) { return NextRealization(plan, layer, execution); },
+                static_cast<size_t>(batches), workers, [&](size_t) { return NextRealization(plan, layer, execution, nullptr, first_realization, draws); },
                 [&](size_t worker, size_t batch, Realization realization) {
                     const auto &workerNetwork = workerNetworks[worker];
                     SeedNetwork(*workerNetwork, realization.seed);
@@ -812,8 +887,9 @@ class NoiseAdd
         for (int b = 0; b < batches; ++b)
         {
             const int batch_shots = shots / batches + (b < shots % batches ? 1 : 0);
-            auto noisy = Inject(plan, layer);
-            SeedExecution(execution);
+            auto noisy = first_realization ? std::exchange(first_realization, nullptr) : Inject(plan, layer);
+            draws.See(noisy);
+            SeedExecution(execution, draws);
             const auto counts =
                 host ? execution.network->RepeatedExecuteOnHost(noisy, *host, batch_shots) : execution.network->RepeatedExecute(noisy, batch_shots);
             for (const auto &entry : counts)
@@ -837,11 +913,18 @@ class NoiseAdd
         const int realizations = static_cast<int>(last_policy.realizations);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm, *circuit);
+            WarnThermalApproximation(nm, *circuit, last_policy.runtime_channels);
         auto cleanCircuit = circuit->RemoveEndMeasurements();
         auto execution = PrepareExecution(network);
         std::vector<double> values(paulis.size(), 0.0);
-        const NoiseInjectionPlan plan(cleanCircuit, nm);
+        const NoiseInjectionPlan plan(cleanCircuit, nm, last_policy.runtime_channels, last_policy.chain_order);
+        // Noise the backend draws as the circuit runs: the realizations share
+        // one circuit and differ by seed.
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, layer, first_realization);
+        // Whether the executions draw channel branches, sharing one circuit or
+        // not: this object's seed then joins a configured one (ExecutionSeed).
+        MaestroExecution::RuntimeDraws draws(exact_channels ? nullptr : &plan, runtime_circuit, first_realization);
         // Each realization's values depend only on its circuit and seed, so
         // workers may evaluate them in any order. They are summed in realization
         // order, as the serial loop does.
@@ -854,12 +937,13 @@ class NoiseAdd
             std::vector<std::vector<double>> samples(static_cast<size_t>(realizations));
             std::vector<size_t> latest(workers, 0);
             Utils::RunRealizations(
-                static_cast<size_t>(realizations), workers, [&](size_t) { return NextRealization(plan, layer, execution); },
+                static_cast<size_t>(realizations), workers,
+                [&](size_t) { return NextRealization(plan, layer, execution, runtime_circuit, first_realization, draws); },
                 [&](size_t worker, size_t r, Realization realization) {
                     SeedNetwork(*workerNetworks[worker], realization.seed);
                     bool executed = false;
-                    samples[r] = MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, workerNetworks[worker], host, false, &caches[worker],
-                                                                     &executed);
+                    samples[r] =
+                        MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, workerNetworks[worker], host, false, &caches[worker], &executed);
                     if (executed)
                         latest[worker] = std::max(latest[worker], r + 1);
                 });
@@ -877,8 +961,9 @@ class NoiseAdd
         bool ran = false;
         for (int r = 0; r < realizations; ++r)
         {
-            auto noisy = Inject(plan, layer);
-            SeedExecution(execution);
+            auto noisy = runtime_circuit ? runtime_circuit : first_realization ? std::exchange(first_realization, nullptr) : Inject(plan, layer);
+            draws.See(noisy);
+            SeedExecution(execution, draws);
             bool executed = false;
             const auto sample = MaestroExecution::EstimateOnNetwork(noisy, paulis, execution.network, host, false, &cache, &executed);
             ran = ran || executed;

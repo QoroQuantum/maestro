@@ -17,6 +17,29 @@ if hasattr(_raw_maestro, "_compile_reference_sampler"):
 if hasattr(_raw_maestro, "_resolve_noise_realizations"):
     _resolve_noise_realizations = _raw_maestro._resolve_noise_realizations
 
+
+_BUILD_INFO = None
+
+
+def build_info():
+    """The identity of this build: ``version``, ``source_revision`` (Maestro's Git
+    revision) and ``qcsim_revision`` (that of the QCSim sources it was compiled
+    against), each ``"unknown"`` where the build could not tell. The revisions are
+    those CMake saw when it configured the build."""
+    global _BUILD_INFO
+    if _BUILD_INFO is None:
+        import json
+
+        _BUILD_INFO = dict(json.loads(_raw_maestro._capabilities_json()).get("build", {}))
+    return dict(_BUILD_INFO)
+
+
+def __getattr__(name):
+    # The version is asked of the build when first wanted, not at every import.
+    if name == "__version__":
+        return build_info().get("version", "unknown")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # Re-export submodules
 circuits = _raw_maestro.circuits
 _sys.modules[__name__ + ".circuits"] = circuits

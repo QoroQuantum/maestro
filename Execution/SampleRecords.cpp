@@ -342,7 +342,21 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     const bool exact = options.exact_channels ? *options.exact_channels : InjectsExactChannels(config, noise_model, *circuit);
     const NoiseLayer layer = options.layer;
     auto rng = MakeNoiseRng(config, noise_seed);
+    if (exact && SamplesQuantumChannels(config))
+        throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
+                                    "channel as one sampled trajectory");
     auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact);
+    // A backend that samples channels draws all the noise as each shot runs
+    // (ResolveRuntimeNoise): every shot is then a realization of its own.
+    std::unique_ptr<noise::NoiseInjectionPlan> plan;
+    RecordCircuitPtr runtime_circuit, first_realization;
+    if (InjectsRuntimeChannels(config, exact))
+    {
+        plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, true, OrdersForChain(config, exact));
+        ResolveRuntimeNoise(layer, *plan, rng, runtime_circuit, first_realization);
+    }
+    if (runtime_circuit)
+        policy.realizations = shots;
     const size_t batches = std::min(shots, policy.realizations);
     policy.realizations = batches;
     const size_t base_batch = shots / batches;
@@ -371,12 +385,12 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // the circuit's qubits plus the untouched spectators, which is what its
     // workers' memory budget counts.
     const QubitCompaction compaction(*circuit);
-    std::unique_ptr<noise::NoiseInjectionPlan> plan;
     bool trim_spectators = false;
     size_t host_qubits = qubits, untouched_spectators = 0;
     if (noise_model.has_crosstalk())
     {
-        plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model);
+        if (!plan)
+            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
         trim_spectators = compaction.Sparse() || plan->RegisterWidth() > qubits;
         host_qubits = std::max(qubits, plan->RegisterWidth());
         for (const auto spectator : plan->Spectators())
@@ -389,17 +403,34 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (!return_samples && host_qubits > static_cast<size_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("Circuit width exceeds the simulator limit: a crosstalk spectator lies beyond it; use return_samples=True");
     const size_t budget_qubits = compaction.Width() + (direct_sessions ? 0 : untouched_spectators);
+    // Noise that the backend draws as the circuit runs leaves one circuit for
+    // every shot. Realization workers are budgeted by the size of a state, and
+    // a matrix product state without a bond limit has none: its shots ran one
+    // after another on a single worker. The network then executes the circuit
+    // once for all the shots, as a request and NoiseAdd do, and its shot
+    // workers run the trajectories. Where the size is known the realization
+    // workers keep the shots, within the memory budget.
+    const bool shared_execution = runtime_circuit && !direct_sessions && RunsOnlyQCSim(config) && !(MaxRealizationBytes(config, budget_qubits) > 0);
     // Each realization has its own derived seed. Batches sampled from one
     // prepared state run single-threaded in the network, so realization workers
     // supply parallelism without duplicating their deterministic preparation.
     using Method = Simulators::SimulationType;
-    const bool prepared_batches = !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config)) &&
-                                  (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
-                                   config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
+    // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
+    // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
+    const bool prepared_batches =
+        !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)), UsesExactQuantumChannels(config)) &&
+        (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
+         config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     // Network trajectories retain their prepared source and checkpoint plus
     // execution clones and any clone-owned snapshots. Direct sessions need
     // only their register and save slot.
-    const size_t workers = (return_samples || batches == shots || prepared_batches)
+    // The other methods run the shots of a batch on shot workers inside the
+    // network, so the batches run one after another. That only pays while a
+    // batch has more shots than there are batches: 64 realizations of three
+    // shots each fill the workers far better as 64 batches than as three shots.
+    const bool many_batches = batches >= base_batch;
+    const size_t workers = shared_execution ? 1
+                           : (return_samples || batches == shots || prepared_batches || many_batches)
                                ? SamplingWorkers(config, batches, budget_qubits, direct_sessions ? 2 : NetworkRealizationCopies(config, batches != shots))
                                : 1;
     std::vector<SamplingResult> results(workers);
@@ -476,7 +507,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         uint8_t *samples = records.rows.data();
         // Resolved once; each realization draws from the noise RNG in order.
         if (!plan)
-            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model);
+            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
         // `auto` may reach a QCSim composite: its components then sample a
         // batch of counts at their own crossover, as they do for a native
         // request. A fixed composite takes no frames and no request-level
@@ -490,12 +521,23 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                                                                : composite(config.simulator_type);
         const bool composite_auto = EffectiveCountsPolicy(config) == "auto" && composite_listed;
         const bool multinomial = PreferMultinomialCounts(config);
+        // Whether the executions draw channel branches, shared circuit or not: the noise seed then joins their seeds.
+        RuntimeDraws draws(plan.get(), runtime_circuit, first_realization);
         Utils::RunRealizations(
-            batches, workers, [&](size_t) { return InjectPlanned(layer, *plan, rng, exact); },
+            shared_execution ? 1 : batches, workers,
+            [&](size_t) -> RecordCircuitPtr {
+                // Realizations are prepared in order: the one drawn to decide is the first.
+                RecordCircuitPtr noisy = runtime_circuit     ? runtime_circuit
+                                         : first_realization ? std::exchange(first_realization, nullptr)
+                                                             : InjectPlanned(layer, *plan, rng, exact);
+                draws.See(noisy);
+                return noisy;
+            },
             [&](size_t worker, size_t batch, RecordCircuitPtr noisy) {
-                const size_t count = base_batch + (batch < leftover ? 1 : 0);
+                // One execution holds every shot of a shared circuit.
+                const size_t count = shared_execution ? shots : base_batch + (batch < leftover ? 1 : 0);
                 const size_t first = batch * base_batch + std::min(batch, leftover);
-                auto execution_config = NoiseExecutionConfig(config, noise_seed, batch);
+                auto execution_config = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, batch) : NoiseExecutionConfig(config, noise_seed, batch);
                 // Frames are selected for the entire request. Terminal counts
                 // may be batched only within this realization's distribution.
                 const bool batched = count > 1;
@@ -601,6 +643,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (reference)
         std::tie(records.simulator, records.method) = std::pair{Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer};
     records.realizations = batches;
+    // Frames draw every shot themselves: the workers sized above for the realizations never ran.
+    records.realization_workers = reference || extended ? 0 : workers;
     if (return_samples)
     {
         records.components = 1;

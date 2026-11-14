@@ -206,7 +206,8 @@ class ImmediateQCSimSimulator : public ISimulator
 
     void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
     {
-        throw std::runtime_error("QCSim quantum channels require density_matrix or matrix_product_operator simulation");
+        throw std::runtime_error("This QCSim method neither holds nor samples quantum channels: use density_matrix or matrix_product_operator, "
+                                 "which apply them, or statevector or matrix_product_state, which sample them");
     }
 
     double ProbabilityBits(const std::vector<bool> &bits) override

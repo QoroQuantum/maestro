@@ -77,6 +77,9 @@ void bind_checkpoint(nb::module_ &m)
         .def(nb::init<std::shared_ptr<Circuits::Circuit<double>>, int, const SimulatorConfig &, const noise::NoiseModel *>(), nb::arg("prefix_circuit"),
              nb::arg("num_qubits"), nb::arg("config") = SimulatorConfig{}, nb::arg("prefix_noise_model").none() = nb::none(),
              "Execute prefix_circuit on num_qubits qubits (zero or less: the prefix's width) and save the state. "
+             "Only suffixes are sampled: the prefix runs without its end measurements, so a prefix that is a whole "
+             "program (as one parsed from OpenQASM) does not collapse the saved state. A measurement that later "
+             "operations of the prefix follow or read runs, and collapses once for every suffix shot. "
              "config.seed seeds the prefix and, absent a per-call seed, the suffix calls. prefix_noise_model, if given, "
              "is applied to the prefix once as exact channels; it must be deterministic there (a density-matrix or MPO "
              "backend, or the QCSim Pauli propagator for noise it applies exactly by default, without coherent or "

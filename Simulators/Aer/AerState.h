@@ -424,20 +424,31 @@ class AerState : public ISimulator
         return simulationType == SimulationType::kDensityMatrix;
     }
 
+    // Aer's statevector and matrix product state take a Kraus set as one
+    // sampled operator: each is tried with the probability the state gives
+    // it, and the one drawn is applied and the state renormalized.
+    bool SamplesQuantumChannels() const override
+    {
+        return simulationType == SimulationType::kStatevector || simulationType == SimulationType::kMatrixProductState;
+    }
+
     /**
-     * @brief Applies an exact one- or two-qubit CPTP channel to Aer density
-     * matrix state.
+     * @brief Applies a one- or two-qubit CPTP channel to an Aer state.
      *
-     * Aer's public controller does expose apply_kraus even though several of its
-     * other channel helpers are not exposed. On the density-matrix backend the
-     * Kraus operators are fused into a superoperator and applied
-     * deterministically. Statevector and MPS backends instead sample a single
-     * trajectory, so this exact mixed-state API intentionally rejects them.
+     * On the density-matrix backend the Kraus operators are fused into a
+     * superoperator and applied deterministically. The statevector and the
+     * matrix product state apply one sampled branch, a trajectory of the
+     * channel (SamplesQuantumChannels): the Pauli and unitary-mixture parts
+     * of the channel are drawn from Maestro's channel stream and applied as
+     * gates, and the parts that depend on the state go to Aer's apply_kraus,
+     * which draws from the state's own seeded stream. The other Aer methods
+     * have no Kraus instruction and reject channels.
      */
     void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
     {
-        if (!SupportsQuantumChannels())
-            throw std::runtime_error("Aer exact quantum channels require density_matrix simulation");
+        const bool sampled = SamplesQuantumChannels();
+        if (!sampled && !SupportsQuantumChannels())
+            throw std::runtime_error("Aer quantum channels require density_matrix, statevector or matrix_product_state simulation");
         if (targets.size() != channel.GetNumberOfQubits())
             throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
         if (targets.empty() || targets.size() > 2)
@@ -452,22 +463,93 @@ class AerState : public ISimulator
                 throw std::invalid_argument("Quantum-channel target qubits must be distinct");
         }
 
-        std::vector<AER::cmatrix_t> aerKrausOperators;
-        aerKrausOperators.reserve(channel.GetKrausOperators().size());
-        for (const Eigen::MatrixXcd &krausOperator : channel.GetKrausOperators())
-        {
-            AER::cmatrix_t aerOperator(static_cast<size_t>(krausOperator.rows()), static_cast<size_t>(krausOperator.cols()));
-            for (Eigen::Index row = 0; row < krausOperator.rows(); ++row)
-                for (Eigen::Index column = 0; column < krausOperator.cols(); ++column)
-                    aerOperator(static_cast<size_t>(row), static_cast<size_t>(column)) = krausOperator(row, column);
-            aerKrausOperators.emplace_back(std::move(aerOperator));
-        }
+        const auto toAer = [](const QuantumChannel::KrausOperators &operators) {
+            std::vector<AER::cmatrix_t> aerOperators;
+            aerOperators.reserve(operators.size());
+            for (const Eigen::MatrixXcd &krausOperator : operators)
+            {
+                AER::cmatrix_t aerOperator(static_cast<size_t>(krausOperator.rows()), static_cast<size_t>(krausOperator.cols()));
+                for (Eigen::Index row = 0; row < krausOperator.rows(); ++row)
+                    for (Eigen::Index column = 0; column < krausOperator.cols(); ++column)
+                        aerOperator(static_cast<size_t>(row), static_cast<size_t>(column)) = krausOperator(row, column);
+                aerOperators.emplace_back(std::move(aerOperator));
+            }
+            return aerOperators;
+        };
 
         // Both QCSim and Aer treat targets[0] as local matrix bit zero (LSB), so
         // channel target order is preserved and matrices need no permutation.
-        const AER::reg_t aerTargets(targets.begin(), targets.end());
-        state->apply_kraus(aerTargets, aerKrausOperators);
+        if (!sampled)
+        {
+            state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            NotifyObservers(targets);
+            return;
+        }
+        for (const auto &factor : channel.GetFactors())
+        {
+            Types::qubits_vector qubits;
+            for (const size_t local : factor.qubits)
+                qubits.push_back(targets[local]);
+            if (factor.kind == QuantumChannel::FactorKind::kPauli)
+            {
+                const size_t index = DrawChannelBranch(factor.probabilities, ChannelUniform());
+                for (size_t k = 0; k < qubits.size(); ++k)
+                    switch ((index >> (2 * k)) & 3)
+                    {
+                    case 1:
+                        ApplyX(qubits[k]);
+                        break;
+                    case 2:
+                        ApplyY(qubits[k]);
+                        break;
+                    case 3:
+                        ApplyZ(qubits[k]);
+                        break;
+                    default:
+                        break;
+                    }
+            }
+            else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
+            {
+                const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
+                if (qubits.size() == 1)
+                    ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                else
+                    ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+            }
+            else
+            {
+                QuantumChannel::ThermalMixture mixture;
+                if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
+                {
+                    state->apply_kraus(AER::reg_t(qubits.begin(), qubits.end()), toAer(factor.operators));
+                    continue;
+                }
+                // A relaxation with T2 <= T1: nothing, a phase flip, or a reset, which alone reads the state.
+                const double random = ChannelUniform();
+                if (random >= mixture.identity + mixture.phaseFlip)
+                    state->apply_kraus(AER::reg_t(qubits.begin(), qubits.end()), toAer(QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation)));
+                else if (random >= mixture.identity)
+                    ApplyZ(qubits[0]);
+            }
+        }
         NotifyObservers(targets);
+    }
+
+    static size_t DrawChannelBranch(const std::vector<double> &probabilities, double random)
+    {
+        size_t chosen = 0;
+        double accumulated = 0.;
+        for (size_t index = 0; index < probabilities.size(); ++index)
+        {
+            if (probabilities[index] <= 0.)
+                continue;
+            chosen = index; // also the fallback if rounding leaves the draw above the last sum
+            accumulated += probabilities[index];
+            if (random < accumulated)
+                break;
+        }
+        return chosen;
     }
 
     /**

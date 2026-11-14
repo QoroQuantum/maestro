@@ -49,6 +49,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const 
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
                        MaestroExecution::EstimationCache *cache = nullptr);
 std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
+std::vector<double> probabilities_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
 nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude,
                                 const std::optional<nb::object> &observables = std::nullopt);
 std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,

@@ -174,9 +174,19 @@ Mask TracePauliOperation(const std::shared_ptr<Circuits::IOperation<double>> &op
         keep |= x[q] | z[q];
     // A Pauli channel is diagonal in the Pauli basis: it scales an observable
     // without changing its axes or spreading it to the channel's other qubit.
-    if (op->GetType() == Circuits::OperationType::kQuantumChannel &&
-        !std::static_pointer_cast<Circuits::QuantumChannelOperation<double>>(op)->GetChannel().GetPauliProbabilities().empty())
-        return keep;
+    // So is a relaxation (amplitude damping, thermal relaxation), except that
+    // it also sends part of Z to the identity, which ends that part's cone.
+    if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+    {
+        const auto &channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<double>>(op)->GetChannel();
+        if (!channel.GetPauliProbabilities().empty())
+            return keep;
+        const auto &factors = channel.GetFactors();
+        if (std::all_of(factors.begin(), factors.end(), [](const auto &factor) {
+                return factor.kind == Simulators::QuantumChannel::FactorKind::kPauli || factor.kind == Simulators::QuantumChannel::FactorKind::kThermal;
+            }))
+            return keep;
+    }
     for (auto q : qs)
     {
         if (marginalize_resets && op->GetType() == Circuits::OperationType::kReset)

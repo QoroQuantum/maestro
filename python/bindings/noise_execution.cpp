@@ -18,9 +18,17 @@ void warn_thermal_approximation(const noise::NoiseModel &noise_model, bool exact
         throw nb::python_error();
 }
 
+// Realizations keep their channels for a backend that samples them from its
+// state: nothing is approximated there, so nothing is said (the form of
+// ThermalApproximationWarning that takes the configuration).
 void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config, const CircuitPtr &circuit)
 {
-    warn_thermal_approximation(noise_model, MaestroExecution::InjectsExactChannels(config, noise_model, *circuit), circuit);
+    const bool exact = MaestroExecution::InjectsExactChannels(config, noise_model, *circuit);
+    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, config, exact, *circuit);
+    if (message.empty())
+        return;
+    if (PyErr_WarnEx(PyExc_RuntimeWarning, message.c_str(), 1) < 0)
+        throw nb::python_error();
 }
 
 // One realization drawn from the plan, with this configuration's channel rule.
@@ -101,6 +109,8 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     out["simulator"] = records.simulator;
     out["method"] = records.method;
     out["noise_realizations"] = records.realizations;
+    if (records.realization_workers)
+        out["realization_workers"] = records.realization_workers;
     AddNoisePolicyMetadata(out, records.policy);
     out["sampling_components"] = records.components;
     out["largest_component_qubits"] = records.largest_component;
@@ -139,6 +149,8 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     if (result.ideal.simulator == Simulators::SimulatorType::kGpuSim || result.ideal.gpu_device >= 0)
         out["gpu_device"] = result.ideal.gpu_device;
     out["noise_realizations"] = result.realizations;
+    if (result.realization_workers)
+        out["realization_workers"] = result.realization_workers;
     AddNoisePolicyMetadata(out, result.policy);
     const bool stochastic = result.policy.stochastic_noise || result.policy.stochastic_execution;
     out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
@@ -304,7 +316,7 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
         nb::gil_scoped_release release;
         result = MaestroExecution::NoisyFidelity(circuit, noise_model, requested_realizations(noise_realizations), config, noise_seed);
     }
-    if (listed)
+    if (listed && !result.policy.runtime_channels)
         warn_thermal_approximation(noise_model, result.policy.exact_channels, circuit);
     nb::dict out;
     out["fidelity"] = result.fidelity;
@@ -313,6 +325,7 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
     out["std_error"] = stochastic && result.realizations < 2 ? nb::object(nb::none()) : nb::cast(result.std_error);
     out["time_taken"] = result.time_taken;
     out["noise_realizations"] = result.realizations;
+    out["realization_workers"] = result.realization_workers;
     AddNoisePolicyMetadata(out, result.policy);
     out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
     return out;

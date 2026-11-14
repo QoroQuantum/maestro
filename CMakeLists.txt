@@ -164,7 +164,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG f85a46f779239f7cba6c04ea033c678699246c97
+            GIT_TAG b3c89452f48e644f62eed0b0c3421368cb2de7a3
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -471,6 +471,19 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
 endif()
 if(NOT MAESTRO_SOURCE_REVISION)
     set(MAESTRO_SOURCE_REVISION "unknown")
+endif()
+# The QCSim sources the build uses: the checkout fetched at the pinned commit, or the directory given. Reported
+# only when their headers are tracked by the repository they sit in, not when they are merely unpacked inside
+# another one. Like the revision above, captured when CMake configures.
+execute_process(COMMAND git ls-files --error-unmatch QubitRegister.h
+    WORKING_DIRECTORY "${QCSIM_INCLUDE_DIR}" RESULT_VARIABLE MAESTRO_QCSIM_UNTRACKED OUTPUT_QUIET ERROR_QUIET)
+if(MAESTRO_QCSIM_UNTRACKED EQUAL 0)
+    execute_process(COMMAND git describe --always --dirty --exclude "*"
+        WORKING_DIRECTORY "${QCSIM_INCLUDE_DIR}"
+        OUTPUT_VARIABLE MAESTRO_QCSIM_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+endif()
+if(NOT MAESTRO_QCSIM_REVISION)
+    set(MAESTRO_QCSIM_REVISION "unknown")
 endif()
 configure_file(cmake/MaestroBuildInfo.h.in generated/MaestroBuildInfo.h @ONLY)
 target_include_directories(maestro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} "${CMAKE_CURRENT_BINARY_DIR}/generated")

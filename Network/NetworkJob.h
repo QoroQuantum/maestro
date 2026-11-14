@@ -17,6 +17,7 @@
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "../Utils/Threads/ThreadsPool.h"
 
+#include "../Circuit/ChainOrder.h"
 #include "../Simulators/Core/RandomSeed.h"
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
@@ -640,6 +641,7 @@ template <typename Time = Types::time_type> class ExecuteJob
             // an MPO site carries a two-qubit (operator) physical index, so its
             // bonds grow like those of an MPS twice as long
             const size_t routedQubits = sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator ? 2 * nrQubits : nrQubits;
+            bool planned = false;
             if (network->GetMPSOptimizationQubitsNumberThreshold() <= routedQubits)
             {
                 const auto bondDimThreshold = network->GetMPSOptimizationBondDimensionThreshold();
@@ -650,12 +652,18 @@ template <typename Time = Types::time_type> class ExecuteJob
 
                 if (maxBondDimValue == 0 || static_cast<int>(bondDimThreshold) <= maxBondDimValue)
                 {
+                    planned = true;
                     // need to be sure the circuit is correctly converted
                     dcirc->ConvertForCutting(); // convert the three qubit gates
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
                     // Finalize source ordering before preparing fusion. Routing layers
                     // are only a cost model and must never replace executable operations.
                     auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                    // As in the network's copy of this function: qubits that form lines out of index
+                    // order are placed along them, which needs no swap (Circuits::ChainLine).
+                    const std::vector<long long int> line = network->GetInitialQubitsMapOptimization()
+                                                                ? Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits())
+                                                                : std::vector<long long int>();
                     dcirc->SetOperations(ordered->GetOperations());
                     sim->SetUpcomingGates(dcirc->GetOperations());
                     if (sim->IsGateFusionEnabled() && !sim->GetUpcomingRoutingOperations().empty())
@@ -683,7 +691,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
                     if (network->GetInitialQubitsMapOptimization())
                     {
-                        const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+                        const auto optimalMap = line.empty() ? dummySim.ComputeOptimalQubitsMap(layers) : line;
                         sim->SetInitialQubitsMap(optimalMap);
                     }
 
@@ -742,6 +750,14 @@ template <typename Time = Types::time_type> class ExecuteJob
                             sim->SetUpcomingGates(dcirc->GetOperations());
                     }
                 }
+            }
+            // As in the network's copy: a register of that size whose bond limit is below the one a
+            // layout is planned for still gets the qubits of lines out of index order placed along them.
+            if (!planned && network->GetInitialQubitsMapOptimization() && network->GetMPSOptimizationQubitsNumberThreshold() <= routedQubits)
+            {
+                const auto line = Circuits::ChainLine(dcirc, nrQubits, sim->SwapGatesRelabelQubits());
+                if (!line.empty())
+                    sim->SetInitialQubitsMap(line);
             }
         }
     }

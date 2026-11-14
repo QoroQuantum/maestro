@@ -11,11 +11,14 @@
 
 namespace MaestroExecution
 {
-PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubits, const SimulatorConfig &config, const noise::NoiseModel *prefix_noise)
+PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits, const SimulatorConfig &config, const noise::NoiseModel *prefix_noise)
     : num_qubits_(std::max(1, num_qubits)), config_(config)
 {
-    if (prefix && num_qubits <= 0)
-        num_qubits_ = std::max(1, static_cast<int>(prefix->GetMaxQubitIndex()) + 1);
+    // The width is that of the circuit as given: a qubit it only measures counts.
+    if (given && num_qubits <= 0)
+        num_qubits_ = std::max(1, static_cast<int>(given->GetMaxQubitIndex()) + 1);
+    // What runs is the prefix without its end measurements (ExecutedCheckpointPrefix).
+    const RecordCircuitPtr prefix = ExecutedCheckpointPrefix(given);
     // The simulator is created explicitly below: resolve a candidate list to the
     // one backend it creates, so suffix noise policy and metadata describe it.
     // Probing several candidates already configures the network built below,
@@ -36,6 +39,12 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
 
     config_.seed = EffectiveSamplingSeed(config_);
     config_.native_options.erase("seed");
+    // The prefix runs once: noise in it has to be deterministic, as for
+    // prefix_noise below. A backend that samples channels from its state takes
+    // only its channels with one branch (SampledPrefixRefusal).
+    if (prefix)
+        if (const char *refusal = SampledPrefixRefusal(*prefix, config_))
+            throw std::invalid_argument(refusal);
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
@@ -50,7 +59,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
                                         "Pauli propagator, without coherent or correlated noise");
         std::optional<uint64_t> seed = 0; // no sampled layer reads it
         auto rng = MakeNoiseRng(config_, seed);
-        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise);
+        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise, false, OrdersForChain(config_, true));
         executed_prefix = InjectPlanned(NoiseLayer::kCombined, plan, rng, true);
         // As for suffixes: crosstalk spectators beyond a prefix that fits the
         // register stay in |0>, where their rotations are a global phase.
@@ -93,9 +102,9 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
         simulator_->SaveState();
-        // A prefix with measurements or resets collapsed once here, so every
-        // suffix shot shares that branch: frames, which branch per shot, then
-        // keep away. The extended stabilizer has no prefix noise (it needs
+        // A prefix with resets, or with measurements other than its end ones,
+        // collapsed once here, so every suffix shot shares that branch: frames,
+        // which branch per shot, then keep away. The extended stabilizer has no prefix noise (it needs
         // exact channels).
         frame_prefix_usable_ = config_.simulator_type == Simulators::SimulatorType::kQCSim &&
                                config_.simulation_type == Simulators::SimulationType::kExtendedStabilizer && executed_prefix == prefix &&
@@ -126,8 +135,8 @@ bool PrefixCheckpoint::HasNoise(const RecordCircuitPtr &suffix, const noise::Noi
     if (noise_model && noise_model->has_any())
         return true;
     // Circuit-level channels, including nested ones, need per-realization
-    // injection like a model does.
-    return suffix && suffix->HasQuantumChannels();
+    // injection like a model does, except those with one branch only, which are gates.
+    return suffix && suffix->HasDrawnChannels();
 }
 
 ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
@@ -308,7 +317,9 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // An unseeded call must not copy the same measurement RNG into
         // multiple workers. This stream is separate from noise injection.
         const uint64_t unseeded_measurements = noise_seed ? 0 : Utils::RandomStream::FreshSeed();
-        const noise::NoiseInjectionPlan plan(suffix, *noise_model);
+        // On a backend that samples channels from its state the realizations
+        // keep the channels no draw replaces: each shot draws their branches.
+        const noise::NoiseInjectionPlan plan(suffix, *noise_model, policy.runtime_channels, policy.chain_order);
         const bool exact = policy.exact_channels;
         // The checkpoint register is fixed. Crosstalk spectators beyond a
         // suffix that fits it stay in |0>, where their rotations are a global

@@ -24,6 +24,10 @@ int maestro_request_c_header_test(void)
         MaestroApplyOperator(0, 0, 0, 0, 0) || MaestroMoveAtBeginningOfChain(0, 0, 0) || MaestroSampleCountsBits(0, 0, 0, 0, 0, 0, 0, 0) ||
         MaestroMeasureBits(0, 0, 0, 0))
         return 0;
+    /* Channels on a simulator handle. */
+    if (MaestroApplyKrausChannel(0, 0, 0, 0, 0) || MaestroSupportsQuantumChannels(0) || MaestroSamplesQuantumChannels(0) ||
+        MaestroGetTrajectoryBlockStatistics(0, 0, 0))
+        return 0;
     /* Packed shot rows and reference frame sampler handles. */
     if (MaestroCreateReferenceFrameSampler(0, 0) || MaestroReferenceFrameSamplerShape(0, 0, 0) || MaestroReferenceFrameSampleBits(0, 0, 0, 0, 0) ||
         MaestroReferenceFrameSampleCountsBits(0, 0, 0, 0, 0, 0, 0))

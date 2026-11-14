@@ -226,6 +226,124 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         NotifyObservers(qubits);
     }
 
+    // A matrix product state holds no ensemble: it takes a channel as one
+    // sampled branch, a trajectory of the channel.
+    bool SamplesQuantumChannels() const override
+    {
+        return true;
+    }
+
+    /**
+     * @brief Applies one sampled branch of a one- or two-qubit channel.
+     *
+     * The Pauli and unitary-mixture parts of the channel are drawn without the
+     * state and applied as gates. A relaxation with T2 <= T1 is drawn as the
+     * mixture it is: nothing, a phase flip, or a reset. Every other part is a
+     * Kraus set whose operator is drawn from the reduced density matrix of its
+     * one or two qubits and applied to those sites alone: the chain keeps
+     * explicit environments from then on instead of being swept back into its
+     * canonical form (QC::TensorNetworks::MPSSimulatorImpl::ApplyKrausOperator).
+     * Draws come from the channel stream (ChannelUniform), which SetSeed seeds.
+     */
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        if (targets.size() != channel.GetNumberOfQubits())
+            throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
+        if (targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("Quantum-channel target qubits must be one or two distinct qubits");
+        for (const Types::qubit_t target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Quantum-channel qubit is out of range");
+        if (!mpsSimulator)
+            throw std::runtime_error("QCSim MPS state is not initialized");
+        const auto &factors = channel.GetFactors();
+
+        DontNotify();
+        try
+        {
+            for (const auto &factor : factors)
+            {
+                const Types::qubit_t first = targets[factor.qubits[0]];
+                if (factor.kind == QuantumChannel::FactorKind::kPauli)
+                {
+                    const size_t index = DrawChannelBranch(factor.probabilities, ChannelUniform());
+                    for (size_t k = 0; k < factor.qubits.size(); ++k)
+                    {
+                        const Types::qubit_t qubit = targets[factor.qubits[k]];
+                        switch ((index >> (2 * k)) & 3)
+                        {
+                        case 1:
+                            ApplyX(qubit);
+                            break;
+                        case 2:
+                            ApplyY(qubit);
+                            break;
+                        case 3:
+                            ApplyZ(qubit);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+                else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
+                {
+                    const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
+                    if (factor.qubits.size() == 1)
+                        ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    else
+                        ApplyGenericTwoQubitGate(first, targets[factor.qubits[1]], Eigen::Matrix4cd(unitary));
+                }
+                else
+                {
+                    double random = ChannelUniform();
+                    QuantumChannel::ThermalMixture mixture;
+                    if (factor.qubits.size() == 2)
+                    {
+                        // Two sites: the chain brings them together first, as for a gate.
+                        const Types::qubit_t second = targets[factor.qubits[1]];
+                        mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first), static_cast<Eigen::Index>(second));
+                        RecordExecutedTwoQubitGate(first, second, false, 4.);
+                    }
+                    else if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
+                        mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first));
+                    else if (random >= mixture.identity + mixture.phaseFlip)
+                    {
+                        // Only the reset reads the state: its outcome takes what is left of the draw.
+                        random = std::min((random - mixture.identity - mixture.phaseFlip) / mixture.reset, std::nextafter(1.0, 0.0));
+                        mpsSimulator->ApplyKrausOperator(QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation), random,
+                                                         static_cast<Eigen::Index>(first));
+                    }
+                    else if (random >= mixture.identity)
+                        ApplyZ(first);
+                }
+            }
+        }
+        catch (...)
+        {
+            Notify();
+            throw;
+        }
+        Notify();
+        NotifyObservers(targets);
+    }
+
+    static size_t DrawChannelBranch(const std::vector<double> &probabilities, double random)
+    {
+        size_t chosen = 0;
+        double accumulated = 0.;
+        for (size_t index = 0; index < probabilities.size(); ++index)
+        {
+            if (probabilities[index] <= 0.)
+                continue;
+            chosen = index; // also the fallback if rounding leaves the draw above the last sum
+            accumulated += probabilities[index];
+            if (random < accumulated)
+                break;
+        }
+        return chosen;
+    }
+
     void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override
     {
         if (!mpsSimulator)

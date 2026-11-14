@@ -7,6 +7,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `execution_metadata.realization_workers` is also reported for shot rows
+  that realization workers drew. Noisy `estimate` and `noisy_fidelity`
+  requests, which run their realizations one after another, report 1. The
+  Python noisy execute, estimate and fidelity functions report the number as
+  `realization_workers` in their result.
+- `maestro.build_info()` returns the identity of the build: `version`,
+  `source_revision` and `qcsim_revision`, the Git revision of the QCSim
+  sources it was compiled against. `maestro.__version__` is the version. The
+  native capabilities report the QCSim revision as `build.qcsim_revision`.
+- Noise channels on pure states, sampled from the state. The QCSim and Qiskit
+  Aer `statevector` and `matrix_product_state` and the composite statevector
+  take a channel as one sampled branch, a quantum trajectory: each time the
+  circuit runs, a channel applies one of its Kraus operators with the
+  probability the state gives it, on the circuit's own qubits. Amplitude
+  damping (`set_t1`), generalized amplitude damping, thermal and idle
+  relaxation with T2 > T1, correlated phase flips and Kraus channels therefore
+  run as they are on these methods, where trajectories approximated them (T1
+  as a reset, T2 clamped to T1) or the call was rejected. This holds in
+  `execute`, `estimate`, the noisy execute and estimate functions,
+  `noisy_fidelity`, checkpoint suffixes and native requests. With such noise
+  every shot is a realization of its own: results report the shot count as the
+  number of realizations, and the noise seed and the simulator seed together
+  determine the draws, so either alone changes them. A noise layer drawn per
+  realization beside the channels (coherent signs, OU or 1/f disturbances)
+  keeps the realization schedule, and the two seeds together determine the
+  branches there as well. The C++ `NoiseAdd` follows the same rule: its
+  `seed` joins a seed configured on the network for those branches, where the
+  configured seed alone decided them. On a 24-core desktop with
+  a device-like noise model, these trajectories ran 1.6 to 5.3 times as fast as
+  Qiskit Aer's on the statevector at 8 to 20 qubits, and took 0.25 s, 2.6 s and
+  18.6 s on the matrix product state at 8, 12 and 16 qubits (bond limit 64, 200
+  shots) where Aer took 2.5 s, 25 s and 320 s.
+- `maestro.QuantumChannel` describes one channel on one or two qubits (in C++,
+  `Simulators::QuantumChannel`). Factories: `pauli`, `depolarizing`,
+  `amplitude_damping`, `phase_damping`, `generalized_amplitude_damping`,
+  `thermal_relaxation`, `unitary_mixture`, `from_kraus`, `on_qubit` and
+  `placed`. `then` composes channels and keeps their parts (`factors`), so a
+  trajectory draws a Pauli or unitary-mixture part without reading its state.
+  `kraus_operators`, `superoperator`, `choi`, `is_state_independent`,
+  `is_deterministic` and `is_approx` describe a channel.
+  `QuantumCircuit.channel(qubits, channel)` places it in a circuit, which
+  shares the object with every instruction that uses it.
+- Native requests accept a `channel` circuit instruction: a structured channel
+  given by its `factors` (`pauli`, `unitary_mixture`, `kraus`, `depolarizing`,
+  `amplitude_damping`, `phase_damping`, `generalized_amplitude_damping`,
+  `thermal_relaxation`), the request form of `QuantumChannel`. The
+  capabilities list the instruction and its `channel_factors`.
+- Simulator handles apply a channel directly: `ApplyQuantumChannel` (also
+  `apply_channel`) in Python and `MaestroApplyKrausChannel` in the C ABI.
+  `SupportsQuantumChannels` says whether the simulator applies it exactly and
+  `SamplesQuantumChannels` whether it applies one sampled branch
+  (`MaestroSupportsQuantumChannels`, `MaestroSamplesQuantumChannels`).
+  `MaestroGetTrajectoryBlockStatistics` reports how many fused blocks of
+  sampled channels a statevector applied before reading its state.
+
+### Changed
+
+- The density matrix and the MPO apply a channel as one superoperator in one
+  pass, and with gate fusion a channel and the gates around it on up to two
+  qubits become one superoperator. A 12-qubit density-matrix run with a
+  device-like noise model (1,000 shots, 24-core desktop) took 3.6 s, against
+  5.4 s for Qiskit Aer.
+- With gate fusion, the statevector resolves a block of gates and sampled
+  channels on up to three qubits from one read of their reduced density matrix
+  and applies it as one matrix. Where the channels of a block most probably do
+  nothing, the block is applied first and the state is read only when
+  something happened.
+- After an operator that is not unitary, the QCSim matrix product state keeps
+  the environments of its bonds instead of being swept back into canonical
+  form, so a channel costs a few matrix products. Two-qubit Kraus channels act
+  on any pair of qubits.
+- On the QCSim `matrix_product_state` and `matrix_product_operator`, a circuit
+  whose two-qubit gates and channels all act on neighbouring qubits runs in an
+  order that stays close along the chain once a channel has acted. It is the
+  same circuit; on the matrix product state a seeded trajectory depends on
+  that order. A circuit laid out on a line whose qubit indices are not in
+  order, such as a line of a device, is placed along that line without swaps
+  (from 12 qubits on the state and 6 on the operator).
+- The pure-state methods that neither hold nor sample channels (tensor
+  network, path integral, stabilizer, extended stabilizer, and the GPU and
+  QuEST backends) draw, in a noise realization, every channel whose branches
+  need no state: Pauli channels, one-qubit mixtures of unitaries and
+  relaxation with T2 <= T1, also as circuit instructions. They still
+  approximate `set_t1` and relaxation with T2 > T1, and reject generalized
+  amplitude damping, correlated phase flips and Kraus channels.
+- A channel with one branch only, a unitary (`QuantumChannel.is_deterministic`),
+  is a gate: nothing is drawn for it, and a circuit whose channels are all of
+  that kind evolves once for all its shots. A damping of zero
+  (`amplitude_damping(0)`, `generalized_amplitude_damping(0, p)`) is one: it
+  is the identity, and a Kraus operator that is zero is no branch.
+- Channel instructions run on `statevector` and `matrix_product_state` in a
+  plain `execute` or `estimate`, with or without a noise model. A query of one
+  state (`get_statevector`, `get_probabilities`, and the native `statevector`,
+  `amplitudes`, `probabilities` and `state_probability` requests) returns the
+  state of one branch and reports `stochastic_execution`.
+- `noisy_fidelity` accepts channel instructions in its circuit, as noise the
+  ideal circuit does not have, and a reset before any other operation on its
+  qubit.
+- A checkpoint prefix that holds channel instructions with a branch to draw
+  raises `ValueError` on a method that samples channels, since every suffix
+  shot would share the one branch drawn: put those channels in the suffixes. A
+  channel with one branch is a gate and may stay in the prefix.
+- A checkpoint prefix follows one set of rules in `PrefixCheckpointedSimulator`
+  and in `checkpoint_batch` requests. A request's prefix took gates only
+  (`checkpoint_batch prefix requires a unitary circuit`); it now takes resets,
+  channel instructions (by the rule above) and measurements that later
+  operations of the prefix follow or read, which run once. The end measurements
+  of a prefix are removed in both, since only suffixes are sampled: a prefix
+  that is a whole program, as one parsed from OpenQASM is, no longer collapses
+  the saved state in `PrefixCheckpointedSimulator`, where it did once for every
+  suffix shot. Plain execution keeps its measurements.
+- `noisy_execute` warns that T2 is clamped to T1 only for qubits whose
+  relaxation the circuit draws.
+- Seeded noisy results on the statevector, the matrix product state and the
+  composite statevector differ from 0.3.14, since the noise is drawn in
+  another way.
+
+### Fixed
+
+- `get_probabilities` answers on every simulation type. It squared the
+  statevector, so it raised where a state has none to read: a density matrix,
+  a matrix product operator, a tensor network, the Pauli propagator and the
+  extended stabilizer, on all of which a native `probabilities` request
+  answers. On the mixed-state methods it returns the distribution of the
+  state that channel instructions leave. Python and the request now read the
+  probabilities through one function (`Simulators::BasisProbabilities`;
+  Python reaches it through the new `INetwork::ExecuteOnHostProbabilities`),
+  and neither runs the circuit's end measurements. A measured qubit that
+  nothing executed acts on (only those measurements use it, or its gates
+  cancel) keeps its place in the result, in |0>.
+- With sampled noise on a method that samples no channels (tensor network,
+  path integral, stabilizer and the like), a one-qubit mixture of unitaries
+  among the circuit's channel instructions was counted as drawn from the
+  state while the circuit runs. It is drawn into a gate when the realization
+  is built, as a Pauli channel is, and counts as one now: `execute`,
+  `estimate` and checkpoint suffixes no longer report `stochastic_execution`
+  for it, in Python and in requests, and on the path integral its realizations
+  are scheduled as the prepared states they are. A relaxation still counts,
+  since it may be drawn into a reset, which reads the state.
+- A `checkpoint_batch` suffix without a noise block reported
+  `stochastic_execution: false` for a Pauli channel instruction on a method
+  that samples channels, although each shot draws it: nothing is injected
+  without noise, so the suffix runs as it is. It reports `true` now.
+- On a matrix product state without a bond limit, `noisy_execute`,
+  `full_noise_execute` and requests that return samples ran the shots of a
+  noisy circuit one after another when the backend draws all the noise while
+  the circuit runs (channel instructions): realization workers are budgeted
+  by the size of a state, and that state has none. Every shot runs the same
+  circuit there, so the network now executes it once for all the shots, on
+  its shot workers, as a request's counts and `NoiseAdd` already did: 8 to
+  17 times as fast on 12 and 14 qubits. Seeded results of those calls differ
+  from before. With a bond limit nothing changes.
+
+
 ## [0.3.14] - 2026-11-11
 
 ### Added

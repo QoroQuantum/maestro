@@ -465,6 +465,34 @@ extern "C"
     __declspec(dllexport)
 #endif
         int MaestroApplyOperator(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, int normalize);
+// A channel on one or two qubits, given by `operators` Kraus matrices of
+// 2^count x 2^count entries each, one after another in `interleaved`
+// (row-major, interleaved real/imaginary doubles; the first target is the
+// least-significant local matrix bit). A simulator that holds the ensemble
+// (MaestroSupportsQuantumChannels) applies the channel exactly; one that
+// samples channels (MaestroSamplesQuantumChannels) applies one branch drawn
+// from its state. Returns 0 when the operators are not a channel or the
+// simulator applies none. For a channel that keeps its parts (a Pauli mixture
+// followed by relaxation, say), use a `channel` instruction of a native request.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroApplyKrausChannel(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, size_t operators);
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroSupportsQuantumChannels(void *sim);
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroSamplesQuantumChannels(void *sim);
+// Trajectory blocks of the fusion layer: those applied before the state was
+// read, and of those the ones read after all. Counted since the statistics
+// were last reset, as GetGateFusionStatistics counts.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroGetTrajectoryBlockStatistics(void *sim, uint64_t *unreadBlocks, uint64_t *rereadBlocks);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif

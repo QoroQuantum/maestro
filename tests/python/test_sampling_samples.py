@@ -366,7 +366,7 @@ def test_raw_exact_channels_keep_the_ensemble_with_one_realization(method):
 
 
 @pytest.mark.parametrize("return_samples", [False, True])
-def test_general_kraus_noise_still_requires_an_exact_backend(return_samples):
+def test_general_kraus_noise_needs_a_backend_that_holds_or_samples_channels(return_samples):
     circuit = QuantumCircuit()
     circuit.x(0)
     circuit.measure_all()
@@ -375,10 +375,16 @@ def test_general_kraus_noise_still_requires_an_exact_backend(return_samples):
         [[1.0, 0.0], [0.0, math.sqrt(0.6)]],
         [[0.0, math.sqrt(0.4)], [0.0, 0.0]],
     ])
-    for method in [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector]:
+    for method in [maestro.SimulationType.Stabilizer, maestro.SimulationType.TensorNetwork]:
         with pytest.raises(ValueError, match="density-matrix|MPO"):
             circuit.full_noise_execute(model, config=_config(method), shots=17,
                                        noise_realizations=17, return_samples=return_samples)
+    # The statevector and the matrix product state sample the map from their state: |1> decays with probability 0.4.
+    for method in [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState]:
+        result = circuit.full_noise_execute(model, config=_config(method), shots=4000,
+                                            noise_realizations=4000, noise_seed=23, return_samples=return_samples)
+        ones = result["samples"][:, 0].mean() if return_samples else result["counts"].get("1", 0) / 4000
+        assert ones == pytest.approx(0.6, abs=0.04), method
 
 
 @pytest.mark.parametrize("method", METHODS)

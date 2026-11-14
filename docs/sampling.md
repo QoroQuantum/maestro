@@ -108,7 +108,8 @@ still fall back. Noisy count calls also require one independent realization
 per shot. Shared-noise realizations, coherent or unsupported operations,
 incompatible fixed backends, and sampling-reduction requests keep their
 ordinary execution path, as does thermal noise in the T1 < T2 <= 2 T1 window,
-which trajectories clamp to T1. As on trajectories, the noise seed drives the
+which the trajectories of the stabilizer methods clamp to T1 (the statevector
+and the matrix product state sample that channel as it is). As on trajectories, the noise seed drives the
 circuit errors and the measurement seed the outcomes and readout, so either can
 change alone. Non-Clifford circuits never use frames. A request for `frame_v1` never approximates an
 unsupported channel or coherent rotation as Pauli noise. Calls that use frames
@@ -248,9 +249,13 @@ frame optimization is limited to supported local single-host execution. Their
 frames keep the trajectories' rules: the object's noise stream drives circuit
 errors and the simulator seed the measurements and readout, so either can change
 alone, and thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories
-clamp, keeps the trajectories. These objects advance their RNG streams between
+of the methods that do not sample channels clamp, keeps the trajectories. These objects advance their RNG streams between
 calls; reseed the object and replay the same call sequence to reproduce an
-earlier run.
+earlier run. Where a backend draws channel branches as the circuit runs
+(damping on a statevector or a matrix product state), injection leaves the
+object's seed nothing to drive for them: `NoiseAdd::seed` then joins a seed
+configured on the network, so that either seed alone still changes the errors
+drawn, as `noise_seed` and the simulator seed do in Python and in requests.
 
 ## Python shot matrices and noisy Clifford sampling
 
@@ -419,8 +424,8 @@ includes relaxation that `noisy_execute` realizes as a reset shared within each
 realization (T1, or thermal or idle relaxation with a finite T1, on a qubit the
 circuit gates or delays), it accepts only one realization per shot (`ValueError`
 otherwise). Both compiled samplers apply the exact channels: in the
-T1 < T2 <= 2 T1 window, where `noisy_execute` clamps T2 to T1 and warns, they
-keep T2. Every shot draws from streams of its own, and a measurement draws the
+T1 < T2 <= 2 T1 window, where `noisy_execute` on the stabilizer methods clamps
+T2 to T1 and warns, they keep T2. Every shot draws from streams of its own, and a measurement draws the
 shot's physical outcome, so equal seeds give equal rows whatever the batch, the
 worker count or `trajectory_max_memory_mb`. That budget is soft, as for
 `noisy_execute`: a shot that alone exceeds it runs by itself beyond it, with the

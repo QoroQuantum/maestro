@@ -12,6 +12,10 @@
 #define MAESTRO_BUILD_VERSION "unknown"
 #define MAESTRO_SOURCE_REVISION "unknown"
 #endif
+// Also for a build tree whose generated header predates this entry.
+#ifndef MAESTRO_QCSIM_REVISION
+#define MAESTRO_QCSIM_REVISION "unknown"
+#endif
 
 namespace MaestroExecution
 {
@@ -183,17 +187,28 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
              {"ch", 0}, {"csx", 0}, {"csxdg", 0}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"cu", 4}, {"rxx", 1},  {"rzz", 1}, {"cswap", 0}, {"ccx", 0}})
         gates.emplace_back(json::object{{"name", name}, {"params", count}});
     const json::object instructions{{"gates", std::move(gates)},
-                                    {"operations", json::array{"measure", "reset", "delay", "kraus", "pauli_channel"}},
+                                    {"operations", json::array{"measure", "reset", "delay", "kraus", "pauli_channel", "channel"}},
                                     {"fields", json::object{{"conditional_reg", json::array{"gates"}},
                                                             {"noiseless", json::array{"gates"}},
                                                             {"readout_error", json::array{"measure"}},
                                                             {"clbits", json::array{"measure"}},
                                                             {"duration", json::array{"delay"}},
                                                             {"operators", json::array{"kraus"}},
-                                                            {"probabilities", json::array{"pauli_channel"}}}},
+                                                            {"probabilities", json::array{"pauli_channel"}},
+                                                            {"factors", json::array{"channel"}}}},
+                                    {"channel_factors", json::object{{"pauli", "probabilities"},
+                                                                     {"unitary_mixture", "probabilities unitaries"},
+                                                                     {"kraus", "operators"},
+                                                                     {"depolarizing", "probability"},
+                                                                     {"amplitude_damping", "gamma"},
+                                                                     {"phase_damping", "gamma"},
+                                                                     {"generalized_amplitude_damping", "gamma excited_population"},
+                                                                     {"thermal_relaxation", "duration t1 t2 excited_population"}}},
                                     {"channel_evaluation",
-                                     "Mixed-state methods apply kraus and pauli_channel exactly; pure-state methods sample pauli_channel per noise "
-                                     "realization and need a trajectory noise block, whose channels may then be omitted"}};
+                                     "Mixed-state methods and the qcsim pauli_propagator apply kraus, pauli_channel and channel instructions exactly; "
+                                     "statevector and matrix_product_state sample them from their state, one branch each time the circuit runs; the "
+                                     "other pure-state methods draw them per noise realization, need a trajectory noise block (whose channels may then "
+                                     "be omitted) and take only factors whose branches need no state"}};
     const json::object adjoint{
         {"operations", json::array{"adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
         {"supported_configurations",
@@ -222,7 +237,8 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
                                         {"sampled_estimate", 100},
                                         {"sampled_noisy_fidelity", 100},
                                         {"rule", "one realization when exact channels need no sampled disturbance (coherent, correlated) and, for "
-                                                 "estimates, the circuit records no branch; explicit counts are honored, capped to shots for execution"}}}}},
+                                                 "estimates, the circuit records no branch; explicit counts are honored, capped to shots for execution; "
+                                                 "when the backend samples every noise term from its state, execution runs each shot as a realization"}}}}},
         {"metadata", json::array{"mode", "evaluation", "seed", "realizations", "requested_realizations", "realizations_policy", "stochastic_noise",
                                  "stochastic_execution", "approximations"}},
         {"checkpoint_prefix", json::object{{"field", "prefix"},
@@ -256,7 +272,10 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"automatic_selection", automaticSelection},
             {"sampling_strategies", json::array{"reference_frame_v1", "extended_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
             {"api", "maestro.native.request"},
-            {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
+            {"build", json::object{{"version", MAESTRO_BUILD_VERSION},
+                                   {"source_revision", MAESTRO_SOURCE_REVISION},
+                                   // Empty where another build system fills the header without this entry.
+                                   {"qcsim_revision", MAESTRO_QCSIM_REVISION[0] ? MAESTRO_QCSIM_REVISION : "unknown"}}},
             {"capability_scope", "validation"},
             {"diagnostics", diagnostics},
             {"operations", names},

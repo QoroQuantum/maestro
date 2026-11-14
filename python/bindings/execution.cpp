@@ -202,4 +202,29 @@ std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Cir
     return amplitudes;
 }
 
+// The probability of every basis state. Unlike the amplitudes, they exist for
+// every state, so this answers on every simulation type, as the native
+// "probabilities" request does (both read Simulators::BasisProbabilities).
+std::vector<double> probabilities_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config)
+{
+    if (!circuit)
+        throw nb::value_error("Circuit is null.");
+
+    int num_qubits = std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+    ScopedSimulator sim(num_qubits);
+    if (sim.handle == 0)
+        throw std::runtime_error("Failed to create simulator handle.");
+
+    auto network = ConfigureNetwork(sim.handle, config);
+    if (!network)
+        throw std::runtime_error("Failed to configure network.");
+
+    std::vector<double> probabilities;
+    {
+        nb::gil_scoped_release release;
+        probabilities = network->ExecuteOnHostProbabilities(circuit, 0);
+    }
+    return probabilities;
+}
+
 } // namespace maestro_bindings
