@@ -275,6 +275,51 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitAmplitudesMatchStatevect
     }
 }
 
+// Every state has probabilities, also where it has no statevector to read: a
+// mixed one, and one that is held without amplitudes.
+BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitProbabilitiesMatchStatevector, bdata::xrange(5), trial)
+{
+    std::mt19937 g(static_cast<std::mt19937::result_type>(0xD1CEu + trial));
+
+    auto circuit = GenerateRandomCircuit(nrGates, nrQubits, g);
+    BOOST_REQUIRE(circuit);
+
+    std::vector<std::shared_ptr<Network::SimpleDisconnectedNetwork<>>> networks{networkSimStatevector, networkSimMPS, networkSimPathIntegral,
+                                                                                networkSimPauliProp};
+    for (const auto method :
+         {Simulators::SimulationType::kDensityMatrix, Simulators::SimulationType::kMatrixProductOperator, Simulators::SimulationType::kTensorNetwork})
+    {
+        networks.push_back(std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
+                                                                                  std::vector<size_t>{static_cast<size_t>(nrQubits)}));
+        networks.back()->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, method);
+        networks.back()->CreateSimulator();
+    }
+
+    // The end measurements of a whole program would collapse the state that is
+    // read: they are not executed. Only the used qubits are measured, so that
+    // the register stays the one of the circuit without them.
+    auto measured = std::make_shared<Circuits::Circuit<>>();
+    std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+    for (const auto &op : circuit->GetOperations())
+    {
+        measured->AddOperation(op->Clone());
+        for (const auto qubit : op->AffectedQubits())
+            if (std::find_if(pairs.begin(), pairs.end(), [qubit](const auto &pair) { return pair.first == qubit; }) == pairs.end())
+                pairs.push_back({qubit, pairs.size()});
+    }
+    measured->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(pairs));
+
+    const auto amplitudes = networkSimStatevector->ExecuteOnHostAmplitudes(circuit, 0);
+    for (const auto &network : networks)
+        for (const auto &executed : {circuit, measured})
+        {
+            const auto probabilities = network->ExecuteOnHostProbabilities(executed, 0);
+            BOOST_REQUIRE(probabilities.size() == amplitudes.size());
+            for (size_t state = 0; state < amplitudes.size(); ++state)
+                BOOST_CHECK_SMALL(probabilities[state] - std::norm(amplitudes[state]), 1e-6);
+        }
+}
+
 BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomPauliExpectationValuesMatchStatevector, bdata::xrange(10), trial)
 {
     std::mt19937 g(static_cast<std::mt19937::result_type>(0xBEEFu + trial));

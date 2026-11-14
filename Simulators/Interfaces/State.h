@@ -25,6 +25,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <unordered_map>
@@ -1375,6 +1376,30 @@ class IState
     std::mt19937_64 channelRng{Utils::RandomStream::FreshSeed()}; /**< Channel-branch stream, see ChannelUniform. */
     std::uniform_real_distribution<double> channelUniform{0.0, 1.0};
 };
+
+/**
+ * @brief The probabilities of all the basis states of a prepared state.
+ *
+ * A tensor network has no bulk read: it contracts once for each basis state.
+ * Every caller that returns the whole distribution reads it here (the native
+ * probabilities request, and the network's ExecuteOnHostProbabilities behind
+ * Python's get_probabilities), so that they answer on the same backends.
+ *
+ * @param state The prepared state.
+ * @return The probability of each basis state, by basis index.
+ */
+inline std::vector<double> BasisProbabilities(IState &state)
+{
+    if (state.GetSimulationType() != SimulationType::kTensorNetwork)
+        return state.AllProbabilities();
+    const size_t qubits = state.GetNumberOfQubits();
+    if (qubits >= std::numeric_limits<size_t>::digits)
+        throw std::length_error("The basis states of this register cannot be enumerated");
+    std::vector<double> values(size_t{1} << qubits);
+    for (size_t index = 0; index < values.size(); ++index)
+        values[index] = state.Probability(index);
+    return values;
+}
 
 } // namespace Simulators
 

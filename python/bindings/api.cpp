@@ -365,13 +365,17 @@ void bind_api(nb::module_ &m)
     m.def(
         "get_probabilities",
         [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config) -> nb::list {
-            const auto amplitudes = statevector_core(circuit, config);
+            const auto probabilities = probabilities_core(circuit, config);
             nb::list probs;
-            for (const auto &amp : amplitudes)
-                probs.append(std::norm(amp));
+            for (const double probability : probabilities)
+                probs.append(probability);
             return probs;
         },
-        "circuit"_a, "config"_a = SimulatorConfig{}, "Get the full probability distribution after executing a circuit.");
+        "circuit"_a, "config"_a = SimulatorConfig{},
+        "Get the full probability distribution after executing a circuit.\n\n"
+        "Every simulation type answers, the ones whose state has no statevector too (density matrix, matrix "
+        "product operator, tensor network, Pauli propagator, extended stabilizer): on those, channel "
+        "instructions give the distribution of the mixed state. End measurements are not executed.");
 
     m.def(
         "get_statevector", [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config) { return statevector_core(circuit, config); },

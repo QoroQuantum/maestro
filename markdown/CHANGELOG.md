@@ -128,6 +128,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_probabilities` answers on every simulation type. It squared the
+  statevector, so it raised where a state has none to read: a density matrix,
+  a matrix product operator, a tensor network, the Pauli propagator and the
+  extended stabilizer, on all of which a native `probabilities` request
+  answers. On the mixed-state methods it returns the distribution of the
+  state that channel instructions leave. Python and the request now read the
+  probabilities through one function (`Simulators::BasisProbabilities`;
+  Python reaches it through the new `INetwork::ExecuteOnHostProbabilities`),
+  and neither runs the circuit's end measurements.
 - With sampled noise on a method that samples no channels (tensor network,
   path integral, stabilizer and the like), a one-qubit mixture of unitaries
   among the circuit's channel instructions was counted as drawn from the

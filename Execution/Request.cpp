@@ -2188,11 +2188,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         else
         {
             json::array values;
-            // Tensor-network backends intentionally do not provide efficient bulk
-            // probabilities. An explicitly requested full output still uses the
-            // bounded per-index path, just as selected basis states do.
-            const bool scalarProbabilities = !amplitudes && simulator->GetSimulationType() == Simulators::SimulationType::kTensorNetwork;
-            if (!request.contains("basis_states") && !scalarProbabilities)
+            if (!request.contains("basis_states"))
             {
                 if (amplitudes)
                 {
@@ -2201,7 +2197,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 }
                 else
                 {
-                    for (double value : simulator->AllProbabilities())
+                    // The whole distribution, read as Python's get_probabilities
+                    // reads it: a tensor network contracts once per basis state.
+                    for (double value : Simulators::BasisProbabilities(*simulator))
                         values.emplace_back(value);
                 }
                 Require(values.size() == basis.size(), "Backend returned an invalid full state output");

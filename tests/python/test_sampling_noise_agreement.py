@@ -1838,6 +1838,79 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
             assert len(read) == 1, f"{label} on {name}: {read}"
 
 
+# ---- The probabilities of a state exist where its statevector does not ----
+
+_PROBABILITY_METHODS = [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
+                        (S.DensityMatrix, "density_matrix"), (S.MatrixProductOperator, "matrix_product_operator"),
+                        (S.TensorNetwork, "tensor_network"), (S.PauliPropagator, "pauli_propagator"),
+                        (S.ExtendedStabilizer, "extended_stabilizer"), (S.PathIntegral, "path_integral")]
+
+
+def _probabilities_request(name, circuit):
+    result = _native_request({"schema_version": 2, "operation": "probabilities", "circuit": circuit,
+                              "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"}, "execution": {"seed": 3}})
+    assert result["ok"], (name, result)
+    return result
+
+
+@pytest.mark.parametrize("method, name", _PROBABILITY_METHODS)
+def test_probabilities_answer_on_every_method_in_python_and_in_a_request(method, name):
+    """Every state has probabilities, though only a pure one held as amplitudes has a statevector.
+    get_probabilities and a probabilities request read them on the same methods, with the same
+    values, and neither runs the end measurements of a circuit parsed from OpenQASM."""
+    program = "h q[0];\ncx q[0],q[2];\nry(0.7) q[1];\n"
+    header = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[3];\ncreg c[3];\n'
+    # q0 and q2 are a Bell pair and q1 is rotated; q0 is the least significant bit of a basis index.
+    zero, one = math.cos(0.35) ** 2 / 2, math.sin(0.35) ** 2 / 2
+    expected = [zero, 0, one, 0, 0, zero, 0, one]
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    for source in (header + program, header + program + "measure q -> c;\n"):
+        parsed = maestro.QasmToCirc().parse_and_translate(source)
+        assert maestro.get_probabilities(parsed, config=config) == pytest.approx(expected, abs=1e-8), name
+        native = _probabilities_request(name, {"format": "openqasm", "num_qubits": 3, "num_clbits": 3, "source": source})
+        assert native["probabilities"] == pytest.approx(expected, abs=1e-8), name
+
+
+@pytest.mark.parametrize("method, name, exact", [
+    (S.DensityMatrix, "density_matrix", True), (S.MatrixProductOperator, "matrix_product_operator", True),
+    (S.PauliPropagator, "pauli_propagator", True), (S.Statevector, "statevector", False),
+    (S.MatrixProductState, "matrix_product_state", False)])
+def test_probabilities_of_a_channel_in_python_and_in_a_request(method, name, exact):
+    """Where a channel instruction is applied exactly, the probabilities are those of the mixed state,
+    which has no statevector to square. Where it is sampled, they are those of the one branch drawn."""
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    native = _probabilities_request(name, {
+        "format": "instructions", "num_qubits": 1, "num_clbits": 1,
+        "source": [{"name": "x", "qubits": [0]},
+                   {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 0.3}]}]})
+    for label, read in (("Python", maestro.get_probabilities(circuit, config=config)), ("request", native["probabilities"])):
+        if exact:
+            assert read == pytest.approx([0.3, 0.7], abs=1e-9), f"{label} on {name}: {read}"
+        else:
+            assert sorted(read) == pytest.approx([0.0, 1.0], abs=1e-9), f"{label} on {name}: {read}"
+    if exact:
+        with pytest.raises(RuntimeError):
+            maestro.get_statevector(circuit, config=config)
+
+
+@pytest.mark.parametrize("method", [S.DensityMatrix, S.MatrixProductOperator, S.TensorNetwork, S.PauliPropagator])
+@pytest.mark.parametrize("low, high", [(0, 1), (0, 3), (2, 5)])
+def test_probabilities_without_a_statevector_order_the_qubits_as_the_amplitudes(method, low, high):
+    """Unused qubits are left out and the used ones keep their order, as in get_statevector."""
+    circuit = QuantumCircuit()
+    circuit.ry(low, math.pi / 3)
+    circuit.s(low)
+    circuit.x(high)
+    circuit.cx(low, high)
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    assert maestro.get_probabilities(circuit, config=config) == pytest.approx([0, 0.25, 0.75, 0], abs=1e-9)
+    reference = maestro.get_statevector(circuit, config=maestro.SimulatorConfig(simulation_type=S.Statevector, fixed_backend=True))
+    assert [abs(a) ** 2 for a in reference] == pytest.approx([0, 0.25, 0.75, 0], abs=1e-9)
+
+
 # ---- A channel instruction that sampled noise injection draws into a gate ----
 
 @pytest.mark.parametrize("method, name, drawn_while_running", [

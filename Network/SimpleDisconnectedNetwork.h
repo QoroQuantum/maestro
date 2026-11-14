@@ -500,6 +500,45 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<std::complex<double>> ExecuteOnHostAmplitudes(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
     {
+        return ExecuteOnHostBasisValues(circuit, hostId, "ExecuteOnHostAmplitudes", [](Simulators::ISimulator &state) { return state.GetStateVector(); });
+    }
+
+    /**
+     * @brief Execute circuit on host and return the probability of each basis
+     * state.
+     *
+     * Execute the circuit on the specified host and return the probabilities of
+     * the basis states (one per basis state 0..2^n-1, ordered as the amplitudes
+     * of ExecuteOnHostAmplitudes). They exist for every state, so every
+     * simulation type answers: the mixed ones and the ones without amplitudes
+     * too. End measurements are removed first: they would collapse the state.
+     *
+     * @param circuit The circuit to execute.
+     * @param hostId The id of the host to execute the circuit on.
+     * @return A vector of probabilities of length 2^n.
+     */
+    std::vector<double> ExecuteOnHostProbabilities(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
+    {
+        return ExecuteOnHostBasisValues(circuit ? circuit->RemoveEndMeasurements() : circuit, hostId, "ExecuteOnHostProbabilities",
+                                        [](Simulators::ISimulator &state) { return Simulators::BasisProbabilities(state); });
+    }
+
+    /**
+     * @brief Execute circuit on host and read one value per basis state.
+     *
+     * The execution, register restoration and qubit ordering shared by
+     * ExecuteOnHostAmplitudes and ExecuteOnHostProbabilities.
+     *
+     * @param circuit The circuit to execute.
+     * @param hostId The id of the host to execute the circuit on.
+     * @param caller The name of the calling function, for its error message.
+     * @param read Returns the 2^n values of the executed simulator.
+     * @return The values, with the retained qubits in ascending original order.
+     */
+    template <typename Read>
+    auto ExecuteOnHostBasisValues(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId, const char *caller, Read &&read)
+        -> decltype(read(std::declval<Simulators::ISimulator &>()))
+    {
         const auto recreate = recreateIfNeeded;
 
         auto simType = Simulators::SimulatorType::kQCSim;
@@ -541,11 +580,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         }
 
         if (!simulator)
-            throw std::runtime_error("ExecuteOnHostAmplitudes: no simulator available after execution.");
+            throw std::runtime_error(std::string(caller) + ": no simulator available after execution.");
 
         const size_t n = simulator->GetNumberOfQubits();
-        auto amplitudes = simulator->GetStateVector();
-        const size_t dim = amplitudes.size();
+        auto values = read(*simulator);
+        const size_t dim = values.size();
 
         // Restore ascending original-qubit order within the compact register.
         // Original indices may be sparse, so use their ranks as output positions.
@@ -560,7 +599,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             for (size_t pos = 0; pos < byOriginal.size(); ++pos)
                 simToOrig[byOriginal[pos].second] = pos;
 
-            std::vector<std::complex<double>> remapped(dim);
+            decltype(values) remapped(dim);
 
             for (size_t sim_state = 0; sim_state < dim; ++sim_state)
             {
@@ -571,16 +610,16 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         orig_state |= (1ULL << simToOrig[qbit]);
                 }
                 if (orig_state < dim)
-                    remapped[orig_state] = amplitudes[sim_state];
+                    remapped[orig_state] = values[sim_state];
             }
-            amplitudes.swap(remapped);
+            values.swap(remapped);
         }
 
         if (recreate && hadSimulator &&
             (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
             RecreateSimulatorKeepingResults(simType, method, templateQubits);
 
-        return amplitudes;
+        return values;
     }
 
     /**

@@ -165,6 +165,24 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     virtual std::vector<std::complex<double>> ExecuteOnHostAmplitudes(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) = 0;
 
     /**
+     * @brief Execute the circuit on the specified host and return the
+     * probability of each basis state.
+     *
+     * Unlike the amplitudes, the probabilities exist for every state: a mixed
+     * one (density matrix, matrix product operator), and one held without
+     * amplitudes (tensor network, Pauli propagator, extended stabilizer). The
+     * circuit's end measurements are not executed: they would collapse the
+     * state that is read. The circuit is mapped on the host as for
+     * ExecuteOnHostAmplitudes, and the basis states are indexed the same way.
+     *
+     * @param circuit The circuit to execute.
+     * @param hostId The id of the host to execute the circuit on.
+     * @return A vector of probabilities, one per basis state.
+     * @sa Circuits::Circuit
+     */
+    virtual std::vector<double> ExecuteOnHostProbabilities(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) = 0;
+
+    /**
      * @brief Execute circuit on host and return the projection onto the zero
      * state.
      *

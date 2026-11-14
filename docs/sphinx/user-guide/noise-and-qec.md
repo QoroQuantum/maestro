@@ -381,6 +381,12 @@ factories are `pauli`, `unitary_mixture`, `phase_damping`,
 `generalized_amplitude_damping`, `from_kraus` and `on_qubit`; for two-qubit
 matrices `qubits[0]` is the least significant bit of the index.
 
+`maestro.get_probabilities(circuit, config)` reads the distribution of the state
+the instructions leave, on every method: the exact, mixed one where they are
+applied exactly, and that of the one branch drawn where they are sampled.
+`get_statevector` needs a state with amplitudes, so it raises on the mixed-state
+methods.
+
 The QCSim Pauli propagator (`SimulationType.PauliPropagator`) also evaluates
 channels exactly, without a density matrix: it applies the adjoint of each
 channel to the observable it propagates. One execution then gives the exact
