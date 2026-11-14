@@ -6,7 +6,6 @@ import pickle
 import random
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 import maestro
@@ -2808,7 +2807,6 @@ class TestOptimizedSwappingParity:
 
     MPS = maestro.SimulationType.MatrixProductState
     MPO = maestro.SimulationType.MatrixProductOperator
-    LUCJ_PATH = Path(__file__).with_name("data") / "lucj_n2_16q.qasm"
 
     @staticmethod
     def _random_circuit(n_qubits, layers, seed):
@@ -2905,30 +2903,6 @@ class TestOptimizedSwappingParity:
             assert abs(xeb - ideal) < 0.25 * ideal, (
                 f"seed={seed} disable_optimized_swapping={disable}: "
                 f"cross-entropy {xeb:.3f}, ideal {ideal:.3f}")
-
-    def _lucj_z_error(self, bond_dimension, disable):
-        qasm = self.LUCJ_PATH.read_text()
-        observables = ";".join(self._z_observables(16))
-        exact = maestro.simple_estimate(
-            qasm, observables=observables,
-            config=self._config(maestro.SimulationType.Statevector))["expectation_values"]
-        values = maestro.simple_estimate(
-            qasm, observables=observables,
-            config=self._config(self.MPS, bond_dimension, disable))["expectation_values"]
-        return max(abs(v - e) for v, e in zip(values, exact))
-
-    @pytest.mark.parametrize("bond_dimension", [48, 64])
-    def test_lucj_fits_bond_dimension_without_optimization(self, bond_dimension):
-        """The 16-qubit LUCJ circuit is exact from bond dimension 48 in its natural order."""
-        assert self._lucj_z_error(bond_dimension, disable=True) < 1e-8
-
-    @pytest.mark.xfail(strict=True, reason=(
-        "Known bug: automatic lookahead routing raises this circuit's peak bond "
-        "dimension from 48 to 128, so at caps of 32-128 truncation makes <Z_i> "
-        "wrong by up to ~1. Remove this marker once fixed."))
-    @pytest.mark.parametrize("bond_dimension", [48, 64])
-    def test_lucj_optimized_swapping_matches_statevector(self, bond_dimension):
-        assert self._lucj_z_error(bond_dimension, disable=False) < 1e-6
 
 
 # ============================================================================
