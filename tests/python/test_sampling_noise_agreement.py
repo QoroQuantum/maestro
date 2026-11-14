@@ -1650,6 +1650,40 @@ def test_a_checkpoint_prefix_refuses_channels_it_would_sample_once():
     assert abs(counts.get("1", 0) / 8000 - 0.7) < 0.03
 
 
+@pytest.mark.parametrize("other", [S.TensorNetwork, S.PathIntegral, S.ExtendedStabilizer, S.Stabilizer])
+@pytest.mark.parametrize("first", [False, True])
+def test_a_candidate_list_runs_channels_on_the_backend_that_holds_them_in_either_order(other, first):
+    """A candidate that neither holds nor samples channels yields to one that does, also when it
+    is listed first: it is refused before it is accepted, since the start of the circuit, which a
+    candidate is tried on, stops before a channel whose branch is drawn."""
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.cx(0, 1)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    circuit.measure([(0, 0), (1, 1)])
+    order = [(B.QCSim, other), (B.QCSim, S.Statevector)] if first else [(B.QCSim, S.Statevector), (B.QCSim, other)]
+    result = circuit.execute(config=maestro.SimulatorConfig(optimization_candidates=order, seed=11), shots=4000)
+    assert result["method"] == S.Statevector
+    counts = result["counts"]
+    assert set(counts) == {"11", "01"} and abs(counts["11"] / 4000 - 0.7) < 0.04, counts
+    # The same list, as a request.
+    native = _native_request({
+        "schema_version": 2, "operation": "execute",
+        "circuit": {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                    "source": [{"name": "x", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]},
+                               {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 0.3}]},
+                               {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]},
+        "simulator": {"selection": "automatic",
+                      "candidates": [{"backend": "qcsim", "method": _METHOD_NAMES[method]} for _, method in order]},
+        "execution": {"shots": 4000, "seed": 11}})
+    assert native["ok"] and native["execution_metadata"]["method"] == "statevector", native
+    assert abs(native["counts"]["11"] / 4000 - 0.7) < 0.04, native["counts"]
+
+
+_METHOD_NAMES = {S.Statevector: "statevector", S.TensorNetwork: "tensor_network", S.PathIntegral: "path_integral",
+                 S.ExtendedStabilizer: "extended_stabilizer", S.Stabilizer: "stabilizer"}
+
+
 def test_a_damping_of_zero_is_a_gate():
     """A damping of zero changes nothing: one branch, the identity, although its Kraus form
     has an operator that is zero. A prefix takes it, as it takes any gate."""

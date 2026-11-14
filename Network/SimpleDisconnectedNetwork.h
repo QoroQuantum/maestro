@@ -2603,6 +2603,19 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // report = false defers that to the caller: a configured list keeps
         // trying its other candidates after the cost model's choice fails.
         std::exception_ptr failure;
+        // A backend that neither holds nor samples channels cannot run a
+        // circuit's channel instructions. Like the stabilizer's Clifford test
+        // below, that is decided before the candidate is accepted and not by
+        // running the circuit's start: a channel whose branch is drawn is left
+        // to the shots (ExecuteUpToMeasurements stops before it), so the start
+        // would pass, the shots would fail, and a later candidate that runs the
+        // circuit would never be tried.
+        const bool hasChannels = dcirc->HasQuantumChannels();
+        const auto requireChannels = [hasChannels](const std::shared_ptr<Simulators::ISimulator> &candidate) {
+            if (hasChannels && !candidate->SupportsQuantumChannels() && !candidate->SamplesQuantumChannels())
+                throw std::runtime_error("This backend neither holds nor samples quantum channels: use density_matrix or matrix_product_operator, "
+                                         "which apply them, or statevector or matrix_product_state, which sample them");
+        };
         const auto prepare = [&](const std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> &candidates,
                                  bool report = true) -> std::shared_ptr<Simulators::ISimulator> {
             for (size_t index = 0; index < candidates.size(); ++index)
@@ -2630,12 +2643,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 configuration.ApplyConfigurationToSimulator(sim);
                 try
                 {
+                    requireChannels(sim);
                     sim->AllocateQubits(nrQubits);
                     sim->Initialize();
                 }
                 catch (const std::exception &)
                 {
-                    // This register does not fit the candidate; another may hold it.
+                    // The candidate does not run this circuit's channels, or
+                    // this register does not fit it; another may.
                     if (!failure)
                         failure = std::current_exception();
                     if (report && index + 1 == candidates.size())
@@ -2738,6 +2753,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 // the chosen simulator before it allocates and runs the prefix,
                 // as for the unranked candidates above.
                 configuration.ApplyConfigurationToSimulator(sim);
+                requireChannels(sim);
                 sim->AllocateQubits(nrQubits);
                 sim->Initialize();
 

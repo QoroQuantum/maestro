@@ -360,16 +360,31 @@ void TestSampledChannelRequests()
         auto request = Request("execute", 2, "", "statevector");
         request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
         request["execution"].as_object()["shots"] = 4096;
-        for (const char *other : {"stabilizer", "tensor_network"})
-        {
-            request["simulator"] = j::object{
-                {"selection", "automatic"},
-                {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, j::object{{"backend", "qcsim"}, {"method", other}}}}};
-            request.erase("noise");
-            const auto result = Call(request);
-            Check(damped(result.at("counts")) && result.at("execution_metadata").at("method") == "statevector",
-                  "A candidate list did not run channel instructions on the backend that holds them");
-        }
+        // In either order: a backend that holds no channels and comes first
+        // yields before it is accepted. Running the circuit's start does not
+        // tell, since a channel that is drawn is left to the shots.
+        const j::object holds{{"backend", "qcsim"}, {"method", "statevector"}};
+        for (const char *other : {"stabilizer", "tensor_network", "path_integral", "extended_stabilizer"})
+            for (const bool first : {false, true})
+            {
+                const j::object none{{"backend", "qcsim"}, {"method", other}};
+                request["simulator"] = j::object{{"selection", "automatic"}, {"candidates", first ? j::array{none, holds} : j::array{holds, none}}};
+                request.erase("noise");
+                const auto result = Call(request);
+                Check(damped(result.at("counts")) && result.at("execution_metadata").at("method") == "statevector",
+                      "A candidate list did not run channel instructions on the backend that holds them");
+            }
+        // An estimate selects the same way: the density matrix listed second applies the channel exactly.
+        auto estimate = Request("estimate", 2, "", "statevector");
+        estimate["circuit"] = circuit({prepare[0], prepare[1], damping});
+        estimate["observables"] = j::array{"ZI", "IZ"};
+        estimate["simulator"] = j::object{{"selection", "automatic"},
+                                          {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "tensor_network"}},
+                                                                  j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}}}};
+        const auto estimated = Call(estimate);
+        Check(std::abs(Real(estimated.at("expectation_values").at(0)) + 0.4) < 1e-9 && std::abs(Real(estimated.at("expectation_values").at(1)) + 1.0) < 1e-9 &&
+                  estimated.at("execution_metadata").at("method") == "density_matrix",
+              "An estimate did not run channel instructions on the candidate that holds them");
         request["simulator"] = j::object{
             {"selection", "automatic"},
             {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}, j::object{{"backend", "qcsim"}, {"method", "tensor_network"}}}}};
