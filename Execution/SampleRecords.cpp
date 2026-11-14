@@ -407,9 +407,10 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // prepared state run single-threaded in the network, so realization workers
     // supply parallelism without duplicating their deterministic preparation.
     using Method = Simulators::SimulationType;
-    // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel.
+    // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
+    // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
     const bool prepared_batches =
-        !circuit->HasOpsAfterMeasurementsWith(Circuits::Circuit<double>::ChannelDraws::kFromState, UsesExactQuantumChannels(config)) &&
+        !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)), UsesExactQuantumChannels(config)) &&
         (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
          config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     // Network trajectories retain their prepared source and checkpoint plus

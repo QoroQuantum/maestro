@@ -213,6 +213,19 @@ inline bool InjectsRuntimeChannels(const SimulatorConfig &config, bool exact_cha
     return !exact_channels && SamplesQuantumChannels(config);
 }
 
+// How a circuit's channel instructions count in the realizations sampled noise
+// injection builds from it, asked of the circuit before it is injected. A
+// backend that samples channels keeps those that are not Pauli channels and
+// draws their branches as it runs (kFromState). Any other has every channel
+// drawn into gates and resets when the realization is built, where only a
+// reset reads the state (kLowered): a one-qubit mixture of unitaries leaves the
+// realization as deterministic as a Pauli channel does.
+inline Circuits::Circuit<double>::ChannelDraws InjectedChannelDraws(bool runtime_channels)
+{
+    using Draws = Circuits::Circuit<double>::ChannelDraws;
+    return runtime_channels ? Draws::kFromState : Draws::kLowered;
+}
+
 // The order realizations are put in for a tensor chain (Circuits::ChainOrdered),
 // whose work follows the order of the operations once it is off its canonical
 // form: when every backend the request may run is the QCSim matrix product
@@ -322,8 +335,7 @@ inline bool InjectsExactChannels(const SimulatorConfig &config, const noise::Noi
 //
 // A circuit that is executed as it is draws a branch of every channel it holds
 // when the backend samples channels (ChannelDraws::kAll). A circuit that noise
-// injection will sample first keeps only the channels a Pauli draw cannot
-// replace (kFromState).
+// injection will sample first counts as its realizations will (InjectedChannelDraws).
 inline bool HasStochasticEvolution(const std::shared_ptr<Circuits::Circuit<double>> &circuit, bool exact_channels, bool fresh_register = true,
                                    Circuits::Circuit<double>::ChannelDraws draws = Circuits::Circuit<double>::ChannelDraws::kAll)
 {
@@ -369,7 +381,7 @@ inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> req
     if (!result.exact_channels)
         result.stochastic_noise = result.stochastic_noise || model.has_non_readout_noise() || (circuit && circuit->HasDrawnChannels());
     result.stochastic_execution =
-        HasStochasticEvolution(circuit, UsesExactQuantumChannels(config), fresh_register, Circuits::Circuit<double>::ChannelDraws::kFromState);
+        HasStochasticEvolution(circuit, UsesExactQuantumChannels(config), fresh_register, InjectedChannelDraws(result.runtime_channels));
     result.realizations = requested.value_or(result.exact_channels && !result.stochastic_noise && (!estimation || !result.stochastic_execution) ? 1 : fallback);
     return result;
 }

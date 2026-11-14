@@ -1836,3 +1836,71 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
             assert abs(read.get("01", 0) / shots - 0.5) < 0.1, f"{label} on {name}: {read}"
         else:
             assert len(read) == 1, f"{label} on {name}: {read}"
+
+
+# ---- A channel instruction that sampled noise injection draws into a gate ----
+
+@pytest.mark.parametrize("method, name, drawn_while_running", [
+    (S.PathIntegral, "path_integral", {"pauli": False, "mixture": False, "relaxation": True}),
+    (S.TensorNetwork, "tensor_network", {"pauli": False, "mixture": False, "relaxation": True}),
+    (S.Statevector, "statevector", {"pauli": False, "mixture": True, "relaxation": True}),
+])
+def test_a_mixture_of_unitaries_is_drawn_into_a_gate_where_no_channel_is_sampled(method, name, drawn_while_running):
+    """On a method that samples no channels, sampled noise injection draws every channel instruction
+    into gates and resets when it builds a realization. A one-qubit mixture of unitaries becomes a
+    gate, as a Pauli channel does, so the realization evolves deterministically; a relaxation may
+    become a reset, which reads the state. The statevector keeps the mixture and draws it while the
+    circuit runs. Python and requests count the instruction the same way in an execution, an
+    estimate and a checkpoint suffix, and the mixture keeps its probabilities."""
+    Q = maestro.QuantumChannel
+    r = math.sqrt(0.5)
+    hadamard = np.array([[r, r], [r, -r]], dtype=complex)
+    channels = {
+        "pauli": (Q.pauli([0.6, 0.4, 0.0, 0.0]), {"kind": "pauli", "probabilities": [0.6, 0.4, 0.0, 0.0]}),
+        "mixture": (Q.unitary_mixture([0.6, 0.4], [np.eye(2, dtype=complex), hadamard]),
+                    {"kind": "unitary_mixture", "probabilities": [0.6, 0.4], "unitaries": [[1, 0, 0, 1], [r, r, r, -r]]}),
+        "relaxation": (Q.thermal_relaxation(0.3, 1.0, 0.8), {"kind": "thermal_relaxation", "duration": 0.3, "t1": 1.0, "t2": 0.8}),
+    }
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    simulator = {"backend": "qcsim", "method": name, "selection": "fixed"}
+    bell = [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]}]
+    measure = {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}
+    shots = 4000
+
+    def instructions(*source):
+        return {"format": "instructions", "num_qubits": 2, "num_clbits": 2, "source": list(source)}
+
+    for label, (channel, factor) in channels.items():
+        expected = drawn_while_running[label]
+        instruction = {"name": "channel", "qubits": [0], "factors": [factor]}
+        circuit = QuantumCircuit()
+        circuit.h(0)
+        circuit.cx(0, 1)
+        circuit.channel([0], channel)
+        estimated = maestro.full_noise_estimate(circuit, ["ZZ"], maestro.NoiseModel(), noise_realizations=8, config=config)
+        circuit.measure([(0, 0), (1, 1)])
+        executed = circuit.full_noise_execute(maestro.NoiseModel(), shots=shots, noise_realizations=400, config=config)
+        native = _native_request({"schema_version": 2, "operation": "execute", "circuit": instructions(*bell, instruction, measure),
+                                  "simulator": simulator, "noise": {"channels": [], "realizations": 400},
+                                  "execution": {"shots": shots, "seed": 3}})
+        native_estimate = _native_request({"schema_version": 2, "operation": "estimate", "circuit": instructions(*bell, instruction),
+                                           "observables": ["ZZ"], "simulator": simulator,
+                                           "noise": {"channels": [], "realizations": 8}, "execution": {"seed": 3}})
+        suffix = _native_request({"schema_version": 2, "operation": "checkpoint_batch", "circuit": instructions(*bell),
+                                  "suffixes": [instructions(instruction, measure)], "simulator": simulator,
+                                  "noise": {"channels": [], "realizations": 8}, "execution": {"shots": 400, "seed": 3}})
+        for result in (native, native_estimate, suffix):
+            assert result["ok"], (label, name, result)
+        reported = {
+            "Python execute": executed["stochastic_execution"],
+            "Python estimate": estimated["stochastic_execution"],
+            "request execute": native["noise"]["stochastic_execution"],
+            "request estimate": native_estimate["noise"]["stochastic_execution"],
+            "request suffix": suffix["results"][0]["stochastic_execution"],
+        }
+        assert reported == dict.fromkeys(reported, expected), f"{label} on {name}: {reported}"
+        if label == "mixture":
+            # The Hadamard branch, drawn in 0.4 of the realizations, sends half of the pair to odd parity.
+            for where, counts in (("Python", executed["counts"]), ("request", native["counts"])):
+                odd = (counts.get("01", 0) + counts.get("10", 0)) / shots
+                assert abs(odd - 0.2) < 0.06, f"{where} on {name}: odd parity in {odd} of the shots"

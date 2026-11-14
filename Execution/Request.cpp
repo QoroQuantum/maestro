@@ -1213,10 +1213,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                    : operation == "estimate"                                 ? input.circuit->RemoveEndMeasurements()
                    : operation == "noisy_fidelity"                           ? NoisyFidelityCircuit(input.circuit)
                                                    : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity");
-    // Noise injection samples the circuit's Pauli channels into gates before anything runs.
-    const bool stochastic_estimation = operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config), true,
-                                                                                         noise.enabled ? Circuits::Circuit<double>::ChannelDraws::kFromState
-                                                                                                       : Circuits::Circuit<double>::ChannelDraws::kAll);
+    // Noise injection samples the circuit's Pauli channels into gates before anything runs, and on a backend that
+    // samples no channels its one-qubit mixtures of unitaries too.
+    const bool stochastic_estimation =
+        operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config), true,
+                                                          noise.enabled ? InjectedChannelDraws(InjectsRuntimeChannels(config, noise.exact))
+                                                                        : Circuits::Circuit<double>::ChannelDraws::kAll);
     // Runs again if a checkpoint's suffixes change the automatic evaluation.
     const auto resolveNoisePolicy = [&] {
         const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
@@ -2267,7 +2269,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             // A suffix continues the saved prefix, so even a leading pure-state
             // reset may branch. Its shots sample those branches exactly.
             const bool stochastic_suffix =
-                HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false, Circuits::Circuit<double>::ChannelDraws::kFromState);
+                HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false, InjectedChannelDraws(simulator->SamplesQuantumChannels()));
             noise.policy.stochastic_execution = noise.policy.stochastic_execution || stochastic_suffix;
             const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
             Counts counts;

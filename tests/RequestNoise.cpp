@@ -710,6 +710,76 @@ void TestDeterministicChannelInstructions()
     }
 }
 
+// On a method that samples no channels, sampled noise injection draws every
+// channel instruction into gates and resets when it builds a realization. A
+// one-qubit mixture of unitaries becomes a gate there, as a Pauli channel does:
+// the realization evolves deterministically. A relaxation may become a reset,
+// which reads the state. On the statevector the mixture stays in the circuit
+// and is drawn while it runs. Execute, estimate and a checkpoint suffix count
+// the instruction the same way.
+void TestLoweredChannelDraws()
+{
+    const j::object hadamard{{"name", "h"}, {"qubits", j::array{0}}}, entangle{{"name", "cx"}, {"qubits", j::array{0, 1}}};
+    const j::object measure{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{0, 1}}};
+    const double r = std::sqrt(0.5);
+    const auto channel = [](j::object factor) { return j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{std::move(factor)}}}; };
+    const j::object pauli = channel({{"kind", "pauli"}, {"probabilities", j::array{0.6, 0.4, 0.0, 0.0}}});
+    const j::object mixture =
+        channel({{"kind", "unitary_mixture"}, {"probabilities", j::array{0.6, 0.4}}, {"unitaries", j::array{j::array{1, 0, 0, 1}, j::array{r, r, r, -r}}}});
+    const j::object relaxation = channel({{"kind", "thermal_relaxation"}, {"duration", 0.3}, {"t1", 1.0}, {"t2", 0.8}});
+    const auto circuit = [](j::array source) {
+        return j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", std::move(source)}};
+    };
+
+    struct Case
+    {
+        const char *method;
+        const j::object *instruction;
+        bool stochastic;
+    };
+
+    for (const Case &entry : {Case{"path_integral", &pauli, false}, Case{"path_integral", &mixture, false}, Case{"path_integral", &relaxation, true},
+                              Case{"tensor_network", &pauli, false}, Case{"tensor_network", &mixture, false}, Case{"tensor_network", &relaxation, true},
+                              Case{"statevector", &pauli, false}, Case{"statevector", &mixture, true}, Case{"statevector", &relaxation, true}})
+    {
+        const std::string where = std::string(" on ") + entry.method;
+        auto request = Request("execute", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle, *entry.instruction, measure});
+        request["execution"].as_object()["shots"] = 4000;
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 400}, {"channels", j::array{}}};
+        const j::object executed = Call(request);
+        Check(executed.at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+              ("An executed channel instruction was miscounted as drawn or not drawn while the circuit runs" + where).c_str());
+        if (entry.instruction == &mixture)
+        {
+            // The Hadamard branch, drawn in 0.4 of the realizations, sends half of the pair to odd parity.
+            const j::object counts = executed.at("counts").as_object();
+            double odd = 0;
+            for (const char *key : {"01", "10"})
+                if (const auto *count = counts.if_contains(key))
+                    odd += Real(*count);
+            Check(std::abs(odd / 4000 - 0.2) < 0.06, ("A mixture of unitaries was not drawn with its probabilities" + where).c_str());
+        }
+
+        request = Request("estimate", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle, *entry.instruction});
+        request["observables"] = j::array{"ZZ"};
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+              ("An estimated channel instruction was miscounted" + where).c_str());
+
+        request = Request("checkpoint_batch", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle});
+        request["suffixes"] = j::array{circuit({*entry.instruction, measure})};
+        request["execution"].as_object()["shots"] = 400;
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+        const j::object batch = Call(request);
+        Check(batch.at("noise").at("stochastic_execution").as_bool() == entry.stochastic &&
+                  batch.at("results").at(0).at("stochastic_execution").as_bool() == entry.stochastic,
+              ("A channel instruction of a checkpoint suffix was miscounted" + where).c_str());
+    }
+}
+
 void TestNoisyEstimateResetStreams()
 {
     for (const char *method : {"statevector", "matrix_product_state"})
@@ -2016,6 +2086,7 @@ void TestRequestNoiseAndOptions()
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();
     TestDeterministicChannelInstructions();
+    TestLoweredChannelDraws();
     TestFixedBackendNoisyShots();
     TestNoisyEstimateResetStreams();
     const double duration = 0.3, t1 = 1, t2 = 0.6, excited = 0.1;

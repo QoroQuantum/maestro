@@ -126,6 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composite statevector differ from 0.3.14, since the noise is drawn in
   another way.
 
+### Fixed
+
+- With sampled noise on a method that samples no channels (tensor network,
+  path integral, stabilizer and the like), a one-qubit mixture of unitaries
+  among the circuit's channel instructions was counted as drawn from the
+  state while the circuit runs. It is drawn into a gate when the realization
+  is built, as a Pauli channel is, and counts as one now: `execute`,
+  `estimate` and checkpoint suffixes no longer report `stochastic_execution`
+  for it, in Python and in requests, and on the path integral its realizations
+  are scheduled as the prepared states they are. A relaxation still counts,
+  since it may be drawn into a reset, which reads the state.
+
 
 ## [0.3.14] - 2026-11-11
 

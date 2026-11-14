@@ -2012,12 +2012,38 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                static_cast<const QuantumChannelOperation<Time> &>(*op).GetChannel().GetPauliProbabilities().empty();
     }
 
+    // A channel that sampled noise injection may draw into a reset, on a
+    // backend that samples no channels and so has every channel drawn into
+    // gates and resets when a realization is built (noise::append_sampled_channel_).
+    // A Pauli part and a one-qubit mixture of unitaries become gates, and the
+    // realization stays deterministic. A relaxation becomes nothing, a phase
+    // flip or a reset, and a reset reads the state when it runs. A part with no
+    // such form is refused there, and counts as drawn.
+    static bool IsDrawnIntoReset(const OperationPtr &op)
+    {
+        using Channel = Simulators::QuantumChannel;
+        const Channel &channel = static_cast<const QuantumChannelOperation<Time> &>(*op).GetChannel();
+        if (!channel.GetPauliProbabilities().empty())
+            return false;
+        for (const auto &factor : channel.GetFactors())
+        {
+            if (factor.kind == Channel::FactorKind::kPauli || (factor.kind == Channel::FactorKind::kUnitaryMixture && factor.qubits.size() == 1))
+                continue;
+            Channel::ThermalMixture mixture;
+            if (factor.kind == Channel::FactorKind::kThermal && Channel::MixtureOf(factor.thermal, mixture) && mixture.reset <= 0.0)
+                continue; // pure dephasing: nothing or a phase flip
+            return true;
+        }
+        return false;
+    }
+
     // How channel instructions count, on a backend that does not hold them
     // exactly, when asking whether every shot sees the same evolution.
     enum class ChannelDraws
     {
         kNone,      // not at all: the question is about the circuit without its noise
-        kFromState, // as sampled noise injection leaves them: only the channels it keeps (IsStateSampledChannel)
+        kFromState, // as sampled noise injection leaves them on a backend that samples channels: only the ones it keeps (IsStateSampledChannel)
+        kLowered,   // as it leaves them on a backend that samples none: all drawn into gates and resets, of which a reset counts (IsDrawnIntoReset)
         kAll        // as executed: a backend that samples channels draws a branch of each one, per shot
     };
 
@@ -2031,7 +2057,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     static bool IsDrawnChannel(const OperationPtr &op, ChannelDraws draws)
     {
         return draws != ChannelDraws::kNone && op->GetType() == OperationType::kQuantumChannel && !IsDeterministicChannel(op) &&
-               (draws == ChannelDraws::kAll || IsStateSampledChannel(op));
+               (draws == ChannelDraws::kAll || (draws == ChannelDraws::kFromState ? IsStateSampledChannel(op) : IsDrawnIntoReset(op)));
     }
 
     // Whether any operation, including those inside nested circuits, is a channel that a backend which samples

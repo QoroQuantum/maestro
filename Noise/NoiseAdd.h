@@ -504,7 +504,7 @@ class NoiseAdd
     {
         const auto backend = PinnedBackend(network);
         if (!backend || backend->first != Simulators::SimulatorType::kQCSim ||
-            circuit->HasOpsAfterMeasurementsWith(Circuits::Circuit<double>::ChannelDraws::kFromState,
+            circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(Simulators::SamplesQuantumChannels(backend->first, backend->second)),
                                                  MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
             return false;
         const auto method = backend->second;
