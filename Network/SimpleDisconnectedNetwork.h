@@ -535,8 +535,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::set<Types::qubit_t> ran;
         for (const auto &mapped : qubitsMapOnHost)
             ran.insert(mapped.first);
-        // Nothing left to execute runs on one idle qubit.
-        if (values.size() != (ran.empty() ? size_t{2} : size_t{1} << ran.size()))
+        // Nothing left to execute runs on one idle qubit. A map that lists
+        // more qubits than an index has bits is not one of this register.
+        if (ran.size() >= std::numeric_limits<size_t>::digits || values.size() != (ran.empty() ? size_t{2} : size_t{1} << ran.size()))
             return values;
         auto all = ran;
         for (const auto &op : circuit->GetOperations())
@@ -637,9 +638,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             std::vector<std::pair<Types::qubit_t, Types::qubit_t>> byOriginal(qubitsMapOnHost.begin(), qubitsMapOnHost.end());
             std::sort(byOriginal.begin(), byOriginal.end());
 
+            // Only the entries of this register count: a map may list other
+            // positions (a range of a host), which no value here belongs to.
             std::vector<size_t> simToOrig(n);
-            for (size_t pos = 0; pos < byOriginal.size(); ++pos)
-                simToOrig[byOriginal[pos].second] = pos;
+            size_t rank = 0;
+            for (const auto &mapped : byOriginal)
+                if (mapped.second < n)
+                    simToOrig[mapped.second] = rank++;
 
             decltype(values) remapped(dim);
 
