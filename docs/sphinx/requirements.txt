@@ -12,3 +12,4 @@ sinter>=1.14
 pymatching
 pennylane-maestro
 qiskit-maestro
+deltakit-maestro

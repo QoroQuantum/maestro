@@ -3,8 +3,10 @@
 
 import math
 import pickle
+import random
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import maestro
@@ -2803,6 +2805,144 @@ class TestMPSOptimizedSwapping:
                 f"MPS optimized {v_mps} != SV {v_sv}"
             assert v_no_opt == pytest.approx(v_sv, abs=1e-6), \
                 f"MPS unoptimized {v_no_opt} != SV {v_sv}"
+
+
+class TestOptimizedSwappingParity:
+    """``disable_optimized_swapping`` must not change results that are exact.
+
+    The flag turns off Maestro's initial-layout search and lookahead routing.
+    Those only run for an MPS of at least 12 qubits (an MPO of at least 6)
+    whose bond cap is unset or at least 32; anything smaller runs the same
+    code either way, so the cases here sit above those thresholds. Each cap is
+    at least the largest Schmidt rank the register allows, so nothing is
+    truncated and both settings must reproduce the statevector. Estimate-time
+    reductions are off so the whole register reaches the tensor-network
+    backend.
+    """
+
+    MPS = maestro.SimulationType.MatrixProductState
+    MPO = maestro.SimulationType.MatrixProductOperator
+    LUCJ_PATH = Path(__file__).with_name("data") / "lucj_n2_16q.qasm"
+
+    @staticmethod
+    def _random_circuit(n_qubits, layers, seed):
+        """Rotations, long-range two-qubit gates and one three-qubit gate per layer."""
+        from maestro.circuits import QuantumCircuit
+
+        rng = random.Random(seed)
+        qc = QuantumCircuit()
+        for layer in range(layers):
+            for q in range(n_qubits):
+                getattr(qc, rng.choice(("rx", "ry", "rz")))(q, rng.uniform(-math.pi, math.pi))
+            order = list(range(n_qubits))
+            rng.shuffle(order)
+            for a, b in zip(order[0::2], order[1::2]):
+                kind = rng.choice(("cx", "cz", "crx", "cp", "swap"))
+                if kind in ("crx", "cp"):
+                    getattr(qc, kind)(a, b, rng.uniform(-math.pi, math.pi))
+                else:
+                    getattr(qc, kind)(a, b)
+            # The optimised path rewrites three-qubit gates before routing.
+            (qc.cswap if layer % 2 else qc.ccx)(order[0], order[1], order[2])
+        return qc
+
+    @staticmethod
+    def _config(method, bond_dimension=None, disable=False, **extra):
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=method,
+            disable_optimized_swapping=disable,
+            **extra,
+        )
+        if bond_dimension is not None:
+            config.max_bond_dimension = bond_dimension
+        return config
+
+    @staticmethod
+    def _z_observables(n_qubits):
+        return ["I" * q + "Z" + "I" * (n_qubits - q - 1) for q in range(n_qubits)]
+
+    @pytest.mark.parametrize("method_name, n_qubits, bond_dimension", [
+        ("MPS", 12, 64),   # 2**6: exact for 12 qubits
+        ("MPS", 14, 128),  # 2**7: exact for 14 qubits
+        ("MPO", 6, 64),    # 4**3: exact for 6 qubits
+        ("MPO", 7, 64),    # 4**3: exact for 7 qubits
+    ])
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_untruncated_estimates_ignore_flag(self, method_name, n_qubits, bond_dimension, seed):
+        method = getattr(self, method_name)
+        rng = random.Random(1000 + seed)
+        observables = self._z_observables(n_qubits)
+        while len(observables) < 3 * n_qubits:
+            pauli = ["I"] * n_qubits
+            for q in rng.sample(range(n_qubits), rng.randint(2, 4)):
+                pauli[q] = rng.choice("XYZ")
+            observables.append("".join(pauli))
+        no_reductions = {"enable_causal_cone_reduction": False, "enable_observable_clustering": False, "auto_reduce": False}
+
+        qc = self._random_circuit(n_qubits, 8, seed)
+        exact = qc.estimate(observables=observables,
+                            config=self._config(maestro.SimulationType.Statevector, **no_reductions))["expectation_values"]
+        for disable in (False, True):
+            values = self._random_circuit(n_qubits, 8, seed).estimate(
+                observables=observables,
+                config=self._config(method, bond_dimension, disable, **no_reductions),
+            )["expectation_values"]
+            worst = max(abs(v - e) for v, e in zip(values, exact))
+            assert worst < 1e-9, (
+                f"{method_name} n={n_qubits} chi={bond_dimension} seed={seed} "
+                f"disable_optimized_swapping={disable}: max deviation {worst:.2e}")
+
+    @pytest.mark.parametrize("seed", [0, 1])
+    def test_untruncated_samples_ignore_flag(self, seed):
+        """Sampled counts follow the exact distribution with either setting.
+
+        Linear cross-entropy against the exact probabilities is near its ideal
+        value for correct samples and near 0 for samples of a wrong state
+        (for example one with relabelled qubits).
+        """
+        n_qubits, shots = 13, 10000
+        amplitudes = self._random_circuit(n_qubits, 8, seed).get_statevector(
+            config=self._config(maestro.SimulationType.Statevector))
+        probabilities = [abs(a) ** 2 for a in amplitudes]
+        size = len(probabilities)
+        assert size == 1 << n_qubits
+        ideal = size * sum(p * p for p in probabilities) - 1
+        for disable in (False, True):
+            qc = self._random_circuit(n_qubits, 8, seed)
+            qc.measure_all()
+            counts = qc.execute(shots=shots, config=self._config(self.MPS, 64, disable, seed=7))["counts"]
+            # Count keys put qubit 0 first; statevector indices are little-endian.
+            mean_p = sum(count * probabilities[sum(1 << q for q, bit in enumerate(key) if bit == "1")]
+                         for key, count in counts.items()) / shots
+            xeb = size * mean_p - 1
+            assert abs(xeb - ideal) < 0.25 * ideal, (
+                f"seed={seed} disable_optimized_swapping={disable}: "
+                f"cross-entropy {xeb:.3f}, ideal {ideal:.3f}")
+
+    def _lucj_z_error(self, bond_dimension, disable):
+        qasm = self.LUCJ_PATH.read_text()
+        observables = ";".join(self._z_observables(16))
+        exact = maestro.simple_estimate(
+            qasm, observables=observables,
+            config=self._config(maestro.SimulationType.Statevector))["expectation_values"]
+        values = maestro.simple_estimate(
+            qasm, observables=observables,
+            config=self._config(self.MPS, bond_dimension, disable))["expectation_values"]
+        return max(abs(v - e) for v, e in zip(values, exact))
+
+    @pytest.mark.parametrize("bond_dimension", [48, 64])
+    def test_lucj_fits_bond_dimension_without_optimization(self, bond_dimension):
+        """The 16-qubit LUCJ circuit is exact from bond dimension 48 in its natural order."""
+        assert self._lucj_z_error(bond_dimension, disable=True) < 1e-8
+
+    @pytest.mark.xfail(strict=True, reason=(
+        "Known bug: automatic lookahead routing raises this circuit's peak bond "
+        "dimension from 48 to 128, so at caps of 32-128 truncation makes <Z_i> "
+        "wrong by up to ~1. Remove this marker once fixed."))
+    @pytest.mark.parametrize("bond_dimension", [48, 64])
+    def test_lucj_optimized_swapping_matches_statevector(self, bond_dimension):
+        assert self._lucj_z_error(bond_dimension, disable=False) < 1e-6
 
 
 # ============================================================================

@@ -615,7 +615,8 @@ print(f"fidelity: {fid['fidelity']:.4f} +/- {fid['std_error']:.4f}")
 ## Error correction with Stim and Sinter
 
 To sample Stim circuits through Maestro, including from `sinter collect` with a
-decoder, see {doc}`qec-sinter`.
+decoder, see {doc}`qec-sinter`. To run Deltakit circuits, see
+{doc}`/getting-started/deltakit`.
 
 :::{toctree}
 :hidden:
