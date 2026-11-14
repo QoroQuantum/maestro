@@ -2060,3 +2060,36 @@ def test_a_mixture_of_unitaries_is_drawn_into_a_gate_where_no_channel_is_sampled
             for where, counts in (("Python", executed["counts"]), ("request", native["counts"])):
                 odd = (counts.get("01", 0) + counts.get("10", 0)) / shots
                 assert abs(odd - 0.2) < 0.06, f"{where} on {name}: odd parity in {odd} of the shots"
+
+
+
+@pytest.mark.parametrize("name, samples", [("statevector", True), ("matrix_product_state", True), ("density_matrix", False)])
+def test_a_checkpoint_suffix_without_noise_reports_the_channels_it_draws(name, samples):
+    """Without a noise block nothing is injected: a suffix runs as it is, and a backend that samples
+    channels draws its Pauli channel in every shot, which the result says. A density matrix applies
+    the channel exactly. Under a noise block the channel is drawn when a realization is built, and
+    the realization evolves deterministically."""
+    shots = 2000
+    bell = [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]}]
+    flip = {"name": "pauli_channel", "qubits": [0], "probabilities": [0.6, 0.4, 0.0, 0.0]}
+    measure = {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}
+
+    def circuit(*source):
+        return {"format": "instructions", "num_qubits": 2, "num_clbits": 2, "source": list(source)}
+
+    request = {"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit(*bell),
+               "suffixes": [circuit(flip, measure), circuit(measure)],
+               "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"}, "execution": {"shots": shots, "seed": 3}}
+    plain = _native_request(request)
+    assert plain["ok"], plain
+    drawn, measured = plain["results"]
+    assert drawn["stochastic_execution"] is samples, f"{name}: {drawn}"
+    assert measured["stochastic_execution"] is False
+    odd = (drawn["counts"].get("01", 0) + drawn["counts"].get("10", 0)) / shots
+    assert abs(odd - 0.4) < 0.05, f"{name}: odd parity in {odd} of the shots"
+    if samples:
+        request["suffixes"] = [circuit(flip, measure)]
+        request["noise"] = {"channels": [], "realizations": 8}
+        noisy = _native_request(request)
+        assert noisy["ok"], noisy
+        assert noisy["results"][0]["stochastic_execution"] is False

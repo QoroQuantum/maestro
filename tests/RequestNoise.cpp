@@ -778,6 +778,37 @@ void TestLoweredChannelDraws()
                   batch.at("results").at(0).at("stochastic_execution").as_bool() == entry.stochastic,
               ("A channel instruction of a checkpoint suffix was miscounted" + where).c_str());
     }
+
+    // Without a noise block nothing is injected: a suffix runs as it is, and a
+    // backend that samples channels draws a Pauli channel too, in every shot.
+    // A density matrix applies it exactly. Under a noise block it is drawn
+    // when the realization is built, which then evolves deterministically.
+    for (const char *method : {"statevector", "matrix_product_state", "density_matrix"})
+    {
+        const bool samples = std::string(method) != "density_matrix";
+        auto request = Request("checkpoint_batch", 2, "", method);
+        request["circuit"] = circuit({hadamard, entangle});
+        request["suffixes"] = j::array{circuit({pauli, measure}), circuit({measure})};
+        request["execution"].as_object()["shots"] = 2000;
+        const j::object plain = Call(request);
+        const j::object drawn = plain.at("results").at(0).as_object();
+        Check(drawn.at("stochastic_execution").as_bool() == samples,
+              (std::string("A suffix without noise misreported the Pauli channel it draws in each shot on ") + method).c_str());
+        Check(!plain.at("results").at(1).at("stochastic_execution").as_bool(), "A suffix of measurements alone was reported as stochastic");
+        // The bit flip of probability 0.4 sends that share of the pair to odd parity.
+        double odd = 0;
+        for (const char *key : {"01", "10"})
+            if (const auto *count = drawn.at("counts").as_object().if_contains(key))
+                odd += Real(*count);
+        Check(std::abs(odd / 2000 - 0.4) < 0.05, (std::string("A suffix without noise did not draw its Pauli channel on ") + method).c_str());
+        if (samples)
+        {
+            request["suffixes"] = j::array{circuit({pauli, measure})};
+            request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+            Check(!Call(request).at("results").at(0).at("stochastic_execution").as_bool(),
+                  (std::string("A Pauli channel drawn when the realization is built was counted as drawn while it runs on ") + method).c_str());
+        }
+    }
 }
 
 void TestNoisyEstimateResetStreams()

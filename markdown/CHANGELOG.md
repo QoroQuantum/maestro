@@ -148,6 +148,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for it, in Python and in requests, and on the path integral its realizations
   are scheduled as the prepared states they are. A relaxation still counts,
   since it may be drawn into a reset, which reads the state.
+- A `checkpoint_batch` suffix without a noise block reported
+  `stochastic_execution: false` for a Pauli channel instruction on a method
+  that samples channels, although each shot draws it: nothing is injected
+  without noise, so the suffix runs as it is. It reports `true` now.
 
 
 ## [0.3.14] - 2026-11-11

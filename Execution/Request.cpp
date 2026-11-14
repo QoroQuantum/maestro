@@ -2265,9 +2265,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         for (const auto &suffix : additional)
         {
             // A suffix continues the saved prefix, so even a leading pure-state
-            // reset may branch. Its shots sample those branches exactly.
-            const bool stochastic_suffix =
-                HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false, InjectedChannelDraws(simulator->SamplesQuantumChannels()));
+            // reset may branch. Its shots sample those branches exactly. Without
+            // noise nothing is injected: the suffix runs as it is, and the
+            // backend draws every channel instruction it samples, a Pauli one
+            // too, in each shot.
+            const bool stochastic_suffix = HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false,
+                                                                  noise.enabled ? InjectedChannelDraws(simulator->SamplesQuantumChannels())
+                                                                                : Circuits::Circuit<double>::ChannelDraws::kAll);
             noise.policy.stochastic_execution = noise.policy.stochastic_execution || stochastic_suffix;
             const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
             Counts counts;
