@@ -136,8 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state that channel instructions leave. Python and the request now read the
   probabilities through one function (`Simulators::BasisProbabilities`;
   Python reaches it through the new `INetwork::ExecuteOnHostProbabilities`),
-  and neither runs the circuit's end measurements. A qubit that only those
-  measurements use keeps its place in the result, in |0>.
+  and neither runs the circuit's end measurements. A measured qubit that
+  nothing executed acts on (only those measurements use it, or its gates
+  cancel) keeps its place in the result, in |0>.
 - With sampled noise on a method that samples no channels (tensor network,
   path integral, stabilizer and the like), a one-qubit mixture of unitaries
   among the circuit's channel instructions was counted as drawn from the

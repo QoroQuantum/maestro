@@ -1941,6 +1941,57 @@ def test_probabilities_keep_a_qubit_that_only_the_end_measurements_use(method, n
     bare = QuantumCircuit()
     bare.x(1)
     assert maestro.get_probabilities(bare, config=config) == pytest.approx([0, 1], abs=1e-9), name
+    # Gates that cancel leave their qubit untouched, and the optimizer removes them: measured, the
+    # qubit still keeps its place. Here qubit 0 is flipped twice and qubit 1 is in superposition.
+    cancelled = QuantumCircuit()
+    cancelled.x(0)
+    cancelled.x(0)
+    cancelled.h(1)
+    cancelled.measure([(0, 0), (1, 1)])
+    assert maestro.get_probabilities(cancelled, config=config) == pytest.approx([0.5, 0, 0.5, 0], abs=1e-9), name
+    native = _probabilities_request(name, {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                                           "source": [{"name": "x", "qubits": [0]}, {"name": "x", "qubits": [0]}, {"name": "h", "qubits": [1]},
+                                                      {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]})
+    assert native["probabilities"] == pytest.approx([0.5, 0, 0.5, 0], abs=1e-9), name
+
+
+@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
+                                          (S.DensityMatrix, "density_matrix"), (S.TensorNetwork, "tensor_network")])
+def test_probabilities_of_measured_circuits_agree_with_a_request(method, name):
+    """Random circuits whose qubits are all measured at the end, with gates that cancel among them
+    and qubits that nothing else uses: get_probabilities gives every measured qubit its place, and
+    the values of a probabilities request on the same register."""
+    rng = random.Random(11)
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    for trial in range(60):
+        width = rng.randint(1, 5)
+        circuit, source = QuantumCircuit(), []
+
+        def gate(gate_name, *qubits, angle=None):
+            getattr(circuit, gate_name)(*qubits, *([angle] if angle is not None else []))
+            source.append({"name": gate_name, "qubits": list(qubits), **({"params": [angle]} if angle is not None else {})})
+
+        for _ in range(rng.randint(0, 8)):
+            kind = rng.choice(["h", "ry", "cx", "x", "pair", "pair"])
+            q = rng.randrange(width)
+            if kind in ("cx", "pair") and width > 1 and rng.random() < 0.5:
+                target = rng.choice([other for other in range(width) if other != q])
+                gate("cx", q, target)
+                if kind == "pair":
+                    gate("cx", q, target)
+            elif kind == "ry":
+                gate("ry", q, angle=rng.uniform(0.1, 3.0))
+            elif kind == "pair":
+                gate("x", q)
+                gate("x", q)
+            elif kind != "cx":
+                gate(kind, q)
+        circuit.measure([(q, q) for q in range(width)])
+        source.append({"name": "measure", "qubits": list(range(width)), "clbits": list(range(width))})
+        native = _probabilities_request(name, {"format": "instructions", "num_qubits": width, "num_clbits": width, "source": source})
+        python = maestro.get_probabilities(circuit, config=config)
+        assert len(python) == 1 << width, f"trial {trial} on {name}: {len(python)} probabilities for {width} measured qubits: {source}"
+        assert python == pytest.approx(native["probabilities"], abs=1e-8), f"trial {trial} on {name}: {source}"
 
 
 # ---- A channel instruction that sampled noise injection draws into a gate ----

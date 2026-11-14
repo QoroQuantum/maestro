@@ -512,8 +512,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      * of ExecuteOnHostAmplitudes). They exist for every state, so every
      * simulation type answers: the mixed ones and the ones without amplitudes
      * too. End measurements are removed first: they would collapse the state.
-     * A qubit that only they use keeps its place among the retained qubits,
-     * in |0>, as it has in the amplitudes of the measured circuit.
+     * A measured qubit that nothing executed acts on (only they use it, or
+     * its gates cancel) keeps its place among the retained qubits, in |0>, as
+     * it has in the amplitudes of the measured circuit.
      *
      * @param circuit The circuit to execute.
      * @param hostId The id of the host to execute the circuit on.
@@ -524,34 +525,44 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const auto read = [](Simulators::ISimulator &state) { return Simulators::BasisProbabilities(state); };
         if (!circuit)
             return ExecuteOnHostBasisValues(circuit, hostId, "ExecuteOnHostProbabilities", read);
-        const auto executed = circuit->RemoveEndMeasurements();
-        auto values = ExecuteOnHostBasisValues(executed, hostId, "ExecuteOnHostProbabilities", read);
+        auto values = ExecuteOnHostBasisValues(circuit->RemoveEndMeasurements(), hostId, "ExecuteOnHostProbabilities", read);
 
-        // The register that ran holds the qubits the executed circuit uses. One
-        // that only the removed measurements used was never touched: it is in
-        // |0>, so it takes its place back with no probability where it is 1.
-        const auto used = circuit->GetQubits(), kept = executed->GetQubits();
-        const size_t ran = std::max<size_t>(1, kept.size());
-        if (used.size() == kept.size() || used.size() >= std::numeric_limits<size_t>::digits || values.size() != (size_t{1} << ran))
+        // The register that ran holds the qubits of what was executed: the
+        // circuit without its end measurements, and without the gates the
+        // optimizer cancelled. A measured qubit that is not among them was
+        // left in |0>: it takes its place back, as it has in the amplitudes
+        // of the measured circuit, with no probability where it is 1.
+        std::set<Types::qubit_t> ran;
+        for (const auto &mapped : qubitsMapOnHost)
+            ran.insert(mapped.first);
+        // Nothing left to execute runs on one idle qubit.
+        if (values.size() != (ran.empty() ? size_t{2} : size_t{1} << ran.size()))
             return values;
-        std::vector<size_t> place; // of each qubit that ran, among the circuit's qubits
+        auto all = ran;
+        for (const auto &op : circuit->GetOperations())
+            if (op->GetType() == Circuits::OperationType::kMeasurement)
+                for (const auto qubit : op->AffectedQubits())
+                    all.insert(qubit);
+        if (all.size() == ran.size() || all.size() >= std::numeric_limits<size_t>::digits)
+            return values;
+        std::vector<size_t> place; // of each qubit that ran, among all of them
         size_t position = 0;
-        for (const auto qubit : used)
+        for (const auto qubit : all)
         {
-            if (kept.count(qubit))
+            if (ran.count(qubit))
                 place.push_back(position);
             ++position;
         }
-        std::vector<double> all(size_t{1} << used.size(), 0.0);
+        std::vector<double> expanded(size_t{1} << all.size(), 0.0);
         for (size_t state = 0; state < (size_t{1} << place.size()); ++state)
         {
             size_t index = 0;
             for (size_t bit = 0; bit < place.size(); ++bit)
                 if (state & (size_t{1} << bit))
                     index |= size_t{1} << place[bit];
-            all[index] = values[state];
+            expanded[index] = values[state];
         }
-        return all;
+        return expanded;
     }
 
     /**

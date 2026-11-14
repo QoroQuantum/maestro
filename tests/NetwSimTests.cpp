@@ -23,6 +23,7 @@ namespace bdata = boost::unit_test::data;
 #include <complex>
 #include <numeric>
 #include <random>
+#include <set>
 #include <unordered_map>
 #include <vector>
 #define _USE_MATH_DEFINES
@@ -295,44 +296,67 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitProbabilitiesMatchStatev
         networks.back()->CreateSimulator();
     }
 
-    // The end measurements of a whole program would collapse the state that is
-    // read: they are not executed. Here they measure the qubits the gates use.
-    auto measured = std::make_shared<Circuits::Circuit<>>();
-    std::vector<std::pair<Types::qubit_t, size_t>> pairs;
-    for (const auto &op : circuit->GetOperations())
-    {
-        measured->AddOperation(op->Clone());
-        for (const auto qubit : op->AffectedQubits())
-            if (std::find_if(pairs.begin(), pairs.end(), [qubit](const auto &pair) { return pair.first == qubit; }) == pairs.end())
-                pairs.push_back({qubit, pairs.size()});
-    }
-    measured->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(pairs));
+    // The reference: the gates on a plain statevector of all the qubits, with
+    // no network between, so that nothing is optimized away and no qubit is
+    // left out. The network leaves out a qubit that nothing executed acts on,
+    // one whose gates cancel too, unless it is measured.
+    const auto direct = [](const std::shared_ptr<Circuits::Circuit<>> &gates) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+        sim->AllocateQubits(nrQubits);
+        sim->Initialize();
+        Circuits::OperationState state(nrQubits);
+        gates->Execute(sim, state);
+        return sim->AllProbabilities();
+    };
+    // That distribution on some of the qubits, in ascending order.
+    const auto reduced = [](const std::vector<double> &all, const std::set<size_t> &qubits) {
+        std::vector<double> some(size_t{1} << qubits.size(), 0.0);
+        for (size_t state = 0; state < all.size(); ++state)
+        {
+            size_t index = 0, bit = 0;
+            for (const auto qubit : qubits)
+                index |= ((state >> qubit) & 1) << bit++;
+            some[index] += all[state];
+        }
+        return some;
+    };
 
+    // Without measurements the register is the one of the amplitudes.
     const auto amplitudes = networkSimStatevector->ExecuteOnHostAmplitudes(circuit, 0);
     for (const auto &network : networks)
-        for (const auto &executed : {circuit, measured})
-        {
-            const auto probabilities = network->ExecuteOnHostProbabilities(executed, 0);
-            BOOST_REQUIRE(probabilities.size() == amplitudes.size());
-            for (size_t state = 0; state < amplitudes.size(); ++state)
-                BOOST_CHECK_SMALL(probabilities[state] - std::norm(amplitudes[state]), 1e-6);
-        }
+    {
+        const auto probabilities = network->ExecuteOnHostProbabilities(circuit, 0);
+        BOOST_REQUIRE(probabilities.size() == amplitudes.size());
+        for (size_t state = 0; state < amplitudes.size(); ++state)
+            BOOST_CHECK_SMALL(probabilities[state] - std::norm(amplitudes[state]), 1e-6);
+    }
+
+    // The end measurements of a whole program would collapse the state that is
+    // read: they are not executed. Here they measure every qubit the gates
+    // use, and each of those has its place in the result.
+    const auto gated = circuit->GetQubits();
+    const auto expectedGated = reduced(direct(circuit), gated);
+    auto measured = std::make_shared<Circuits::Circuit<>>();
+    for (const auto &op : circuit->GetOperations())
+        measured->AddOperation(op->Clone());
+    std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+    for (const auto qubit : gated)
+        pairs.push_back({qubit, pairs.size()});
+    measured->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(pairs));
+    for (const auto &network : networks)
+    {
+        const auto probabilities = network->ExecuteOnHostProbabilities(measured, 0);
+        BOOST_REQUIRE(probabilities.size() == expectedGated.size());
+        for (size_t state = 0; state < expectedGated.size(); ++state)
+            BOOST_CHECK_SMALL(probabilities[state] - expectedGated[state], 1e-6);
+    }
 
     // A qubit that only the end measurements use is still one of the circuit's
     // qubits: it keeps its place in the result, in |0>. Gates on the first six
     // qubits, measurements on all eight.
     auto narrow = GenerateRandomCircuit(nrGates, nrQubits - 2, g);
     BOOST_REQUIRE(narrow);
-    const auto narrowAmplitudes = networkSimStatevector->ExecuteOnHostAmplitudes(narrow, 0);
-    std::vector<double> expected(size_t{1} << nrQubits, 0.0);
-    const auto gated = narrow->GetQubits();
-    for (size_t state = 0; state < narrowAmplitudes.size(); ++state)
-    {
-        size_t index = 0, bit = 0;
-        for (const auto qubit : gated)
-            index |= ((state >> bit++) & 1) << qubit;
-        expected[index] = std::norm(narrowAmplitudes[state]);
-    }
+    const auto expected = direct(narrow);
     std::vector<std::pair<Types::qubit_t, size_t>> everyQubit;
     for (size_t qubit = 0; qubit < nrQubits; ++qubit)
         everyQubit.push_back({qubit, qubit});
@@ -343,6 +367,22 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitProbabilitiesMatchStatev
         BOOST_REQUIRE(probabilities.size() == expected.size());
         for (size_t state = 0; state < expected.size(); ++state)
             BOOST_CHECK_SMALL(probabilities[state] - expected[state], 1e-6);
+    }
+
+    // The same for a measured qubit whose gates cancel, which an optimizer
+    // removes: X twice on qubit 0, a Hadamard on qubit 1, both measured.
+    auto cancelled = std::make_shared<Circuits::Circuit<>>();
+    cancelled->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kXGateType, 0));
+    cancelled->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kXGateType, 0));
+    cancelled->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 1));
+    cancelled->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement({{0, 0}, {1, 1}}));
+    for (const auto &network : networks)
+    {
+        const auto probabilities = network->ExecuteOnHostProbabilities(cancelled, 0);
+        BOOST_REQUIRE(probabilities.size() == 4);
+        const double wanted[]{0.5, 0.0, 0.5, 0.0};
+        for (size_t state = 0; state < 4; ++state)
+            BOOST_CHECK_SMALL(probabilities[state] - wanted[state], 1e-6);
     }
 }
 
