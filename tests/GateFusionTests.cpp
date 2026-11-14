@@ -895,6 +895,29 @@ void UnreadTrajectoryBlocks()
             Check(std::abs(norm - State(*reference).squaredNorm()) < 1e-10 * norm, name + " returned the wrong norm");
         }
 
+    // A target listed twice is refused before the state is touched.
+    {
+        auto sim = Make(Method::kStatevector, false, Backend::kQCSim, 3);
+        sim->ApplyH(0);
+        sim->ApplyCX(0, 1);
+        const Vec before = State(*sim);
+        for (const Types::qubits_vector &targets : {Types::qubits_vector{0, 0}, Types::qubits_vector{0, 1, 0}, Types::qubits_vector{2, 1, 1}})
+        {
+            const Eigen::Index dimension = Eigen::Index{1} << targets.size();
+            bool refused = false;
+            try
+            {
+                sim->ApplyLocalMapNorm(targets, Eigen::MatrixXcd::Identity(dimension, dimension));
+            }
+            catch (const std::invalid_argument &)
+            {
+                refused = true;
+            }
+            Check(refused, "a local map with a repeated target was applied");
+            Close(State(*sim), before, "the state after a refused local map", 1e-15);
+        }
+    }
+
     // What a channel says about its first operator.
     {
         // The channel owns what the reference points to.

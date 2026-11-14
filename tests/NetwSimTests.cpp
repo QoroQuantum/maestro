@@ -296,8 +296,7 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitProbabilitiesMatchStatev
     }
 
     // The end measurements of a whole program would collapse the state that is
-    // read: they are not executed. Only the used qubits are measured, so that
-    // the register stays the one of the circuit without them.
+    // read: they are not executed. Here they measure the qubits the gates use.
     auto measured = std::make_shared<Circuits::Circuit<>>();
     std::vector<std::pair<Types::qubit_t, size_t>> pairs;
     for (const auto &op : circuit->GetOperations())
@@ -318,6 +317,33 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomCircuitProbabilitiesMatchStatev
             for (size_t state = 0; state < amplitudes.size(); ++state)
                 BOOST_CHECK_SMALL(probabilities[state] - std::norm(amplitudes[state]), 1e-6);
         }
+
+    // A qubit that only the end measurements use is still one of the circuit's
+    // qubits: it keeps its place in the result, in |0>. Gates on the first six
+    // qubits, measurements on all eight.
+    auto narrow = GenerateRandomCircuit(nrGates, nrQubits - 2, g);
+    BOOST_REQUIRE(narrow);
+    const auto narrowAmplitudes = networkSimStatevector->ExecuteOnHostAmplitudes(narrow, 0);
+    std::vector<double> expected(size_t{1} << nrQubits, 0.0);
+    const auto gated = narrow->GetQubits();
+    for (size_t state = 0; state < narrowAmplitudes.size(); ++state)
+    {
+        size_t index = 0, bit = 0;
+        for (const auto qubit : gated)
+            index |= ((state >> bit++) & 1) << qubit;
+        expected[index] = std::norm(narrowAmplitudes[state]);
+    }
+    std::vector<std::pair<Types::qubit_t, size_t>> everyQubit;
+    for (size_t qubit = 0; qubit < nrQubits; ++qubit)
+        everyQubit.push_back({qubit, qubit});
+    narrow->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(everyQubit));
+    for (const auto &network : networks)
+    {
+        const auto probabilities = network->ExecuteOnHostProbabilities(narrow, 0);
+        BOOST_REQUIRE(probabilities.size() == expected.size());
+        for (size_t state = 0; state < expected.size(); ++state)
+            BOOST_CHECK_SMALL(probabilities[state] - expected[state], 1e-6);
+    }
 }
 
 BOOST_DATA_TEST_CASE_F(NetwSimTestFixture, RandomPauliExpectationValuesMatchStatevector, bdata::xrange(10), trial)

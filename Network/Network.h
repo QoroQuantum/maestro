@@ -173,7 +173,8 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      * amplitudes (tensor network, Pauli propagator, extended stabilizer). The
      * circuit's end measurements are not executed: they would collapse the
      * state that is read. The circuit is mapped on the host as for
-     * ExecuteOnHostAmplitudes, and the basis states are indexed the same way.
+     * ExecuteOnHostAmplitudes, and the basis states are indexed the same way:
+     * a qubit that only the end measurements use is among them, in |0>.
      *
      * @param circuit The circuit to execute.
      * @param hostId The id of the host to execute the circuit on.

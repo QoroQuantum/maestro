@@ -1911,6 +1911,38 @@ def test_probabilities_without_a_statevector_order_the_qubits_as_the_amplitudes(
     assert [abs(a) ** 2 for a in reference] == pytest.approx([0, 0.25, 0.75, 0], abs=1e-9)
 
 
+@pytest.mark.parametrize("method, name", _PROBABILITY_METHODS)
+def test_probabilities_keep_a_qubit_that_only_the_end_measurements_use(method, name):
+    """The end measurements are not run, but a qubit they alone use is still one of the circuit's
+    qubits: it keeps its place in the result, in |0>, as it has in the amplitudes and in a request."""
+    config = maestro.SimulatorConfig(simulator_type=B.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    # An X on qubit 1; qubit 0 is only measured. Basis index 2 is qubit 1 set.
+    flipped = QuantumCircuit()
+    flipped.x(1)
+    flipped.measure([(0, 0), (1, 1)])
+    assert maestro.get_probabilities(flipped, config=config) == pytest.approx([0, 0, 1, 0], abs=1e-9), name
+    native = _probabilities_request(name, {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                                           "source": [{"name": "x", "qubits": [1]},
+                                                      {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]})
+    assert native["probabilities"] == pytest.approx([0, 0, 1, 0], abs=1e-9), name
+    # A Bell pair on qubits 1 and 3 among four measured qubits: indices 0 and 2 + 8.
+    pair = QuantumCircuit()
+    pair.h(1)
+    pair.cx(1, 3)
+    pair.measure([(q, q) for q in range(4)])
+    expected = [0.0] * 16
+    expected[0] = expected[10] = 0.5
+    assert maestro.get_probabilities(pair, config=config) == pytest.approx(expected, abs=1e-9), name
+    # Nothing but measurements: every qubit is in |0>.
+    idle = QuantumCircuit()
+    idle.measure([(0, 0), (1, 1)])
+    assert maestro.get_probabilities(idle, config=config) == pytest.approx([1, 0, 0, 0], abs=1e-9), name
+    # Without the measurements the unused qubits are left out, as before.
+    bare = QuantumCircuit()
+    bare.x(1)
+    assert maestro.get_probabilities(bare, config=config) == pytest.approx([0, 1], abs=1e-9), name
+
+
 # ---- A channel instruction that sampled noise injection draws into a gate ----
 
 @pytest.mark.parametrize("method, name, drawn_while_running", [
