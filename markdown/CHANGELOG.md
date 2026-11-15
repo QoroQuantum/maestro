@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-11-15
+
 ### Added
 
 - `execution_metadata.realization_workers` is also reported for shot rows
@@ -1067,7 +1069,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.15...HEAD
+[0.3.15]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...v0.3.12
