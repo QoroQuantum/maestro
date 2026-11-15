@@ -494,6 +494,77 @@ extern "C"
         }
     }
 
+    int MaestroApplyKrausChannel(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, size_t operators)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!qubits || !interleaved || count < 1 || count > 2 || operators == 0)
+                return 0;
+            const size_t dim = size_t{1} << count;
+            Simulators::QuantumChannel::KrausOperators kraus;
+            kraus.reserve(operators);
+            for (size_t k = 0; k < operators; ++k)
+            {
+                const double *entries = interleaved + 2 * dim * dim * k;
+                Eigen::MatrixXcd matrix(dim, dim);
+                for (size_t row = 0; row < dim; ++row)
+                    for (size_t column = 0; column < dim; ++column)
+                        matrix(row, column) = {entries[2 * (row * dim + column)], entries[2 * (row * dim + column) + 1]};
+                kraus.push_back(std::move(matrix));
+            }
+            state.ApplyQuantumChannel(Types::qubits_vector(qubits, qubits + count), Simulators::QuantumChannel(kraus));
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroSupportsQuantumChannels(void *sim)
+    {
+        try
+        {
+            return sim && static_cast<Simulators::ISimulator *>(sim)->SupportsQuantumChannels() ? 1 : 0;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroSamplesQuantumChannels(void *sim)
+    {
+        try
+        {
+            return sim && static_cast<Simulators::ISimulator *>(sim)->SamplesQuantumChannels() ? 1 : 0;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroGetTrajectoryBlockStatistics(void *sim, uint64_t *unreadBlocks, uint64_t *rereadBlocks)
+    {
+        if (!sim || !unreadBlocks || !rereadBlocks)
+            return 0;
+        try
+        {
+            const auto value = static_cast<Simulators::ISimulator *>(sim)->GetGateFusionStatistics();
+            *unreadBlocks = value.unreadBlocks;
+            *rereadBlocks = value.rereadBlocks;
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
     int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits, size_t count)
     {
         if (!sim)

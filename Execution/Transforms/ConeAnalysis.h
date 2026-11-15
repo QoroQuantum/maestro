@@ -40,7 +40,10 @@ inline bool CanTraceConeSupport(const std::shared_ptr<Circuits::Circuit<double>>
         case Circuits::OperationType::kDelay:
             break;
         case Circuits::OperationType::kQuantumChannel:
-            if (!ensemble)
+            // Without an ensemble a channel runs as one sampled branch, which
+            // conditions the qubits entangled with its own as a sampled reset
+            // does: outside a cone it leaves the mean alone, not a trajectory.
+            if (!ensemble && !marginalize_resets)
                 return false;
             break;
         case Circuits::OperationType::kReset:

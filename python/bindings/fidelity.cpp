@@ -126,7 +126,10 @@ static double mirror_fidelity_projection(const std::shared_ptr<Circuits::Circuit
             mirror_copy->AddOperation(op->Clone());
         }
 
-        size_t n = std::max(1, static_cast<int>(mirror_copy->GetMaxQubitIndex()) + 1);
+        // Every qubit up to the highest index is measured, so the register
+        // holds them all.
+        const int num_qubits = RegisterQubits(CircuitWidth(*mirror_copy));
+        const size_t n = static_cast<size_t>(num_qubits);
         std::vector<std::pair<Types::qubit_t, size_t>> pairs;
         pairs.reserve(n);
         for (size_t i = 0; i < n; ++i)
@@ -137,7 +140,6 @@ static double mirror_fidelity_projection(const std::shared_ptr<Circuits::Circuit
         // disabled. The mirror circuit's paired gate/adjoint sequences must not be
         // cancelled by the optimizer: e.g. ry(-θ) + ry(θ) → ry(0), followed by
         // s + ry(0) + sdg, which the optimizer would incorrectly simplify further.
-        int num_qubits = std::max(1, static_cast<int>(mirror_copy->GetMaxQubitIndex()) + 1);
         ScopedSimulator sim(num_qubits);
         if (sim.handle == 0)
             throw std::runtime_error("mirror_fidelity: failed to create simulator.");
@@ -190,7 +192,7 @@ static double mirror_fidelity_projection(const std::shared_ptr<Circuits::Circuit
         // Try exact statevector with circuit optimization disabled
         try
         {
-            int num_qubits = std::max(1, static_cast<int>(mirror->GetMaxQubitIndex()) + 1);
+            const int num_qubits = HandleQubits(*mirror);
             ScopedSimulator sim(num_qubits);
             if (sim.handle != 0)
             {
@@ -296,7 +298,7 @@ std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<
             combined->AddOperation(adj);
     }
 
-    int num_qubits = std::max(1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
+    const int num_qubits = HandleQubits(*combined);
     ScopedSimulator sim(num_qubits);
     if (sim.handle == 0)
         throw std::runtime_error("Failed to create simulator handle.");

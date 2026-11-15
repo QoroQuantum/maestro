@@ -49,7 +49,24 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     const size_t count = observables.size();
     const auto clean = circuit->RemoveEndMeasurements();
     const bool exact = out.policy.exact_channels;
-    const noise::NoiseInjectionPlan plan(clean, noise_model);
+    if (exact && SamplesQuantumChannels(config))
+        throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
+                                    "channel as one sampled trajectory");
+    const noise::NoiseInjectionPlan plan(clean, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
+    // A backend that samples channels draws all the noise as each realization
+    // runs (ResolveRuntimeNoise): they then share one circuit and differ by seed.
+    RecordCircuitPtr runtime_circuit, first_realization;
+    ResolveRuntimeNoise(layer, plan, rng, runtime_circuit, first_realization);
+    // Whether the executions draw channel branches, shared circuit or not: the noise seed then joins their seeds.
+    RuntimeDraws draws(&plan, runtime_circuit, first_realization);
+    // Called once per realization, in order: the one drawn to decide is the first.
+    const auto realize = [&]() -> RecordCircuitPtr {
+        RecordCircuitPtr noisy = runtime_circuit     ? runtime_circuit
+                                 : first_realization ? std::exchange(first_realization, nullptr)
+                                                     : InjectPlanned(layer, plan, rng, exact);
+        draws.See(noisy);
+        return noisy;
+    };
 
     // What the aggregate needs of each realization, kept in realization order.
     struct Realization
@@ -68,10 +85,12 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     for (const auto &observable : observables)
         qubits = std::max(qubits, observable.size());
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
+    out.realization_workers = workers;
     // A cache serves one thread (EstimationCache).
     std::vector<EstimationCache> caches(workers);
     const auto run = [&](EstimationCache &cache, size_t r, const RecordCircuitPtr &noisy) {
-        auto result = EstimateCircuit(noisy, observables, NoiseExecutionConfig(config, noise_seed, r), &cache);
+        auto result = EstimateCircuit(noisy, observables,
+                                      draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r), &cache);
         auto &record = realizations[r];
         record.values = std::move(result.values);
         record.bounds = std::move(result.plan.error_bounds);
@@ -91,7 +110,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
         // Realization 0 warms one cache, which every worker then starts from,
         // so reuse matches a serial loop's whenever the noise keeps the
         // circuit's multi-qubit topology (the cache's signature).
-        run(caches[0], 0, InjectPlanned(layer, plan, rng, exact));
+        run(caches[0], 0, realize());
         first = 1;
         warm_hits = caches[0].hits;
         caches[0].hits = 0;
@@ -99,7 +118,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
             caches[worker] = caches[0];
     }
     Utils::RunRealizations(
-        noise_realizations - first, workers, [&](size_t) { return InjectPlanned(layer, plan, rng, exact); },
+        noise_realizations - first, workers, [&](size_t) { return realize(); },
         [&](size_t worker, size_t i, RecordCircuitPtr noisy) { run(caches[worker], i + first, noisy); });
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
@@ -220,8 +239,8 @@ double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitP
     // Exactly the circuit's register: the default allocation also adds the
     // host's network-entangled qubit (2x statevector, 4x density-matrix work).
     const size_t register_qubits = static_cast<size_t>(num_qubits);
-    auto network = adopted ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(handle.value)
-                           : ConfigureNetwork(handle.value, config, register_qubits);
+    auto network =
+        adopted ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(handle.value) : ConfigureNetwork(handle.value, config, register_qubits);
     if (!network)
         throw std::runtime_error("Failed to configure network.");
     auto simulator = network->GetSimulator();
@@ -250,8 +269,12 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
     return RealizationFidelityOn(ideal, noisy, config, nullptr);
 }
 
-namespace
+bool HasUnitaryIdeal(const RecordCircuitPtr &before_readout)
 {
+    std::unordered_set<Types::qubit_t> touched;
+    return before_readout->HasDeterministicEvolutionWith(Circuits::Circuit<double>::ChannelDraws::kNone, false, true, touched);
+}
+
 // The unitary that the ideal circuit applies to a fresh register. A reset
 // before any other operation on its wire (all NoisyFidelity admits) prepares
 // its target from |0>: nothing for |0>, an X for |1>. The adjoint of that X
@@ -275,7 +298,6 @@ RecordCircuitPtr PreparedUnitary(const RecordCircuitPtr &circuit)
             out->AddOperation(op);
     return out;
 }
-} // namespace
 
 NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, std::optional<size_t> requested_realizations,
                                   const SimulatorConfig &requested_config, std::optional<uint64_t> noise_seed)
@@ -289,12 +311,11 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     // other operation on their wire: on the fresh register they prepare |0> or
     // |1>, which the ideal state includes (PreparedUnitary).
     const auto before_readout = circuit->RemoveEndMeasurements();
-    std::unordered_set<Types::qubit_t> touched;
-    if (!before_readout->HasDeterministicEvolution(false, true, touched))
+    if (!HasUnitaryIdeal(before_readout))
         throw std::invalid_argument("noisy_fidelity requires a unitary ideal circuit; mid-circuit measurements, resets after other operations "
                                     "on their qubit and classical control are unsupported.");
     const auto ideal = PreparedUnitary(WithoutCircuitChannels(circuit));
-    const noise::NoiseInjectionPlan plan(circuit, noise_model);
+    noise::NoiseInjectionPlan plan(circuit, noise_model);
     // The register each realization evaluates: fidelity drops terminal
     // readout, so a measured qubit no gate touches is not part of it, while a
     // crosstalk spectator of the noise is (RealizationFidelity).
@@ -313,6 +334,17 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     const size_t noise_realizations = policy.realizations;
     auto rng = MakeNoiseRng(config, noise_seed);
     const bool exact = policy.exact_channels;
+    // A backend that samples channels from its state draws their branches as
+    // each realization runs: its fidelity is that of one trajectory, and the
+    // mean over realizations that of the channels, with nothing approximated.
+    plan.KeepRuntimeChannels(policy.runtime_channels, policy.chain_order);
+    // When it draws all the noise that way (ResolveRuntimeNoise), the realizations share one circuit and differ by
+    // seed. Whenever a realization keeps channels that are drawn, shared circuit or not (RuntimeDraws), the noise
+    // seed has no injection to drive for them and joins the seed of each execution (RuntimeNoiseExecutionConfig),
+    // as in EstimateNoisy: either seed alone still changes the errors drawn.
+    RecordCircuitPtr runtime_circuit, first_realization;
+    ResolveRuntimeNoise(NoiseLayer::kCombined, plan, rng, runtime_circuit, first_realization);
+    RuntimeDraws draws(&plan, runtime_circuit, first_realization);
 
     struct Realization
     {
@@ -326,10 +358,14 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     Utils::RunRealizations(
         noise_realizations, workers,
         [&](size_t r) {
-            auto noisy = InjectPlanned(NoiseLayer::kCombined, plan, rng, exact);
+            // Called once per realization, in order: the one drawn to decide is the first.
+            auto noisy = runtime_circuit     ? runtime_circuit
+                         : first_realization ? std::exchange(first_realization, nullptr)
+                                             : InjectPlanned(NoiseLayer::kCombined, plan, rng, exact);
+            draws.See(noisy);
             // Reset collapse must use a fresh seed for each realization, drawn
             // after its injection from the same stream.
-            auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
+            auto realization_config = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r);
             if (!realization_config.seed)
                 realization_config.seed = rng();
             return Realization{std::move(noisy), std::move(realization_config)};
@@ -340,6 +376,7 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     out.policy = policy;
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     out.realizations = noise_realizations;
+    out.realization_workers = workers;
     double sum = 0, squares = 0;
     for (const double fidelity : fidelities)
     {

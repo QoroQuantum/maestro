@@ -482,6 +482,54 @@ void TensorQueries()
     Near(untouched[0], 9.);
 }
 
+// A channel through the C interface, on a simulator handle: applied exactly
+// where the simulator holds the ensemble, as one branch drawn from the state
+// where it samples.
+void ChannelsOnAHandle()
+{
+    if (backend != Backend::kQCSim)
+        return;
+    const double keep = std::sqrt(0.7), decay = std::sqrt(0.3);
+    // Amplitude damping of 0.3, row-major and interleaved: diag(1, sqrt(0.7)), then sqrt(0.3)|0><1|.
+    const double damping[16] = {1, 0, 0, 0, 0, 0, keep, 0, 0, 0, decay, 0, 0, 0, 0, 0};
+    const unsigned long q = 0;
+    {
+        auto sim = Make(Method::kDensityMatrix, 2);
+        sim->ApplyX(0);
+        Check(MaestroSupportsQuantumChannels(sim.get()) && !MaestroSamplesQuantumChannels(sim.get()), "A mixed state does not report exact channels");
+        Check(MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 2), "C channel failed");
+        Near(sim->Probability(1), 0.7);
+        Near(sim->Probability(0), 0.3);
+        uint64_t unread = 1, reread = 1;
+        Check(MaestroGetTrajectoryBlockStatistics(sim.get(), &unread, &reread) && unread == 0 && reread == 0, "Trajectory block statistics are not readable");
+        // What is no channel fails without throwing.
+        const double half[8] = {0.5, 0, 0, 0, 0, 0, 0.5, 0};
+        Check(!MaestroApplyKrausChannel(sim.get(), &q, 1, half, 1), "Operators that are no channel were applied");
+        Check(!MaestroApplyKrausChannel(sim.get(), &q, 3, damping, 2) && !MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 0),
+              "A malformed channel call was accepted");
+    }
+    for (auto method : {Method::kStatevector, Method::kMatrixProductState})
+    {
+        size_t kept = 0;
+        for (unsigned seed = 1; seed <= 60; ++seed)
+        {
+            auto sim = Make(method, 2);
+            sim->SetSeed(seed);
+            sim->ApplyX(0);
+            Check(!MaestroSupportsQuantumChannels(sim.get()) && MaestroSamplesQuantumChannels(sim.get()), "A pure state does not report sampled channels");
+            Check(MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 2), "C channel failed on a pure state");
+            const double one = sim->Probability(1);
+            Check(std::abs(one) < 1e-9 || std::abs(one - 1) < 1e-9, "A sampled channel left no single branch");
+            kept += one > 0.5;
+        }
+        Check(kept > 29 && kept < 55, "The branches drawn through the C interface do not follow the channel");
+    }
+    auto tensors = Make(Method::kTensorNetwork, 1);
+    Check(!MaestroSupportsQuantumChannels(tensors.get()) && !MaestroSamplesQuantumChannels(tensors.get()) &&
+              !MaestroApplyKrausChannel(tensors.get(), &q, 1, damping, 2),
+          "A simulator that holds no channels applied one");
+}
+
 void JsonTensorQueries()
 {
     auto request = Request("diagnostics", "matrix_product_state");
@@ -547,6 +595,7 @@ int main(int argc, char **argv)
         JsonBatches();
         TensorQueries();
         JsonTensorQueries();
+        ChannelsOnAHandle();
         std::cout << checks << " expectation batch checks passed\n";
     }
     catch (const std::exception &e)

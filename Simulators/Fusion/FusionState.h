@@ -54,6 +54,13 @@ class FusionState : public ISimulator
             else
                 requested_ = setting == "true" || setting == "1";
         }
+        else if (name == kReadBlocksFirst)
+        {
+            if (setting != "true" && setting != "false" && setting != "1" && setting != "0")
+                throw std::invalid_argument("trajectory_blocks_read_first must be true, false, 1 or 0");
+            Flush();
+            readBlocksFirst_ = setting == "true" || setting == "1";
+        }
         else
         {
             Flush();
@@ -70,6 +77,8 @@ class FusionState : public ISimulator
     {
         if (std::string(key) == "gate_fusion")
             return RequestedSetting();
+        if (std::string(key) == kReadBlocksFirst)
+            return readBlocksFirst_ ? "true" : "false";
         return immediate_->GetConfiguration(key);
     }
 
@@ -97,6 +106,88 @@ class FusionState : public ISimulator
     void FlushPendingGates() override
     {
         cache_.Flush([this](const auto &block) { Emit(block); });
+        // Pending blocks never share a qubit, so their order is free.
+        for (const auto &block : channelBlocks_)
+            EmitChannelBlock(block);
+        channelBlocks_.clear();
+        if (!trajectoryBlocks_.empty())
+        {
+            // Each is resolved from the state as the ones before it left it.
+            const auto blocks = std::move(trajectoryBlocks_);
+            trajectoryBlocks_.clear();
+            for (const auto &block : blocks)
+                ResolveTrajectoryBlock(block);
+        }
+        // Whatever follows may read the state.
+        SettleNorm();
+    }
+
+    // A mixed-state backend that applies a local map in one pass fuses a
+    // channel with the gates around it: the pending gates on its qubits, the
+    // channel and what follows become one superoperator on at most two qubits.
+    bool FusesQuantumChannels() const override
+    {
+        return ready_ && IsGateFusionEnabled() && (immediate_->SupportsSuperoperators() || ResolvesChannelBlocks());
+    }
+
+    // A pure-state backend that samples channels and reads a local reduced
+    // density matrix resolves a fused block from its state: one read gives the
+    // probability of every branch of every channel in the block, and the
+    // operators selected are then applied as one matrix.
+    bool ResolvesChannelBlocks() const
+    {
+        return immediate_->SamplesQuantumChannels() && immediate_->SupportsLocalDensityMatrix();
+    }
+
+    bool SupportsLocalDensityMatrix() const override
+    {
+        return immediate_->SupportsLocalDensityMatrix();
+    }
+
+    Eigen::MatrixXcd LocalDensityMatrix(const Types::qubits_vector &qs) override
+    {
+        Flush();
+        return immediate_->LocalDensityMatrix(qs);
+    }
+
+    bool SupportsLocalMapNorm() const override
+    {
+        return immediate_->SupportsLocalMapNorm();
+    }
+
+    double ApplyLocalMapNorm(const Types::qubits_vector &qs, const Eigen::MatrixXcd &matrix) override
+    {
+        Flush();
+        const double norm = immediate_->ApplyLocalMapNorm(qs, matrix);
+        // The caller's matrix need not keep the norm, and the backend has just measured what it left.
+        normKnown_ = std::abs(norm - 1.) <= kNormTolerance;
+        NotifyObservers(qs);
+        return norm;
+    }
+
+    bool SkipIdleOperation() override
+    {
+        if (!FusesQuantumChannels())
+            return false;
+        ConsumeBoundary(Circuits::OperationType::kDelay);
+        return true;
+    }
+
+    bool SupportsSuperoperators() const override
+    {
+        return immediate_->SupportsSuperoperators();
+    }
+
+    bool SamplesQuantumChannels() const override
+    {
+        return immediate_->SamplesQuantumChannels();
+    }
+
+    void ApplySuperoperator(const Types::qubits_vector &qs, const Eigen::MatrixXcd &superoperator) override
+    {
+        Flush();
+        immediate_->ApplySuperoperator(qs, superoperator);
+        NotifyObservers(qs);
     }
 
     void Flush() override
@@ -199,7 +290,7 @@ class FusionState : public ISimulator
     {
         Flush();
         immediate_->SaveState();
-        saved_ = Context{sourceIndex_, sources_};
+        saved_ = Context{sourceIndex_, sources_, normKnown_};
     }
 
     void RestoreState() override
@@ -215,6 +306,7 @@ class FusionState : public ISimulator
         {
             sourceIndex_ = saved_->source;
             sources_ = saved_->operations;
+            normKnown_ = saved_->normKnown;
         }
         RebuildPlan();
     }
@@ -224,7 +316,7 @@ class FusionState : public ISimulator
         Flush();
         immediate_->SaveStateToInternalDestructive();
         if (UsesDestructiveStateStorage())
-            destructiveSaved_ = Context{sourceIndex_, sources_};
+            destructiveSaved_ = Context{sourceIndex_, sources_, normKnown_};
     }
 
     void RestoreInternalDestructiveSavedState() override
@@ -238,6 +330,7 @@ class FusionState : public ISimulator
         {
             sourceIndex_ = destructiveSaved_->source;
             sources_ = destructiveSaved_->operations;
+            normKnown_ = destructiveSaved_->normKnown;
             destructiveSaved_.reset();
         }
         RebuildPlan();
@@ -271,6 +364,24 @@ class FusionState : public ISimulator
 
     void ApplyQuantumChannel(const Types::qubits_vector &qs, const QuantumChannel &channel) override
     {
+        if (FusesQuantumChannels())
+        {
+            // The checks the backend would make, since it now sees only the fused map.
+            if (qs.size() != channel.GetNumberOfQubits())
+                throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
+            if (qs.empty() || qs.size() > 2 || (qs.size() == 2 && qs[0] == qs[1]))
+                throw std::invalid_argument("Quantum-channel target qubits must be one or two distinct qubits");
+            for (const auto q : qs)
+                if (q >= GetNumberOfQubits())
+                    throw std::invalid_argument("Quantum-channel qubit is out of range");
+            if (immediate_->SupportsSuperoperators())
+                SubmitSuperoperator(qs, channel.Superoperator());
+            else
+                SubmitSampledChannel(qs, channel);
+            ConsumeBoundary(Circuits::OperationType::kQuantumChannel);
+            NotifyObservers(qs);
+            return;
+        }
         Flush();
         immediate_->ApplyQuantumChannel(qs, channel);
         ConsumeBoundary(Circuits::OperationType::kQuantumChannel);
@@ -482,6 +593,8 @@ class FusionState : public ISimulator
     {
         Flush();
         immediate_->ApplyOperator(qubits, matrix, normalize);
+        if (!normalize && normKnown_ && !KeepsNorm(matrix))
+            normKnown_ = false;
         InvalidatePlan();
         NotifyObservers(qubits);
     }
@@ -618,8 +731,11 @@ class FusionState : public ISimulator
             immediate_->InitializeState(n, value);
             return;
         }
+        // Read before the backend takes the amplitudes: they need not have unit norm.
+        const bool unitNorm = !immediate_->SupportsLocalMapNorm() || HasUnitNorm(value);
         Discard();
         immediate_->InitializeState(n, value);
+        normKnown_ = unitNorm;
         FinishInitialization(n);
     }
 #ifndef NO_QISKIT_AER
@@ -630,8 +746,11 @@ class FusionState : public ISimulator
             immediate_->InitializeState(n, value);
             return;
         }
+        // Read before the backend takes the amplitudes: they need not have unit norm.
+        const bool unitNorm = !immediate_->SupportsLocalMapNorm() || HasUnitNorm(value);
         Discard();
         immediate_->InitializeState(n, value);
+        normKnown_ = unitNorm;
         FinishInitialization(n);
     }
 #endif
@@ -642,8 +761,11 @@ class FusionState : public ISimulator
             immediate_->InitializeState(n, value);
             return;
         }
+        // Read before the backend takes the amplitudes: they need not have unit norm.
+        const bool unitNorm = !immediate_->SupportsLocalMapNorm() || HasUnitNorm(value);
         Discard();
         immediate_->InitializeState(n, value);
+        normKnown_ = unitNorm;
         FinishInitialization(n);
     }
 
@@ -738,6 +860,8 @@ class FusionState : public ISimulator
         copy.sourceIndex_ = sourceIndex_;
         copy.saved_ = saved_;
         copy.destructiveSaved_ = destructiveSaved_;
+        copy.readBlocksFirst_ = readBlocksFirst_;
+        copy.normKnown_ = normKnown_;
         copy.cache_.SetWidth(copy.GetGateFusionMaxQubits());
         // An unseeded backend clone keeps its derived root as its sampling seed.
         auto seed = copy.immediate_->GetConfiguration("seed");
@@ -760,6 +884,16 @@ class FusionState : public ISimulator
         }
         else
             copy.RebuildPlan();
+    }
+
+    // A generic gate need not be unitary (GenericGateValidation.h): one that is not scales the state by an amount
+    // this layer cannot know without reading it, whether or not the gate is fused. Called where a generic matrix
+    // comes in from the caller, before SubmitGate: every gate of every shot passes SubmitGate, and none of a
+    // circuit is generic.
+    template <class Matrix> void NoteGenericGate(const Matrix &matrix)
+    {
+        if (normKnown_ && immediate_->SupportsLocalMapNorm() && !KeepsNorm(matrix))
+            normKnown_ = false;
     }
 
     void SubmitGate(const FusionGate &gate)
@@ -829,6 +963,12 @@ class FusionState : public ISimulator
             if (!original || !FusionGate::FromCircuit(*original).Matches(gate))
                 InvalidatePlan();
         }
+        if ((!channelBlocks_.empty() && FuseGateWithChannelBlocks(gate)) || (!trajectoryBlocks_.empty() && FuseGateWithTrajectoryBlocks(gate)))
+        {
+            ++sourceIndex_;
+            NotifyObservers(gate.qubits);
+            return;
+        }
         const auto source = static_cast<uint64_t>(sourceIndex_++);
         if (cache_.Empty())
             cache_.SetWidth(width);
@@ -877,10 +1017,575 @@ class FusionState : public ISimulator
                      SwapGatesRelabelQubits() && gate.kind == FusionGate::Kind::kSwapGateType);
     }
 
+    // Operations fused into one local map of a mixed state: a superoperator
+    // over the block's sorted targets, on density blocks indexed row + d *
+    // column with targets[0] the low bit of both.
+    struct ChannelBlock
+    {
+        Types::qubits_vector targets;
+        Eigen::MatrixXcd superoperator;
+        uint64_t operations = 1;
+    };
+
+    static bool Overlaps(const Types::qubits_vector &a, const Types::qubits_vector &b)
+    {
+        return std::any_of(a.begin(), a.end(), [&](auto q) { return std::find(b.begin(), b.end(), q) != b.end(); });
+    }
+
+    static Types::qubits_vector Union(Types::qubits_vector a, const Types::qubits_vector &b)
+    {
+        a.insert(a.end(), b.begin(), b.end());
+        std::sort(a.begin(), a.end());
+        a.erase(std::unique(a.begin(), a.end()), a.end());
+        return a;
+    }
+
+    // conj(U) (x) U: U on the row (ket) index and its conjugate on the column (bra) index.
+    static Eigen::MatrixXcd UnitarySuperoperator(const Eigen::MatrixXcd &unitary)
+    {
+        const Eigen::Index d = unitary.rows();
+        Eigen::MatrixXcd superoperator(d * d, d * d);
+        for (Eigen::Index c2 = 0; c2 < d; ++c2)
+            for (Eigen::Index c = 0; c < d; ++c)
+                for (Eigen::Index r2 = 0; r2 < d; ++r2)
+                    for (Eigen::Index r = 0; r < d; ++r)
+                        superoperator(r + d * r2, c + d * c2) = unitary(r, c) * std::conj(unitary(r2, c2));
+        return superoperator;
+    }
+
+    // A superoperator over k targets is a matrix over 2k index bits: the ket
+    // bits of the targets in order, then their bra bits. Naming those bits
+    // lets the gate cache's embedding place or permute a superoperator.
+    static Types::qubits_vector IndexBits(const Types::qubits_vector &targets)
+    {
+        Types::qubits_vector bits;
+        bits.reserve(2 * targets.size());
+        for (const auto q : targets)
+            bits.push_back(2 * q);
+        for (const auto q : targets)
+            bits.push_back(2 * q + 1);
+        return bits;
+    }
+
+    void EmitChannelBlock(const ChannelBlock &block)
+    {
+        // A routing plan lists the gate blocks and the channels one by one;
+        // a block that holds both is none of its entries. The backend routes
+        // the rest without the plan's lookahead.
+        if (planValid_)
+            InvalidatePlan();
+        immediate_->ApplySuperoperator(block.targets, block.superoperator);
+        ++stats_.backendGates;
+        if (block.operations > 1)
+            ++stats_.fusedBlocks;
+    }
+
+    // Adds a map on `order` (its matrix's target order) to the pending
+    // operations of a mixed state. Pending gates and channel blocks on those
+    // qubits come before it: the ones that fit with it on two qubits become
+    // part of its block and the others are emitted.
+    void SubmitSuperoperator(const Types::qubits_vector &order, const Eigen::MatrixXcd &superoperator)
+    {
+        Types::qubits_vector support = order;
+        std::sort(support.begin(), support.end());
+        std::vector<ChannelBlock> earlier;
+        cache_.Extract(order, [&](Cache::Block &&block) {
+            auto joined = Union(support, block.targets);
+            if (joined.size() > 2)
+            {
+                Emit(block);
+                return;
+            }
+            support = std::move(joined);
+            earlier.push_back({block.targets, UnitarySuperoperator(Cache::BlockMatrix(block)), block.sources.count});
+        });
+        for (auto it = channelBlocks_.begin(); it != channelBlocks_.end();)
+        {
+            if (!Overlaps(it->targets, order))
+            {
+                ++it;
+                continue;
+            }
+            auto joined = Union(support, it->targets);
+            if (joined.size() > 2)
+                EmitChannelBlock(*it);
+            else
+            {
+                support = std::move(joined);
+                earlier.push_back(std::move(*it));
+            }
+            it = channelBlocks_.erase(it);
+        }
+
+        // The earlier parts act on different qubits, so they commute.
+        ChannelBlock block{support, {}, 1};
+        const auto bits = IndexBits(support);
+        for (const auto &part : earlier)
+        {
+            Eigen::MatrixXcd embedded = Cache::Embed(part.superoperator, IndexBits(part.targets), bits);
+            block.superoperator = block.superoperator.size() ? (embedded * block.superoperator).eval() : std::move(embedded);
+            block.operations += part.operations;
+        }
+        Eigen::MatrixXcd embedded = Cache::Embed(superoperator, IndexBits(order), bits);
+        block.superoperator = block.superoperator.size() ? (embedded * block.superoperator).eval() : std::move(embedded);
+        channelBlocks_.push_back(std::move(block));
+    }
+
+    // A gate on qubits that hold a pending channel block joins that block
+    // when the two fit on two qubits. Otherwise the block is emitted and the
+    // gate takes the ordinary path.
+    bool FuseGateWithChannelBlocks(const FusionGate &gate)
+    {
+        Types::qubits_vector support = gate.qubits;
+        bool overlaps = false;
+        for (const auto &block : channelBlocks_)
+            if (Overlaps(block.targets, gate.qubits))
+            {
+                overlaps = true;
+                support = Union(std::move(support), block.targets);
+            }
+        if (!overlaps)
+            return false;
+        if (gate.qubits.size() <= 2 && Union(std::move(support), {}).size() <= 2)
+        {
+            SubmitSuperoperator(gate.Targets(), UnitarySuperoperator(gate.Matrix()));
+            return true;
+        }
+        for (auto it = channelBlocks_.begin(); it != channelBlocks_.end();)
+            if (Overlaps(it->targets, gate.qubits))
+            {
+                EmitChannelBlock(*it);
+                it = channelBlocks_.erase(it);
+            }
+            else
+                ++it;
+        return false;
+    }
+
+    // One step of a block that a pure-state backend resolves from its state:
+    // a unitary, or a channel factor whose branch is drawn at that time.
+    struct TrajectoryStep
+    {
+        Types::qubits_vector order;            // targets in the order of the matrices
+        Eigen::MatrixXcd unitary;              // empty for a channel factor
+        std::optional<QuantumChannel> channel; // holds the factor
+        size_t factor = 0;
+        // Drawn when the channel arrives: the channel stream is consumed in
+        // circuit order, whatever the order in which blocks are resolved.
+        double random = 0.;
+        QuantumChannel::KrausOperators own; // the operators when no channel holds them (a reset)
+    };
+
+    struct TrajectoryBlock
+    {
+        Types::qubits_vector targets; // sorted
+        std::vector<TrajectoryStep> steps;
+        uint64_t operations = 0;
+        size_t channels = 0; // steps that draw a branch
+    };
+
+    // As wide as the gate blocks, and as the reduced density matrix a backend reads in one pass.
+    size_t TrajectoryWidth() const
+    {
+        return std::min<size_t>(3, GetGateFusionMaxQubits());
+    }
+
+    static size_t DrawBranch(const std::vector<double> &probabilities, double random)
+    {
+        size_t chosen = 0;
+        double accumulated = 0.;
+        for (size_t index = 0; index < probabilities.size(); ++index)
+        {
+            if (probabilities[index] <= 0.)
+                continue;
+            chosen = index; // also the fallback if rounding leaves the draw above the last sum
+            accumulated += probabilities[index];
+            if (random < accumulated)
+                break;
+        }
+        return chosen;
+    }
+
+    // A channel on a backend that samples: its Pauli and unitary-mixture
+    // factors are drawn now, without the state, and join the pending gates;
+    // every other factor waits in a block for the state it is drawn from.
+    void SubmitSampledChannel(const Types::qubits_vector &qs, const QuantumChannel &channel)
+    {
+        static constexpr FusionGate::Kind paulis[4] = {FusionGate::Kind::kNone, FusionGate::Kind::kXGateType, FusionGate::Kind::kYGateType,
+                                                       FusionGate::Kind::kZGateType};
+        unsigned drawn = 0;
+        const auto &factors = channel.GetFactors();
+        for (size_t f = 0; f < factors.size(); ++f)
+        {
+            const auto &factor = factors[f];
+            if (factor.kind == QuantumChannel::FactorKind::kPauli)
+            {
+                const size_t index = DrawBranch(factor.probabilities, immediate_->ChannelUniform());
+                for (size_t k = 0; k < factor.qubits.size(); ++k)
+                    if (const size_t pauli = (index >> (2 * k)) & 3)
+                        SubmitDrawnGate({paulis[pauli], {qs[factor.qubits[k]]}, {}, {}}, drawn);
+                continue;
+            }
+            Types::qubits_vector order;
+            for (const auto q : factor.qubits)
+                order.push_back(qs[q]);
+            if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
+            {
+                const auto &unitary = factor.operators[DrawBranch(factor.probabilities, immediate_->ChannelUniform())];
+                if (!unitary.isIdentity(0.))
+                    SubmitDrawnGate({FusionGate::Kind::kNone, std::move(order), {}, unitary}, drawn);
+            }
+            else
+            {
+                double random = immediate_->ChannelUniform();
+                QuantumChannel::ThermalMixture mixture;
+                if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
+                    SubmitTrajectoryStep({std::move(order), {}, channel, f, random, {}});
+                else if (random >= mixture.identity + mixture.phaseFlip)
+                {
+                    // Only the reset reads the state: its outcome takes what is left of the draw.
+                    random = std::min((random - mixture.identity - mixture.phaseFlip) / mixture.reset, std::nextafter(1., 0.));
+                    SubmitTrajectoryStep(
+                        {std::move(order), {}, std::nullopt, 0, random, QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation)});
+                }
+                else if (random >= mixture.identity)
+                    SubmitDrawnGate({FusionGate::Kind::kZGateType, std::move(order), {}, {}}, drawn);
+            }
+        }
+    }
+
+    // A unitary drawn from a channel takes the path of a gate without being a source operation.
+    void SubmitDrawnGate(const FusionGate &gate, unsigned &drawn)
+    {
+        if (!trajectoryBlocks_.empty() && FuseGateWithTrajectoryBlocks(gate))
+            return;
+        if (drawn == 16)
+        { // the cache identifiers of this source position are used up
+            FlushPendingGates();
+            drawn = 0;
+        }
+        if (cache_.Empty())
+            cache_.SetWidth(GetGateFusionMaxQubits());
+        SubmitToCache(cache_, gate, (static_cast<uint64_t>(sourceIndex_) << 4) | drawn++, [this](const auto &block) { Emit(block); });
+    }
+
+    // Adds a step to the pending blocks of a sampling backend. Pending blocks
+    // and gates on its qubits come before it: those that fit with it on the
+    // block width become part of its block, the others are resolved or emitted.
+    // Pending blocks never share a qubit, so the ones taken in commute.
+    void SubmitTrajectoryStep(TrajectoryStep step)
+    {
+        const size_t width = std::max(step.order.size(), TrajectoryWidth());
+        Types::qubits_vector support = step.order;
+        std::sort(support.begin(), support.end());
+        TrajectoryBlock block;
+        for (auto it = trajectoryBlocks_.begin(); it != trajectoryBlocks_.end();)
+        {
+            if (!Overlaps(it->targets, step.order))
+            {
+                ++it;
+                continue;
+            }
+            auto joined = Union(support, it->targets);
+            if (joined.size() > width)
+                ResolveTrajectoryBlock(*it);
+            else
+            {
+                support = std::move(joined);
+                block.operations += it->operations;
+                block.channels += it->channels;
+                if (block.steps.empty())
+                    block.steps = std::move(it->steps);
+                else
+                    for (auto &earlier : it->steps)
+                        block.steps.push_back(std::move(earlier));
+            }
+            it = trajectoryBlocks_.erase(it);
+        }
+        cache_.Extract(step.order, [&](Cache::Block &&pending) {
+            auto joined = Union(support, pending.targets);
+            if (joined.size() > width)
+            {
+                Emit(pending);
+                return;
+            }
+            support = std::move(joined);
+            block.operations += pending.sources.count;
+            block.steps.push_back({pending.targets, Cache::BlockMatrix(pending), std::nullopt, 0, 0.});
+        });
+        // A unitary that follows a unitary on the same qubits is multiplied into it.
+        const auto within = [](const Types::qubits_vector &part, const Types::qubits_vector &whole) {
+            return std::all_of(part.begin(), part.end(), [&](auto q) { return std::find(whole.begin(), whole.end(), q) != whole.end(); });
+        };
+        if (step.unitary.size() && !block.steps.empty() && block.steps.back().unitary.size() && within(step.order, block.steps.back().order))
+            Cache::ApplyLeft(step.unitary, step.order, block.steps.back().order, block.steps.back().unitary);
+        else
+        {
+            block.channels += step.unitary.size() == 0;
+            block.steps.push_back(std::move(step));
+        }
+        ++block.operations;
+        block.targets = std::move(support);
+        trajectoryBlocks_.push_back(std::move(block));
+    }
+
+    // A gate on qubits that hold a pending trajectory block joins it when the
+    // two fit; otherwise the block is resolved and the gate takes the ordinary path.
+    bool FuseGateWithTrajectoryBlocks(const FusionGate &gate)
+    {
+        Types::qubits_vector support = gate.qubits;
+        bool overlaps = false;
+        for (const auto &block : trajectoryBlocks_)
+            if (Overlaps(block.targets, gate.qubits))
+            {
+                overlaps = true;
+                support = Union(std::move(support), block.targets);
+            }
+        if (!overlaps)
+            return false;
+        if (support.size() <= TrajectoryWidth())
+        {
+            SubmitTrajectoryStep({gate.Targets(), gate.Matrix(), std::nullopt, 0, 0.});
+            return true;
+        }
+        for (auto it = trajectoryBlocks_.begin(); it != trajectoryBlocks_.end();)
+            if (Overlaps(it->targets, gate.qubits))
+            {
+                ResolveTrajectoryBlock(*it);
+                it = trajectoryBlocks_.erase(it);
+            }
+            else
+                ++it;
+        return false;
+    }
+
+    // rho <- op rho op^dagger for a Hermitian rho, op acting on `order` within `targets`.
+    template <class Operator, class Matrix>
+    static void Conjugate(const Operator &op, const Types::qubits_vector &order, const Types::qubits_vector &targets, Matrix &rho)
+    {
+        Cache::ApplyLeft(op, order, targets, rho);
+        rho.adjointInPlace();
+        Cache::ApplyLeft(op, order, targets, rho);
+    }
+
+    // Fixed capacity: the algebra of a block allocates nothing.
+    using Local = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor, 8, 8>;
+
+    // Every operator of the block acts on its targets only, so the reduced
+    // density matrix of the targets before the block gives the probability of
+    // every branch. The steps are walked on that small matrix, each channel
+    // factor draws its operator there, and the product of the operators
+    // selected reaches the state as one matrix: one read and one write of the
+    // state for the whole block, however many gates and channels it holds.
+    // Where the channels most probably do nothing, the read is saved too
+    // (ResolveWithoutReading).
+    void ResolveTrajectoryBlock(const TrajectoryBlock &block)
+    {
+        if (planValid_)
+            InvalidatePlan();
+        if (ResolveWithoutReading(block))
+            return;
+        Local rho = immediate_->LocalDensityMatrix(block.targets);
+        if (stateNormSq_ != 1.)
+            rho /= stateNormSq_;
+        Local product = WalkTrajectoryBlock(block, rho);
+        if (stateNormSq_ != 1.)
+        {
+            // The norm an earlier block left is restored by this one.
+            product /= std::sqrt(stateNormSq_);
+            stateNormSq_ = 1.;
+        }
+        ApplyBlockMatrix(block.targets, product);
+        ++stats_.backendGates;
+        if (block.operations > 1)
+            ++stats_.fusedBlocks;
+    }
+
+    // A block whose channels most probably do nothing is applied on that
+    // assumption, without reading the state first.
+    //
+    // For operators that preserve the trace, a channel takes its first
+    // operator when its draw lies below the probability of that operator. The
+    // product of those probabilities over the block is the squared norm the
+    // state has once the gates and the first operators of the block have been
+    // applied to it, and the backend returns that norm from the pass that
+    // applies them (ApplyLocalMapNorm). Each probability is at least the
+    // product. So if every draw of the block lies below the norm, every
+    // channel took its first operator, as resolving the block from the
+    // reduced density matrix would have found, and the block has cost one
+    // pass over the state instead of two. The state keeps that norm, which
+    // this layer remembers (stateNormSq_) for the next block to divide out.
+    //
+    // Otherwise some channel may have taken another operator. The reduced
+    // density matrix is read then, of the state as it is now. Undoing the
+    // applied matrix on that small matrix gives the one before the block; the
+    // block is resolved from it as usual, and the state receives the operators
+    // selected together with the inverse of what was applied. That costs three
+    // passes where reading first costs two, the read being the cheaper one, so
+    // the attempt has to hold about five times in eight to pay. It is made
+    // when the draws leave that likely: below the smallest probability the
+    // block can have it is certain to hold, and between the smallest and the
+    // largest it is taken to be as likely as the largest draw is close to the
+    // smallest. A block whose first operators can be improbable is read first:
+    // the matrix applied is then always well conditioned.
+    bool ResolveWithoutReading(const TrajectoryBlock &block)
+    {
+        // The attempt compares the draws with the norm the pass returns, which says how probable the first
+        // operators were only on a state whose norm this layer knows.
+        if (!block.channels || readBlocksFirst_ || !normKnown_ || !immediate_->SupportsLocalMapNorm())
+            return false;
+        double low = 1., high = 1., largest = 0.;
+        for (const auto &step : block.steps)
+        {
+            if (step.unitary.size())
+                continue;
+            if (!step.channel)
+                return false; // a reset: its operators are projections
+            const auto &first = step.channel->FirstOperatorOf(step.factor);
+            if (!first.tracePreserving)
+                return false;
+            low *= first.low;
+            high *= first.high;
+            largest = std::max(largest, step.random);
+        }
+        if (!(low >= .25 * high) || !(largest < low + .375 * (high - low)))
+            return false;
+
+        const size_t dimension = size_t{1} << block.targets.size();
+        Local product = Local::Identity(dimension, dimension);
+        for (const auto &step : block.steps)
+            if (step.unitary.size())
+                Cache::ApplyLeft(step.unitary, step.order, block.targets, product);
+            else
+                Cache::ApplyLeft(step.channel->GetFactors()[step.factor].operators.front(), step.order, block.targets, product);
+        // On the state at unit norm: what an earlier block left is divided out here.
+        const Eigen::MatrixXcd applied = product / std::sqrt(stateNormSq_);
+        const double kept = immediate_->ApplyLocalMapNorm(block.targets, applied);
+        ++stats_.backendGates;
+        ++stats_.unreadBlocks;
+        if (block.operations > 1)
+            ++stats_.fusedBlocks;
+        if (largest < kept)
+        {
+            stateNormSq_ = kept;
+            return true;
+        }
+        Local after = immediate_->LocalDensityMatrix(block.targets);
+        const Local inverse = product.inverse();
+        Local before = inverse * after * inverse.adjoint();
+        after = before.adjoint();
+        before = .5 * (before + after);
+        const Local resolved = WalkTrajectoryBlock(block, before) * inverse;
+        stateNormSq_ = 1.;
+        ApplyBlockMatrix(block.targets, resolved);
+        ++stats_.backendGates;
+        ++stats_.rereadBlocks;
+        return true;
+    }
+
+    // After a block applied without reading the state, the backend's state is
+    // short of unit norm by a factor this layer keeps. A block that follows
+    // divides it out; anything that reads the state needs it applied.
+    void SettleNorm()
+    {
+        if (stateNormSq_ == 1.)
+            return;
+        const Eigen::MatrixXcd scale = Eigen::MatrixXcd::Identity(2, 2) / std::sqrt(stateNormSq_);
+        stateNormSq_ = 1.;
+        immediate_->ApplyLocalMapNorm({0}, scale);
+    }
+
+    void ApplyBlockMatrix(const Types::qubits_vector &targets, const Local &product)
+    {
+        if (targets.size() == 1)
+            immediate_->ApplyGenericOneQubitGate(targets[0], Eigen::Matrix2cd(product));
+        else if (targets.size() == 2)
+            immediate_->ApplyGenericTwoQubitGate(targets[0], targets[1], Eigen::Matrix4cd(product));
+        else
+            immediate_->ApplyGenericThreeQubitGate(targets[0], targets[1], targets[2], Matrix8cd(product));
+    }
+
+    // Walks the steps of a block on the reduced density matrix of its targets,
+    // normalized to unit trace: each channel factor draws its operator there.
+    // Returns the product of the gates and of the operators selected, each
+    // scaled by its weight, so that it leaves a state of unit norm with one.
+    Local WalkTrajectoryBlock(const TrajectoryBlock &block, Local rho)
+    {
+        using Selected = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor, 4, 4>;
+        const size_t dimension = size_t{1} << block.targets.size();
+        Local product = Local::Identity(dimension, dimension);
+        size_t undrawn = block.channels;
+        for (const auto &step : block.steps)
+        {
+            if (step.unitary.size())
+            {
+                Cache::ApplyLeft(step.unitary, step.order, block.targets, product);
+                if (undrawn)
+                    Conjugate(step.unitary, step.order, block.targets, rho);
+                continue;
+            }
+            // The weights of a factor need only the density matrix of its own targets.
+            const auto &operators = step.channel ? step.channel->GetFactors()[step.factor].operators : step.own;
+            const size_t sub = size_t{1} << step.order.size();
+            size_t offsets[4] = {}, mask = 0;
+            for (size_t i = 0; i < step.order.size(); ++i)
+            {
+                const size_t bit = size_t{1} << (std::find(block.targets.begin(), block.targets.end(), step.order[i]) - block.targets.begin());
+                mask |= bit;
+                for (size_t l = 0; l < sub; ++l)
+                    if (l & (size_t{1} << i))
+                        offsets[l] |= bit;
+            }
+            std::complex<double> local[4][4] = {};
+            for (size_t base = 0; base < dimension; ++base)
+            {
+                if (base & mask)
+                    continue;
+                for (size_t a = 0; a < sub; ++a)
+                    for (size_t b = 0; b < sub; ++b)
+                        local[a][b] += rho(base | offsets[a], base | offsets[b]);
+            }
+            weights_.assign(operators.size(), 0.);
+            double total = 0.;
+            for (size_t k = 0; k < operators.size(); ++k)
+            {
+                const auto &op = operators[k];
+                double weight = 0.;
+                for (size_t row = 0; row < sub; ++row)
+                    for (size_t a = 0; a < sub; ++a)
+                        for (size_t b = 0; b < sub; ++b)
+                            weight += std::real(op(row, a) * local[a][b] * std::conj(op(row, b)));
+                weights_[k] = weight > 0. ? weight : 0.;
+                total += weights_[k];
+            }
+            if (!std::isfinite(total) || total <= 0.)
+                throw std::domain_error("No Kraus operator of a channel has any probability on this state");
+            const double threshold = step.random * total;
+            size_t chosen = 0;
+            double accumulated = 0.;
+            for (size_t k = 0; k < operators.size(); ++k)
+            {
+                if (weights_[k] <= 0.)
+                    continue;
+                chosen = k; // also the fallback if rounding leaves the threshold above the last sum
+                accumulated += weights_[k];
+                if (threshold < accumulated)
+                    break;
+            }
+            // Scaled by its weight, the operator leaves the state with unit norm.
+            const Selected selected = operators[chosen] / std::sqrt(weights_[chosen]);
+            Cache::ApplyLeft(selected, step.order, block.targets, product);
+            if (--undrawn)
+                Conjugate(selected, step.order, block.targets, rho);
+        }
+        return product;
+    }
+
     struct Context
     {
         long long source;
         std::vector<Operation> operations;
+        bool normKnown = true;
     };
 
     struct Planned
@@ -930,6 +1635,10 @@ class FusionState : public ISimulator
     void Discard()
     {
         cache_.Clear();
+        channelBlocks_.clear();
+        trajectoryBlocks_.clear();
+        stateNormSq_ = 1.; // the state is replaced
+        normKnown_ = true;
         routingPlan_.reset();
         planValid_ = false;
     }
@@ -1041,6 +1750,49 @@ class FusionState : public ISimulator
     std::optional<bool> requested_; // unset: the backend default
     bool ready_ = false;
     Cache cache_;
+    // Pending fused maps of a mixed state; no qubit is in two pending blocks of either kind.
+    std::vector<ChannelBlock> channelBlocks_;
+    // Pending blocks of a backend that samples channels from its state.
+    std::vector<TrajectoryBlock> trajectoryBlocks_;
+    std::vector<double> weights_;
+    // The squared norm of the backend's state: below one after a block applied
+    // without reading the state (ResolveWithoutReading), until the next block
+    // or a flush restores it.
+    double stateNormSq_ = 1.;
+    // Whether the backend's state has the norm this layer accounts for (stateNormSq_). A generic gate or operator
+    // need not be unitary and amplitudes given by the caller need not have unit norm: after any of them only a read
+    // can tell the norm, so no block is applied without reading the state first (ResolveWithoutReading) until the
+    // state is replaced. Resolving a block from the reduced density matrix it reads does not need the norm.
+    bool normKnown_ = true;
+    static constexpr double kNormTolerance = 1e-10;
+
+    // Whether a matrix keeps the norm of every state: its columns are orthonormal.
+    template <class Matrix> static bool KeepsNorm(const Matrix &matrix)
+    {
+        if (matrix.rows() != matrix.cols())
+            return false;
+        for (Eigen::Index j = 0; j < matrix.cols(); ++j)
+            for (Eigen::Index i = 0; i <= j; ++i)
+                if (!(std::abs(matrix.col(i).dot(matrix.col(j)) - (i == j ? 1. : 0.)) <= kNormTolerance))
+                    return false;
+        return true;
+    }
+
+    template <class Amplitudes> static bool HasUnitNorm(const Amplitudes &amplitudes)
+    {
+        double norm = 0.;
+        const size_t size = static_cast<size_t>(amplitudes.size());
+        for (size_t i = 0; i < size; ++i)
+            norm += std::norm(amplitudes[i]);
+        return std::abs(norm - 1.) <= kNormTolerance;
+    }
+
+    // Configuration "trajectory_blocks_read_first": every block of sampled
+    // channels is resolved from the reduced density matrix, never applied
+    // first. The branches drawn are the same either way; this is the reference
+    // the other path is compared with.
+    static constexpr const char *kReadBlocksFirst = "trajectory_blocks_read_first";
+    bool readBlocksFirst_ = false;
     long long sourceIndex_ = 0;
     std::vector<Operation> sources_;
     // Gate/index metadata is immutable after preparation and can be shared by

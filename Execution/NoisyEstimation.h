@@ -16,6 +16,19 @@ namespace MaestroExecution
 // which a pure-state backend could only sample per realization.
 MAESTRO_TRANSFORM_API RecordCircuitPtr WithoutCircuitChannels(const RecordCircuitPtr &circuit);
 
+// Whether noisy_fidelity admits the circuit (given without its terminal
+// measurements): gates, delays, barriers, channels (noise, absent from the
+// ideal circuit) and nested circuits of them, and resets that precede every
+// other operation on their qubit, which prepare it. Mid-circuit measurements,
+// later resets and classical control have no unitary ideal. The Python and
+// JSON entry points share this rule.
+MAESTRO_TRANSFORM_API bool HasUnitaryIdeal(const RecordCircuitPtr &before_readout);
+
+// The unitary that the ideal circuit of noisy_fidelity applies to a fresh
+// register: a reset before any other operation on its qubit prepares |0>
+// (nothing) or |1> (an X), whose adjoint then undoes the preparation.
+MAESTRO_TRANSFORM_API RecordCircuitPtr PreparedUnitary(const RecordCircuitPtr &circuit);
+
 struct NoisyEstimate
 {
     // Means over the realizations, and the noiseless baseline's values.
@@ -25,6 +38,8 @@ struct NoisyEstimate
     std::vector<double> error_bounds;
     std::vector<double> standard_errors;
     size_t realizations = 0;
+    // Workers the realizations ran on.
+    size_t realization_workers = 0;
     NoiseRealizationPolicy policy;
     bool auto_reduced = false;
     size_t bounded_observables = 0;
@@ -66,6 +81,8 @@ struct NoisyFidelityResult
     double fidelity = 0;
     double std_error = 0;
     size_t realizations = 0;
+    // Workers the realizations ran on.
+    size_t realization_workers = 0;
     NoiseRealizationPolicy policy;
     double time_taken = 0;
 };

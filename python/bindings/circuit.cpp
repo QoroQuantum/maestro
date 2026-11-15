@@ -4,8 +4,171 @@
 namespace maestro_bindings
 {
 
+namespace
+{
+using Channel = Simulators::QuantumChannel;
+using NestedMatrix = std::vector<std::vector<std::complex<double>>>;
+
+// Nested row-major lists (or 2-D arrays) as matrices; the channel constructors validate the values.
+Channel::KrausOperators MatricesFromNested(const std::vector<NestedMatrix> &operators, const char *what)
+{
+    Channel::KrausOperators matrices;
+    matrices.reserve(operators.size());
+    for (const auto &rows : operators)
+    {
+        if (rows.empty() || rows.front().empty())
+            throw nb::value_error((std::string(what) + " must be nonempty matrices.").c_str());
+        const size_t columns = rows.front().size();
+        Eigen::MatrixXcd matrix(static_cast<Eigen::Index>(rows.size()), static_cast<Eigen::Index>(columns));
+        for (size_t row = 0; row < rows.size(); ++row)
+        {
+            if (rows[row].size() != columns)
+                throw nb::value_error((std::string(what) + " must have rows of equal length.").c_str());
+            for (size_t column = 0; column < columns; ++column)
+                matrix(static_cast<Eigen::Index>(row), static_cast<Eigen::Index>(column)) = rows[row][column];
+        }
+        matrices.emplace_back(std::move(matrix));
+    }
+    return matrices;
+}
+
+const char *FactorKindName(Channel::FactorKind kind)
+{
+    switch (kind)
+    {
+    case Channel::FactorKind::kPauli:
+        return "pauli";
+    case Channel::FactorKind::kUnitaryMixture:
+        return "unitary_mixture";
+    case Channel::FactorKind::kThermal:
+        return "thermal";
+    default:
+        return "kraus";
+    }
+}
+
+nb::list FactorsOf(const Channel &channel)
+{
+    nb::list factors;
+    for (const auto &factor : channel.GetFactors())
+    {
+        nb::dict entry;
+        entry["kind"] = FactorKindName(factor.kind);
+        entry["qubits"] = nb::cast(factor.qubits);
+        if (!factor.probabilities.empty())
+            entry["probabilities"] = nb::cast(factor.probabilities);
+        if (factor.kind == Channel::FactorKind::kThermal)
+        {
+            entry["decay"] = factor.thermal.decay;
+            entry["excited_population"] = factor.thermal.excitedStatePopulation;
+            entry["coherence"] = factor.thermal.coherence;
+        }
+        factors.append(entry);
+    }
+    return factors;
+}
+
+void bind_quantum_channel(nb::module_ &m)
+{
+    nb::class_<Channel>(m, "QuantumChannel",
+                        "A one- or two-qubit noise channel (a completely positive, trace-preserving map).\n\n"
+                        "Build one once and pass it to QuantumCircuit.channel() at every place it acts: the "
+                        "circuit then shares a single object instead of copying matrices per instruction. "
+                        "then() composes channels and keeps their parts, so a gate error made of a Pauli "
+                        "mixture followed by relaxation stays a Pauli mixture followed by relaxation.\n\n"
+                        "BASIS ORDER for two-qubit matrices: qubits[0] is the LEAST significant bit of the "
+                        "4x4 index, so A on qubits[0] and B on qubits[1] is the Kronecker product B (x) A.")
+        .def_static(
+            "from_kraus", [](const std::vector<NestedMatrix> &operators) { return Channel(MatricesFromNested(operators, "Kraus operators")); }, "operators"_a,
+            "Channel with the given Kraus operators (2x2 or 4x4 matrices). Completeness, sum_k E_k^dag E_k = I, is validated.")
+        .def_static(
+            "pauli", [](const std::vector<double> &probabilities) { return Channel::Pauli(probabilities); }, "probabilities"_a,
+            "Pauli channel from 4**n probabilities summing to one. Base-4 digit k of an index selects I, X, Y or Z on "
+            "qubits[k]: one qubit is [pI, pX, pY, pZ], two are II, XI, YI, ZI, IX, XX, ... ZZ.")
+        .def_static(
+            "unitary_mixture",
+            [](const std::vector<double> &probabilities, const std::vector<NestedMatrix> &unitaries) {
+                return Channel::UnitaryMixture(probabilities, MatricesFromNested(unitaries, "Unitaries"));
+            },
+            "probabilities"_a, "unitaries"_a, "Channel that applies unitaries[i] with probabilities[i]. The probabilities must sum to one.")
+        .def_static(
+            "depolarizing",
+            [](double probability, size_t num_qubits) {
+                if (num_qubits == 1)
+                    return Channel::Depolarizing(probability);
+                if (num_qubits == 2)
+                    return Channel::TwoQubitDepolarizing(probability);
+                throw nb::value_error("num_qubits must be 1 or 2.");
+            },
+            "probability"_a, "num_qubits"_a = 1,
+            "Depolarizing channel: the identity with probability 1 - probability, otherwise one of the 3 (or 15) "
+            "other Paulis with equal probability.")
+        .def_static(
+            "amplitude_damping", [](double gamma) { return Channel::AmplitudeDamping(gamma); }, "gamma"_a, "Relaxation of |1> to |0> with probability gamma.")
+        .def_static(
+            "phase_damping", [](double gamma) { return Channel::PhaseDamping(gamma); }, "gamma"_a,
+            "Phase damping: coherences are multiplied by sqrt(1 - gamma).")
+        .def_static(
+            "generalized_amplitude_damping",
+            [](double gamma, double excited_population) { return Channel::GeneralizedAmplitudeDamping(gamma, excited_population); }, "gamma"_a,
+            "excited_population"_a, "Amplitude damping towards an equilibrium with the given population of |1>.")
+        .def_static(
+            "thermal_relaxation",
+            [](double duration, double t1, double t2, double excited_population) { return Channel::ThermalRelaxation(duration, t1, t2, excited_population); },
+            "duration"_a, "t1"_a, "t2"_a, "excited_population"_a = 0.0,
+            "Thermal relaxation over a duration: populations relax with exp(-duration/t1), coherences with "
+            "exp(-duration/t2). Requires t2 <= 2*t1; float('inf') is accepted for either time.")
+        .def_static(
+            "on_qubit", [](const Channel &channel, size_t qubit, size_t num_qubits) { return Channel::OnQubit(channel, qubit, num_qubits); }, "channel"_a,
+            "qubit"_a, "num_qubits"_a = 2, "A one-qubit channel placed on one target (0 or 1) of a two-qubit channel that leaves the other target alone.")
+        .def_static(
+            "placed", [](const Channel &channel, const std::vector<size_t> &qubits, size_t num_qubits) { return Channel::Placed(channel, qubits, num_qubits); },
+            "channel"_a, "qubits"_a, "num_qubits"_a = 2,
+            "A channel placed on targets of a channel of num_qubits targets: qubits[k] is the target that target k of channel "
+            "acts on. on_qubit is the one-qubit case; [1, 0] exchanges the targets of a two-qubit channel.")
+        .def(
+            "then",
+            [](const Channel &self, const Channel &next, const std::optional<std::vector<size_t>> &qubits) {
+                return qubits ? self.Then(next, *qubits) : self.Then(next);
+            },
+            "next"_a, "qubits"_a = nb::none(),
+            "This channel followed by another. With qubits, next acts on those targets of this channel: "
+            "two_qubit_error.then(relaxation, [1]) relaxes the second qubit after the two-qubit error.")
+        .def_prop_ro("num_qubits", [](const Channel &self) { return self.GetNumberOfQubits(); })
+        .def_prop_ro(
+            "kraus_operators", [](const Channel &self) { return self.GetKrausOperators(); },
+            "Kraus operators as complex arrays. A composed channel returns its minimal set, largest weight first.")
+        .def_prop_ro("factors", &FactorsOf,
+                     "The parts of the channel, first applied first: dicts with 'kind' ('pauli', 'unitary_mixture', 'thermal' or "
+                     "'kraus'), 'qubits' and, where they apply, 'probabilities' and the relaxation parameters.")
+        .def_prop_ro(
+            "is_deterministic", [](const Channel &self) { return self.IsDeterministic(); },
+            "Whether the channel has one branch only, a unitary. It is then a gate: a backend that samples channels draws "
+            "nothing for it, and a circuit whose channels are all such evolves once for any number of shots.")
+        .def_prop_ro(
+            "is_state_independent", [](const Channel &self) { return self.IsStateIndependent(); },
+            "True if every part is a Pauli or unitary mixture, so that a trajectory can draw it without reading its state.")
+        .def(
+            "superoperator", [](const Channel &self) { return self.Superoperator(); },
+            "The channel as a matrix on vectorized density blocks indexed row + d*column: sum_k conj(K) (x) K.")
+        .def(
+            "choi", [](const Channel &self) { return self.ChoiMatrix(); }, "Choi matrix sum_k vec(K) vec(K)^dag, column-stacking vec.")
+        .def(
+            "is_approx", [](const Channel &self, const Channel &other, double tolerance) { return self.IsApprox(other, tolerance); }, "other"_a,
+            "tolerance"_a = 1e-12, "Whether two channels are the same map (their Choi matrices agree to the tolerance).")
+        .def("__repr__", [](const Channel &self) {
+            std::string parts;
+            for (const auto &factor : self.GetFactors())
+                parts += (parts.empty() ? "" : ", ") + std::string(FactorKindName(factor.kind));
+            return "QuantumChannel(num_qubits=" + std::to_string(self.GetNumberOfQubits()) + ", factors=[" + parts + "])";
+        });
+}
+} // namespace
+
 void bind_circuit(nb::module_ &m)
 {
+    bind_quantum_channel(m);
+
     // --- Circuits Submodule ---
     auto circuits = m.def_submodule("circuits", "Quantum circuits submodule");
 
@@ -139,11 +302,34 @@ void bind_circuit(nb::module_ &m)
             "digit k of an index selects I, X, Y or Z on qubits[k], so one "
             "qubit is [pI, pX, pY, pZ] and two are II, XI, YI, ZI, IX, XX, ... "
             "ZZ.\n\n"
-            "Density-matrix and MPO backends apply the channel exactly. "
-            "Pure-state and MPS backends sample one Pauli per noise "
-            "realization, so run the circuit through noisy_execute or "
-            "full_noise_execute with noise_realizations=shots; plain execute "
-            "rejects it there.")
+            "Density-matrix and MPO backends, and the QCSim Pauli propagator, "
+            "apply the channel exactly. The statevector and the matrix product "
+            "state (QCSim and Qiskit Aer) and the composite statevector draw one "
+            "Pauli each time the circuit runs, in a plain execute as in "
+            "noisy_execute or full_noise_execute. The other pure-state methods "
+            "draw one Pauli per noise realization: run the circuit through "
+            "noisy_execute or full_noise_execute with noise_realizations=shots; "
+            "plain execute rejects it there.")
+        .def(
+            "channel",
+            [](Circuits::Circuit<double> &s, const Types::qubits_vector &qubits, const Simulators::QuantumChannel &channel) {
+                s.AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(qubits, channel));
+            },
+            "qubits"_a, "channel"_a,
+            "Apply a QuantumChannel to one or two qubits.\n\n"
+            "The circuit shares the channel object, so build each distinct "
+            "channel once and pass it at every place it acts.\n\n"
+            "Density-matrix and MPO backends, and the QCSim Pauli propagator, "
+            "apply the channel exactly. The statevector and the matrix product "
+            "state (QCSim and Qiskit Aer) and the composite statevector sample "
+            "it from their state: every execution draws one branch, so the shots "
+            "average to the channel, in a plain execute as in noisy_execute or "
+            "full_noise_execute. The other pure-state methods hold and sample no "
+            "channel: a noise realization (noisy_execute, full_noise_execute) "
+            "draws the channel into gates and resets, which needs every part of "
+            "it to be drawn without the state (a Pauli channel, a one-qubit "
+            "unitary mixture, relaxation with t2 <= t1); they reject any other "
+            "channel.")
         .def("remove_end_measurements", &Circuits::Circuit<double>::RemoveEndMeasurements,
              "Create a new circuit holding shared pointers to the original operations, with terminal measurements removed.")
 

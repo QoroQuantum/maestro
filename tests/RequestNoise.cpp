@@ -1,5 +1,6 @@
 // Numerical contract tests through the public request API, without Python/GPU.
 #include "../maestrolib/Interface.h"
+#include <array>
 #include <boost/json.hpp>
 #include <cmath>
 #include <iostream>
@@ -81,11 +82,16 @@ j::object ThermalCall(const j::object &request, bool sampled, bool validate = fa
 
 void TestThermalApproximation()
 {
-    // The same seeded sampled channel must behave as an explicit T2=T1 model;
-    // exact channels must retain the supplied T2, including the physical limit.
-    for (const char *method : {"statevector", "matrix_product_state", "density_matrix", "matrix_product_operator"})
+    // Relaxation with T2 > T1 has no branch drawn without the state. A method
+    // that neither holds nor samples channels draws it as an explicit T2=T1
+    // model does, and says so. The statevector and the matrix product state
+    // sample the channel itself and the mixed-state methods apply it: those
+    // keep the supplied T2, including the physical limit.
+    for (const char *method : {"tensor_network", "path_integral", "statevector", "matrix_product_state", "density_matrix", "matrix_product_operator"})
     {
-        const bool sampled = std::string(method) == "statevector" || std::string(method) == "matrix_product_state";
+        const std::string name(method);
+        const bool clamped = name == "tensor_network" || name == "path_integral";
+        const bool trajectories = name == "statevector" || name == "matrix_product_state";
         for (const char *kind : {"thermal_relaxation", "thermal_relaxation_2q", "idle"})
         {
             for (const double t2 : {1.5, 2.0})
@@ -100,17 +106,26 @@ void TestThermalApproximation()
                                                    {"num_qubits", 2},
                                                    {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}},
                                                                        j::object{{"name", "delay"}, {"qubits", j::array{0}}, {"duration", 0.3}}}}};
-                request["noise"].as_object()["realizations"] = sampled ? 256 : 1;
-                ThermalCall(request, sampled, true);
-                const auto result = ThermalCall(request, sampled);
-                if (sampled)
+                request["noise"].as_object()["realizations"] = clamped ? 256 : trajectories ? 1024 : 1;
+                ThermalCall(request, clamped, true);
+                const auto result = ThermalCall(request, clamped);
+                if (clamped)
                 {
                     SameExpectations(result, ThermalCall(request, true));
-                    auto clamped = request;
-                    clamped["noise"].as_object()["channels"].as_array()[0].as_object()["t2"] = 1.0;
-                    SameExpectations(result, ThermalCall(clamped, false));
+                    auto explicitT2 = request;
+                    explicitT2["noise"].as_object()["channels"].as_array()[0].as_object()["t2"] = 1.0;
+                    SameExpectations(result, ThermalCall(explicitT2, false));
                     Check(std::abs(Real(result.at("expectation_values").at(0)) - std::exp(-0.3)) < 0.1,
                           "Sampled thermal coherence did not follow effective T2=T1");
+                }
+                else if (trajectories)
+                {
+                    // Trajectories of the channel: the calibrated coherence
+                    // (0.82 or 0.86), not that of the clamp (0.74).
+                    SameExpectations(result, ThermalCall(request, false));
+                    Check(result.at("noise").at("evaluation") == "trajectories", "A pure-state method did not sample its relaxation");
+                    Check(std::abs(Real(result.at("expectation_values").at(0)) - std::exp(-0.3 / t2)) < 0.05,
+                          "Sampled thermal channels did not keep the calibrated T2");
                 }
                 else
                 {
@@ -124,16 +139,17 @@ void TestThermalApproximation()
     // without delays, and a zero-duration gate relaxation (the identity), are
     // not approximated.
     {
-        auto idle = Estimate("h q[0];", {"XI"}, Channel("idle", {{"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        auto idle = Estimate("h q[0];", {"XI"}, Channel("idle", {{"t1", 1.0}, {"t2", 2.0}}), "tensor_network", 2);
         idle["noise"].as_object()["realizations"] = 256;
         ThermalCall(idle, false);
-        auto instant = Estimate("h q[0];", {"XI"}, Channel("thermal_relaxation", {{"duration", 0.0}, {"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        auto instant = Estimate("h q[0];", {"XI"}, Channel("thermal_relaxation", {{"duration", 0.0}, {"t1", 1.0}, {"t2", 2.0}}), "tensor_network", 2);
         instant["noise"].as_object()["realizations"] = 256;
         ThermalCall(instant, false);
     }
 
-    // Accepting sampled thermal approximations must not admit exact-only maps
-    // or an explicit exact evaluation on a pure-state method.
+    // No pure-state method evaluates noise exactly. Maps that have no branch
+    // drawn without the state are refused where they cannot be sampled, and
+    // accepted by the methods that sample channels.
     auto thermal = Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.5}});
     auto request = Estimate("h q[0];", {"XI"}, thermal, "statevector", 2);
     request["noise"].as_object()["evaluation"] = "exact";
@@ -144,8 +160,654 @@ void TestThermalApproximation()
                                         Channel("kraus", {{"operators", j::array{j::value(j::array{1, 0, 0, 1})}}})})
     {
         request["noise"].as_object()["channels"] = j::array{thermal, channel};
+        for (const char *method : {"tensor_network", "path_integral", "extended_stabilizer"})
+        {
+            request["simulator"].as_object()["method"] = method;
+            Check(Call(request, false, true).at("error").at("code") == "unsupported_capability",
+                  "A channel that needs the state was accepted by a method that cannot sample it");
+        }
+        for (const char *method : {"statevector", "matrix_product_state"})
+        {
+            request["simulator"].as_object()["method"] = method;
+            Check(Call(request, true, true).at("valid").as_bool(), "A method that samples channels refused one");
+        }
+    }
+}
+
+// The statevector and the matrix product state sample channels from their
+// state. Noise that has no branch drawn without it (relaxation with T2 > T1,
+// amplitude damping, generalized amplitude damping, Kraus maps) runs there as
+// trajectories of the channels themselves, in a model or as an instruction:
+// nothing is clamped, drawn as a reset or refused.
+void TestSampledChannelRequests()
+{
+    const auto approximated = [](const j::object &result, const char *name) {
+        const auto &list = result.at("noise").at("approximations").as_array();
+        return std::find(list.begin(), list.end(), j::value(name)) != list.end();
+    };
+    const double keep = std::sqrt(0.7), decay = std::sqrt(0.3);
+    const j::array damp{j::array{1, 0, 0, keep}, j::array{0, decay, 0, 0}};
+
+    // A model, against the density matrix.
+    const j::array model{Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.6}, {"excited_population", 0.1}}, {0}),
+                         Channel("generalized_amplitude_damping", {{"gamma", 0.15}, {"excited_population", 0.2}}, {1}), Channel("t1", {{"gamma", 0.1}}, {2}),
+                         Channel("kraus", {{"operators", damp}}, {1}), Channel("depolarizing", {{"probability", 0.02}}, {0, 1, 2})};
+    const j::array observables{"XII", "ZZI", "IZZ", "IIZ", "XXI", "ZIZ"};
+    const auto estimate = [&](const char *method, size_t realizations) {
+        auto request = Request("estimate", 3, "h q[0]; cx q[0],q[1]; ry(0.8) q[2]; cx q[1],q[2]; h q[1];", method);
+        request["observables"] = observables;
+        request["noise"] = j::object{{"seed", 29}, {"channels", model}};
+        if (realizations)
+            request["noise"].as_object()["realizations"] = realizations;
+        return request;
+    };
+    const auto exact = Call(estimate("density_matrix", 0));
+    Check(exact.at("noise").at("evaluation") == "exact_channels", "The reference did not apply its channels exactly");
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        Check(Call(estimate(method, 2000), true, true).at("valid").as_bool(), "A sampled model did not validate");
+        const auto result = Call(estimate(method, 2000));
+        Check(result.at("noise").at("evaluation") == "trajectories" && !approximated(result, "thermal_T2_clamped_to_T1") &&
+                  !approximated(result, "sampled_T1_reset") && approximated(result, "finite_noise_realizations"),
+              "Channels sampled from the state were reported as approximated");
+        for (size_t i = 0; i < observables.size(); ++i)
+            Check(std::abs(Real(result.at("expectation_values").at(i)) - Real(exact.at("expectation_values").at(i))) < 0.1,
+                  "Sampled channels do not average to the density matrix");
+        SameExpectations(result, Call(estimate(method, 2000)));
+    }
+
+    // Counts of that model. The backend draws all the noise as each shot runs,
+    // so the shots share one circuit, built once, and each is a realization of
+    // its own whatever number was asked for. Both count paths, against the
+    // density matrix: the probability of each bit, and of the first two agreeing.
+    const auto counted = [&](const char *method, bool reduction, uint64_t seed, uint64_t noiseSeed, j::value realizations) {
+        auto request = Request("execute", 3, "h q[0]; cx q[0],q[1]; ry(0.8) q[2]; cx q[1],q[2]; h q[1]; measure q->c;", method);
+        request["execution"].as_object()["shots"] = 8192;
+        request["execution"].as_object()["seed"] = seed;
+        request["noise"] = j::object{{"seed", noiseSeed}, {"channels", model}};
+        if (!realizations.is_null())
+            request["noise"].as_object()["realizations"] = realizations;
+        if (reduction)
+            request["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
+        return Call(request);
+    };
+    const auto marginals = [](const j::object &result) {
+        std::array<double, 4> sums{};
+        double shots = 0;
+        for (const auto &entry : result.at("counts").as_object())
+        {
+            const std::string bits(entry.key());
+            const double count = Real(entry.value());
+            shots += count;
+            for (size_t bit = 0; bit < 3; ++bit)
+                sums[bit] += bits[bit] == '1' ? count : 0.0;
+            sums[3] += bits[0] == bits[1] ? count : 0.0;
+        }
+        for (double &value : sums)
+            value /= shots;
+        return sums;
+    };
+    const auto exactCounts = marginals(counted("density_matrix", false, 123, 29, nullptr));
+    for (const char *method : {"statevector", "matrix_product_state"})
+        for (const bool reduction : {false, true})
+        {
+            const auto result = counted(method, reduction, 123, 29, nullptr);
+            Check(result.at("noise").at("realizations").to_number<size_t>() == 8192 && result.at("noise").at("evaluation") == "trajectories",
+                  "A count request that draws its noise as it runs did not report one realization per shot");
+            const auto sampled = marginals(result);
+            for (size_t i = 0; i < sampled.size(); ++i)
+                Check(std::abs(sampled[i] - exactCounts[i]) < 0.03, "Counts drawn as the circuit runs do not follow the density matrix");
+            // The number asked for changes nothing; either seed changes the draws.
+            Check(result.at("counts") == counted(method, reduction, 123, 29, nullptr).at("counts"), "Seeded run-time noise is not reproducible");
+            Check(result.at("counts") == counted(method, reduction, 123, 29, 7).at("counts"), "The realization count changed noise drawn per shot");
+            Check(result.at("counts") != counted(method, reduction, 123, 30, nullptr).at("counts"), "The noise seed does not reach noise drawn per shot");
+            Check(result.at("counts") != counted(method, reduction, 124, 29, nullptr).at("counts"), "The seed does not reach noise drawn per shot");
+        }
+    // A Kraus instruction: amplitude damping of qubit 0 in |11>. Each shot
+    // draws its branch, with or without a noise block.
+    const j::object damping{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", damp}};
+    const j::object measure{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{0, 1}}};
+    const j::array prepare{j::object{{"name", "x"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}}};
+    const auto circuit = [&](j::array source) {
+        return j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", std::move(source)}};
+    };
+    const auto damped = [&](const j::value &counts) {
+        const auto &outcomes = counts.as_object();
+        return outcomes.size() == 2 && outcomes.contains("11") && outcomes.contains("01") && std::abs(Real(outcomes.at("11")) / 4096 - 0.7) < 0.04;
+    };
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        auto request = Request("execute", 2, "", method);
+        request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
+        request["execution"].as_object()["shots"] = 4096;
+        auto result = Call(request);
+        Check(damped(result.at("counts")), "A Kraus instruction was not drawn per shot");
+        Check(result.at("counts") == Call(request).at("counts"), "Seeded shots of a sampled Kraus instruction are not reproducible");
+        // One realization of an empty model: the instruction is still drawn per shot.
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 1}, {"channels", j::array{}}};
+        result = Call(request);
+        Check(damped(result.at("counts")), "One noise realization froze a Kraus instruction");
+
+        auto mean = Request("estimate", 2, "", method);
+        mean["circuit"] = circuit({prepare[0], prepare[1], damping});
+        mean["observables"] = j::array{"ZI", "IZ"};
+        mean["noise"] = j::object{{"seed", 5}, {"realizations", 2000}, {"channels", j::array{}}};
+        result = Call(mean);
+        Check(std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.1 && std::abs(Real(result.at("expectation_values").at(1)) + 1.0) < 1e-9,
+              "A sampled Kraus instruction gave the wrong expectation values");
+        // Without a noise block an estimate averages the branches as it averages measurement branches.
+        mean.erase("noise");
+        result = Call(mean);
+        Check(result.at("execution_metadata").at("stochastic_execution").as_bool() && std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.35,
+              "A plain estimate did not average the branches of a Kraus instruction");
+
+        // In a checkpoint suffix, after a saved prefix.
+        auto saved = Request("checkpoint_batch", 2, "x q[0]; cx q[0],q[1];", method);
+        saved["execution"].as_object()["shots"] = 4096;
+        saved["suffixes"] = j::array{circuit({damping, measure})};
+        result = Call(saved);
+        Check(damped(result.at("results").at(0).at("counts")), "A checkpoint suffix froze a Kraus instruction");
+    }
+    // A method that neither holds nor samples channels has no form for it.
+    for (const char *method : {"tensor_network", "path_integral", "extended_stabilizer"})
+    {
+        auto request = Request("execute", 2, "", method);
+        request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
+        Check(Call(request, false, true).at("error").at("code") == "unsupported_capability", "A Kraus instruction ran without a noise block");
+        request["noise"] = j::object{{"seed", 5}, {"channels", j::array{}}};
         Check(Call(request, false, true).at("error").at("code") == "unsupported_capability",
-              "Exact-only channel accepted with a sampled thermal approximation");
+              "A Kraus instruction that needs the state was accepted by a method that cannot sample it");
+    }
+    // A query of one state runs the circuit once: it returns the state of one
+    // branch, which the seed selects and the metadata reports, as Python's
+    // get_statevector and get_probabilities do. |11> stays (index 3) with
+    // probability 0.7 and decays to qubit 0 in |0> (index 2) otherwise.
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        auto request = Request("probabilities", 2, "", method);
+        request["circuit"] = circuit({prepare[0], prepare[1], damping});
+        size_t kept = 0;
+        for (uint64_t seed = 1; seed <= 60; ++seed)
+        {
+            request["execution"].as_object()["seed"] = seed;
+            const auto result = Call(request);
+            const double stay = Real(result.at("probabilities").at(3)), decayed = Real(result.at("probabilities").at(2));
+            Check(std::abs(stay + decayed - 1) < 1e-9 && (stay > 1 - 1e-9 || decayed > 1 - 1e-9),
+                  "A state query did not return one branch of a Kraus instruction");
+            Check(result.at("execution_metadata").at("stochastic_execution").as_bool(), "A state query of one branch does not say so");
+            if (seed <= 3)
+                Check(result.at("probabilities") == Call(request).at("probabilities"), "A seeded state query is not reproducible");
+            kept += stay > 0.5;
+        }
+        Check(kept > 29 && kept < 55, "The branches of a state query do not follow the channel");
+        request["operation"] = "state_probability";
+        request["target_state"] = "11";
+        const double one = Real(Call(request).at("probability"));
+        Check(one < 1e-9 || one > 1 - 1e-9, "state_probability did not read one branch");
+    }
+    // On the density matrix the same query is the ensemble, and no branch is reported.
+    {
+        auto request = Request("probabilities", 2, "", "density_matrix");
+        request["circuit"] = circuit({prepare[0], prepare[1], damping});
+        const auto result = Call(request);
+        Near(Real(result.at("probabilities").at(3)), 0.7);
+        Check(!result.at("execution_metadata").as_object().contains("stochastic_execution"), "An exact state query reported a branch");
+    }
+    // A candidate list that holds channels in one of its backends runs the
+    // circuit there, as Python's execute does: the network tries its
+    // candidates in turn. A noise block has to know before it selects.
+    {
+        auto request = Request("execute", 2, "", "statevector");
+        request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
+        request["execution"].as_object()["shots"] = 4096;
+        // In either order: a backend that holds no channels and comes first
+        // yields before it is accepted. Running the circuit's start does not
+        // tell, since a channel that is drawn is left to the shots.
+        const j::object holds{{"backend", "qcsim"}, {"method", "statevector"}};
+        for (const char *other : {"stabilizer", "tensor_network", "path_integral", "extended_stabilizer"})
+            for (const bool first : {false, true})
+            {
+                const j::object none{{"backend", "qcsim"}, {"method", other}};
+                request["simulator"] = j::object{{"selection", "automatic"}, {"candidates", first ? j::array{none, holds} : j::array{holds, none}}};
+                request.erase("noise");
+                const auto result = Call(request);
+                Check(damped(result.at("counts")) && result.at("execution_metadata").at("method") == "statevector",
+                      "A candidate list did not run channel instructions on the backend that holds them");
+            }
+        // An estimate selects the same way: the density matrix listed second applies the channel exactly.
+        auto estimate = Request("estimate", 2, "", "statevector");
+        estimate["circuit"] = circuit({prepare[0], prepare[1], damping});
+        estimate["observables"] = j::array{"ZI", "IZ"};
+        estimate["simulator"] = j::object{{"selection", "automatic"},
+                                          {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "tensor_network"}},
+                                                                  j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}}}};
+        const auto estimated = Call(estimate);
+        Check(std::abs(Real(estimated.at("expectation_values").at(0)) + 0.4) < 1e-9 && std::abs(Real(estimated.at("expectation_values").at(1)) + 1.0) < 1e-9 &&
+                  estimated.at("execution_metadata").at("method") == "density_matrix",
+              "An estimate did not run channel instructions on the candidate that holds them");
+        request["simulator"] = j::object{
+            {"selection", "automatic"},
+            {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}, j::object{{"backend", "qcsim"}, {"method", "tensor_network"}}}}};
+        Check(Call(request, false, true).at("error").at("code") == "unsupported_capability", "Candidates that hold no channels accepted a Kraus instruction");
+    }
+    // A method that neither holds nor samples channels still refuses the query.
+    {
+        auto request = Request("probabilities", 2, "", "tensor_network");
+        request["circuit"] = circuit({prepare[0], prepare[1], damping});
+        Check(Call(request, false, true).at("error").at("code") == "unsupported_capability", "A state query ran a Kraus instruction it cannot hold");
+    }
+
+    // The structured form of a channel instruction: factors applied in order
+    // and kept apart, each on its positions among the instruction's qubits
+    // (Python's QuantumChannel constructors composed with then()).
+    const j::object hadamard{{"name", "h"}, {"qubits", j::array{0}}};
+    const j::object entangle{{"name", "cx"}, {"qubits", j::array{0, 1}}};
+    const j::object depolarize{{"kind", "depolarizing"}, {"probability", 0.1}};
+    const j::object relax{{"kind", "thermal_relaxation"}, {"qubits", j::array{0}}, {"duration", 0.3}, {"t1", 1.0}, {"t2", 1.6}, {"excited_population", 0.1}};
+    const j::object structured{{"name", "channel"},
+                               {"qubits", j::array{0, 1}},
+                               {"factors", j::array{depolarize, j::object{{"kind", "amplitude_damping"}, {"qubits", j::array{1}}, {"gamma", 0.3}}, relax}}};
+    const auto values = [&](const char *method, j::array source, size_t realizations) {
+        auto request = Request("estimate", 2, "", method);
+        request["circuit"] = circuit(std::move(source));
+        request["observables"] = j::array{"ZI", "IZ", "XX", "ZZ", "YY"};
+        if (realizations)
+            request["noise"] = j::object{{"seed", 9}, {"realizations", realizations}, {"channels", j::array{}}};
+        return Call(request);
+    };
+    {
+        // On the density matrix it is the product of its factors, given one by one.
+        auto relaxAlone = relax;
+        relaxAlone.erase("qubits");
+        const auto whole = values("density_matrix", {hadamard, entangle, structured}, 0);
+        const auto parts = values("density_matrix",
+                                  {hadamard, entangle, j::object{{"name", "channel"}, {"qubits", j::array{0, 1}}, {"factors", j::array{depolarize}}},
+                                   j::object{{"name", "kraus"}, {"qubits", j::array{1}}, {"operators", damp}},
+                                   j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{relaxAlone}}}},
+                                  0);
+        SameExpectations(whole, parts);
+        Check(std::abs(Real(whole.at("expectation_values").at(3)) - 1) > 0.1, "The structured channel did nothing");
+        // The statevector and the matrix product state sample it from their state.
+        for (const char *method : {"statevector", "matrix_product_state"})
+        {
+            const auto sampled = values(method, {hadamard, entangle, structured}, 3000);
+            for (size_t i = 0; i < 5; ++i)
+                Check(std::abs(Real(sampled.at("expectation_values").at(i)) - Real(whole.at("expectation_values").at(i))) < 0.1,
+                      "A structured channel sampled from the state does not average to the density matrix");
+        }
+        // Positions [1, 0] exchange the qubits of a factor: damping of the
+        // factor's first qubit, on the instruction's second.
+        const j::array pairDamp{j::array{1, 0, 0, 0, 0, keep, 0, 0, 0, 0, 1, 0, 0, 0, 0, keep},
+                                j::array{0, decay, 0, 0, 0, 0, 0, 0, 0, 0, 0, decay, 0, 0, 0, 0}};
+        const auto exchanged = values("density_matrix",
+                                      {hadamard, entangle,
+                                       j::object{{"name", "channel"},
+                                                 {"qubits", j::array{0, 1}},
+                                                 {"factors", j::array{j::object{{"kind", "kraus"}, {"qubits", j::array{1, 0}}, {"operators", pairDamp}}}}}},
+                                      0);
+        SameExpectations(exchanged,
+                         values("density_matrix", {hadamard, entangle, j::object{{"name", "kraus"}, {"qubits", j::array{1}}, {"operators", damp}}}, 0));
+    }
+    {
+        // A factor keeps what a flat Kraus list loses: relaxation with T2 <= T1
+        // can be drawn into resets by a method that holds no channels.
+        const j::object flip{{"name", "x"}, {"qubits", j::array{0}}};
+        const j::object slow{{"kind", "thermal_relaxation"}, {"duration", 0.3}, {"t1", 1.0}, {"t2", 0.8}};
+        const auto drawn = [&](j::object instruction) {
+            auto request = Request("estimate", 1, "", "tensor_network");
+            request["circuit"] =
+                j::object{{"format", "instructions"}, {"num_qubits", 1}, {"num_clbits", 1}, {"source", j::array{flip, std::move(instruction)}}};
+            request["observables"] = j::array{"Z"};
+            request["noise"] = j::object{{"seed", 4}, {"realizations", 3000}, {"channels", j::array{}}};
+            return request;
+        };
+        const auto result = Call(drawn(j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{slow}}}));
+        Check(std::abs(Real(result.at("expectation_values").at(0)) - (1 - 2 * std::exp(-0.3))) < 0.08, "Relaxation drawn from a channel factor is wrong");
+        Check(Call(drawn(damping), false, true).at("error").at("code") == "unsupported_capability",
+              "A flat Kraus list was drawn by a method that holds no channels");
+    }
+    {
+        // A damping of zero has one branch, the identity: the instruction is a gate, and a statevector evolves the
+        // circuit once for all its shots, as with a mixture of one unitary (TestDeterministicChannelInstructions).
+        const j::object flip{{"name", "x"}, {"qubits", j::array{0}}};
+        const auto counted = [&](const char *method, j::object factor) {
+            auto request = Request("execute", 1, "", method);
+            const j::object channel{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{std::move(factor)}}};
+            const j::object read{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}};
+            request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1}, {"num_clbits", 1}, {"source", j::array{flip, channel, read}}};
+            request["execution"].as_object()["shots"] = 200;
+            request["noise"] = j::object{{"seed", 5}, {"realizations", 1}, {"channels", j::array{}}};
+            return Call(request);
+        };
+        const j::object still{{"kind", "amplitude_damping"}, {"gamma", 0.0}};
+        const j::object stillWarm{{"kind", "generalized_amplitude_damping"}, {"gamma", 0.0}, {"excited_population", 0.3}};
+        for (const char *method : {"statevector", "matrix_product_state"})
+        {
+            for (const auto &factor : {still, stillWarm})
+            {
+                const auto result = counted(method, factor);
+                Check(result.at("counts") == j::object{{"1", 200}}, "A damping of zero changed the state");
+                Check(result.at("noise").at("realizations") == 1, "A damping of zero made every shot a realization");
+            }
+            Check(counted(method, j::object{{"kind", "amplitude_damping"}, {"gamma", 0.3}}).at("noise").at("realizations") == 200,
+                  "A damping that is drawn no longer makes every shot a realization");
+        }
+    }
+    {
+        // Malformed factors are input errors.
+        const auto malformed = [&](j::array qubits, j::value factors) {
+            auto request = Request("estimate", 2, "", "density_matrix");
+            request["circuit"] = circuit({j::object{{"name", "channel"}, {"qubits", std::move(qubits)}, {"factors", std::move(factors)}}});
+            request["observables"] = j::array{"ZI"};
+            return Call(request, false, true).at("error").at("code") == "invalid_input";
+        };
+        Check(malformed({0, 1}, j::array{}), "A channel without factors was accepted");
+        Check(malformed({0}, j::array{j::object{{"kind", "squeezing"}, {"gamma", 0.1}}}), "An unknown factor kind was accepted");
+        Check(malformed({0, 1}, j::array{j::object{{"kind", "amplitude_damping"}, {"gamma", 0.1}}}), "A one-qubit factor without a position was accepted");
+        Check(malformed({0, 1}, j::array{j::object{{"kind", "amplitude_damping"}, {"qubits", j::array{2}}, {"gamma", 0.1}}}),
+              "A factor position outside the instruction was accepted");
+        Check(malformed({0, 1}, j::array{j::object{{"kind", "kraus"}, {"qubits", j::array{1, 1}}, {"operators", j::array{}}}}),
+              "A repeated factor position was accepted");
+        Check(malformed({0}, j::array{j::object{{"kind", "amplitude_damping"}, {"gamma", 1.5}}}), "A damping probability above one was accepted");
+        Check(malformed({0}, j::array{j::object{{"kind", "pauli"}, {"probabilities", j::array{0.5, 0.2}}}}), "Two Pauli probabilities were accepted");
+        Check(malformed({0}, j::array{j::object{{"kind", "kraus"}, {"operators", j::array{j::array{1, 0, 0, 0.5}}}}}),
+              "Kraus operators that are no channel were accepted");
+    }
+
+    // noisy_fidelity takes channel instructions as noise the ideal circuit does
+    // not have, as Python's noisy_fidelity does.
+    {
+        const auto fidelityOf = [&](const char *method, size_t realizations) {
+            auto request = Request("noisy_fidelity", 2, "", method);
+            request["circuit"] = circuit({hadamard, entangle, structured});
+            request["noise"] = j::object{{"seed", 31}, {"channels", j::array{}}};
+            if (realizations)
+                request["noise"].as_object()["realizations"] = realizations;
+            return Real(Call(request).at("fidelity"));
+        };
+        const double exactFidelity = fidelityOf("density_matrix", 0);
+        Check(exactFidelity > 0.5 && exactFidelity < 0.95, "Channel instructions left the fidelity alone");
+        for (const char *method : {"statevector", "matrix_product_state"})
+            Check(std::abs(fidelityOf(method, 3000) - exactFidelity) < 0.05, "Channel instructions sampled in noisy_fidelity give the wrong fidelity");
+
+        // A reset before any other operation on its qubit only prepares it, as
+        // in Python's noisy_fidelity: the fidelity is the same with and without
+        // it. A reset after a gate on its qubit has no unitary ideal.
+        const j::object reset{{"name", "reset"}, {"qubits", j::array{1}}};
+        const auto prepared = [&](const char *method, j::array source, size_t realizations, bool success) {
+            auto request = Request("noisy_fidelity", 2, "", method);
+            request["circuit"] = circuit(std::move(source));
+            request["noise"] = j::object{{"seed", 31}, {"channels", j::array{}}};
+            if (realizations)
+                request["noise"].as_object()["realizations"] = realizations;
+            return Call(request, success, !success);
+        };
+        Near(Real(prepared("density_matrix", {hadamard, reset, entangle, structured}, 0, true).at("fidelity")), exactFidelity);
+        for (const char *method : {"statevector", "matrix_product_state"})
+            Check(std::abs(Real(prepared(method, {hadamard, reset, entangle, structured}, 3000, true).at("fidelity")) - exactFidelity) < 0.05,
+                  "A leading reset changed the fidelity of sampled channel instructions");
+        for (const char *method : {"density_matrix", "statevector"})
+            Check(prepared(method, {hadamard, entangle, reset, structured}, 0, false).at("error").at("code") == "unsupported_capability",
+                  "noisy_fidelity accepted a reset after a gate on its qubit");
+    }
+
+    // An estimate whose model the backend draws entirely as it runs: one
+    // circuit for every realization, so the noise seed joins the execution
+    // seed, as in the count requests above and in Python.
+    {
+        const j::array drawnAsRun{Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.6}, {"excited_population", 0.1}}, {0}),
+                                  Channel("generalized_amplitude_damping", {{"gamma", 0.15}, {"excited_population", 0.2}}, {1})};
+        const auto run = [&](const char *method, uint64_t noiseSeed, size_t realizations) {
+            auto request = Request("estimate", 2, "h q[0]; cx q[0],q[1]; ry(0.8) q[1];", method);
+            request["observables"] = j::array{"ZI", "IZ", "XX"};
+            request["noise"] = j::object{{"seed", noiseSeed}, {"channels", drawnAsRun}};
+            if (realizations)
+                request["noise"].as_object()["realizations"] = realizations;
+            return Call(request);
+        };
+        const auto exactValues = run("density_matrix", 29, 0);
+        for (const char *method : {"statevector", "matrix_product_state"})
+        {
+            const auto first = run(method, 29, 2000);
+            for (size_t i = 0; i < 3; ++i)
+                Check(std::abs(Real(first.at("expectation_values").at(i)) - Real(exactValues.at("expectation_values").at(i))) < 0.1,
+                      "An estimate that draws its noise as it runs does not average to the density matrix");
+            SameExpectations(first, run(method, 29, 2000));
+            Check(first.at("expectation_values") != run(method, 30, 2000).at("expectation_values"),
+                  "The noise seed does not reach an estimate that draws its noise as it runs");
+        }
+    }
+
+    // The fidelity to the ideal state, with relaxation that dephases more
+    // slowly than it decays: the clamp would lose a tenth of it.
+    const auto fidelity = [&](const char *method, size_t realizations) {
+        auto request = Request("noisy_fidelity", 2, "h q[0]; cx q[0],q[1];", method);
+        request["noise"] = j::object{{"seed", 31},
+                                     {"channels", j::array{Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.8}}, {0, 1}),
+                                                           Channel("thermal_relaxation_2q", {{"duration", 0.4}, {"t1", 1.0}, {"t2", 1.8}}, {0, 1})}}};
+        if (realizations)
+            request["noise"].as_object()["realizations"] = realizations;
+        return Call(request);
+    };
+    const double reference = Real(fidelity("density_matrix", 0).at("fidelity"));
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        const auto result = fidelity(method, 2000);
+        Check(!approximated(result, "thermal_T2_clamped_to_T1") && std::abs(Real(result.at("fidelity")) - reference) < 0.05,
+              "Sampled relaxation gave the wrong fidelity");
+    }
+    Check(std::abs(Real(fidelity("path_integral", 2000).at("fidelity")) - reference) > 0.05, "The clamp no longer shows in this fidelity");
+}
+
+// Where the backend draws channel branches as the circuit runs, noise.seed has
+// no injection to drive for them and joins the request seed: either seed alone
+// changes the errors drawn, in noisy_fidelity and in checkpoint suffixes as in
+// execute and estimate, and the same two seeds repeat the result. That holds
+// whether all the noise is drawn that way, so that the realizations share one
+// circuit, or a layer of its own per realization keeps them apart: a coherent
+// rotation, whose signs are drawn for each realization on a qubit of the
+// circuit, and which injects nothing on an idle one, where the channel branches
+// are all that noise.seed can change.
+void TestRuntimeNoiseSeeds()
+{
+    const std::string gates = "h q[0]; h q[1]; h q[2]; cx q[0],q[1]; cx q[1],q[2]; x q[0]; h q[0]; x q[1]; h q[1]; x q[2]; h q[2];";
+    const std::string measure = " measure q[0] -> c[0]; measure q[1] -> c[1]; measure q[2] -> c[2];";
+    for (const char *method : {"statevector", "matrix_product_state"})
+        for (const int coherent : {-1, 0, 3}) // no coherent noise, on a qubit of the circuit, on the idle fourth qubit
+        {
+            j::array channels{Channel("generalized_amplitude_damping", {{"gamma", 0.2}, {"excited_population", 0.0}}, {0}),
+                              Channel("generalized_amplitude_damping", {{"gamma", 0.2}, {"excited_population", 0.0}}, {1}),
+                              Channel("generalized_amplitude_damping", {{"gamma", 0.2}, {"excited_population", 0.0}}, {2})};
+            if (coherent >= 0)
+                channels.push_back(Channel("coherent_rotation", {{"rx", 0.2}, {"ry", 0.1}, {"rz", 0.3}}, {coherent}));
+            const auto run = [&](const char *operation, int seed, int noiseSeed) {
+                const bool counts = std::string(operation) == "execute" || std::string(operation) == "checkpoint_batch";
+                auto request = Request(operation, 4, std::string(operation) == "checkpoint_batch" ? "" : counts ? gates + measure : gates, method);
+                request["execution"].as_object()["seed"] = seed;
+                request["noise"] = j::object{{"seed", noiseSeed}, {"channels", channels}};
+                if (counts)
+                    request["execution"].as_object()["shots"] = 60;
+                else
+                    request["noise"].as_object()["realizations"] = 20;
+                if (std::string(operation) == "checkpoint_batch")
+                {
+                    auto suffix = request.at("circuit").as_object();
+                    suffix["source"] = "OPENQASM 2.0;\nqreg q[4]; creg c[4];\n" + gates + measure;
+                    request["suffixes"] = j::array{suffix};
+                }
+                else if (std::string(operation) == "estimate")
+                    request["observables"] = j::array{"ZZII", "IXXI"};
+                const auto result = Call(request);
+                return std::string(operation) == "noisy_fidelity"     ? j::serialize(result.at("fidelity"))
+                       : std::string(operation) == "estimate"         ? j::serialize(result.at("expectation_values"))
+                       : std::string(operation) == "checkpoint_batch" ? j::serialize(result.at("results").at(0).at("counts"))
+                                                                      : j::serialize(result.at("counts"));
+            };
+            for (const char *operation : {"noisy_fidelity", "checkpoint_batch", "estimate", "execute"})
+            {
+                const auto base = run(operation, 42, 1);
+                Check(run(operation, 42, 1) == base, "A runtime-noise request does not repeat with its two seeds");
+                // Of three other noise seeds at least two give another result: counts of 60 shots can coincide once.
+                int changed = 0;
+                for (const int noiseSeed : {2, 3, 77})
+                    changed += run(operation, 42, noiseSeed) != base;
+                Check(changed >= 2, "noise.seed has no effect on channel branches the backend draws as the circuit runs");
+                changed = 0;
+                for (const int seed : {43, 44, 45})
+                    changed += run(operation, seed, 1) != base;
+                Check(changed >= 2, "The request seed has no effect on channel branches the backend draws as the circuit runs");
+            }
+        }
+}
+
+// A channel instruction with one branch only, a unitary, is a gate: nothing is
+// drawn for it, so a backend that samples channels evolves the circuit once for
+// all its shots, as it does the circuit with the gate in its place, and under a
+// noise block a realization holds as many shots as were asked for. A mixture of
+// two unitaries is still drawn shot by shot.
+void TestDeterministicChannelInstructions()
+{
+    const j::object hadamard{{"name", "h"}, {"qubits", j::array{0}}}, entangle{{"name", "cx"}, {"qubits", j::array{0, 1}}};
+    const j::object flip{{"name", "x"}, {"qubits", j::array{0}}}, turn{{"name", "h"}, {"qubits", j::array{1}}};
+    const j::object measure{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{0, 1}}};
+    const j::array x{0, 1, 1, 0}, identity{1, 0, 0, 1};
+    const auto mixture = [&](j::array probabilities, j::array unitaries) {
+        return j::object{
+            {"name", "channel"},
+            {"qubits", j::array{0}},
+            {"factors", j::array{j::object{{"kind", "unitary_mixture"}, {"probabilities", std::move(probabilities)}, {"unitaries", std::move(unitaries)}}}}};
+    };
+    // A list of one matrix has to be built from a value: a braced array of one array is a copy of it.
+    const j::object asChannel = mixture({1.0}, j::array{j::value(x)}), drawn = mixture({0.5, 0.5}, {x, identity});
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        const auto run = [&](const char *operation, const j::object &third, bool noise) {
+            auto request = Request(operation, 2, "", method);
+            const bool counts = std::string(operation) == "execute";
+            j::array source{hadamard, entangle, third, turn};
+            if (counts)
+            {
+                source.push_back(measure);
+                request["execution"].as_object()["shots"] = 4096;
+            }
+            else
+                request["observables"] = j::array{"ZZ", "XI", "IX"};
+            request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", std::move(source)}};
+            if (noise)
+                request["noise"] = j::object{{"seed", 5}, {"realizations", 1}, {"channels", j::array{}}};
+            return Call(request);
+        };
+        const auto gate = run("execute", flip, false), channel = run("execute", asChannel, false);
+        Check(channel.at("counts") == gate.at("counts"), "A channel with one unitary branch did not sample as the gate it is");
+        Check(run("execute", drawn, false).at("counts") != gate.at("counts"), "A mixture of two unitaries sampled as one of them");
+        const auto expected = run("estimate", flip, false), estimated = run("estimate", asChannel, false);
+        for (size_t i = 0; i < 3; ++i)
+            Check(std::abs(Real(estimated.at("expectation_values").at(i)) - Real(expected.at("expectation_values").at(i))) < 1e-12,
+                  "A channel with one unitary branch changed an expectation value of the gate it is");
+        // Under a noise block that asks for one realization, the shots share it; a channel that is drawn makes every shot one.
+        Check(run("execute", asChannel, true).at("noise").at("realizations") == 1, "A channel with one unitary branch made every shot a realization");
+        Check(run("execute", drawn, true).at("noise").at("realizations") == 4096, "A drawn channel no longer makes every shot a realization");
+    }
+}
+
+// On a method that samples no channels, sampled noise injection draws every
+// channel instruction into gates and resets when it builds a realization. A
+// one-qubit mixture of unitaries becomes a gate there, as a Pauli channel does:
+// the realization evolves deterministically. A relaxation may become a reset,
+// which reads the state. On the statevector the mixture stays in the circuit
+// and is drawn while it runs. Execute, estimate and a checkpoint suffix count
+// the instruction the same way.
+void TestLoweredChannelDraws()
+{
+    const j::object hadamard{{"name", "h"}, {"qubits", j::array{0}}}, entangle{{"name", "cx"}, {"qubits", j::array{0, 1}}};
+    const j::object measure{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{0, 1}}};
+    const double r = std::sqrt(0.5);
+    const auto channel = [](j::object factor) { return j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{std::move(factor)}}}; };
+    const j::object pauli = channel({{"kind", "pauli"}, {"probabilities", j::array{0.6, 0.4, 0.0, 0.0}}});
+    const j::object mixture =
+        channel({{"kind", "unitary_mixture"}, {"probabilities", j::array{0.6, 0.4}}, {"unitaries", j::array{j::array{1, 0, 0, 1}, j::array{r, r, r, -r}}}});
+    const j::object relaxation = channel({{"kind", "thermal_relaxation"}, {"duration", 0.3}, {"t1", 1.0}, {"t2", 0.8}});
+    const auto circuit = [](j::array source) {
+        return j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", std::move(source)}};
+    };
+
+    struct Case
+    {
+        const char *method;
+        const j::object *instruction;
+        bool stochastic;
+    };
+
+    for (const Case &entry : {Case{"path_integral", &pauli, false}, Case{"path_integral", &mixture, false}, Case{"path_integral", &relaxation, true},
+                              Case{"tensor_network", &pauli, false}, Case{"tensor_network", &mixture, false}, Case{"tensor_network", &relaxation, true},
+                              Case{"statevector", &pauli, false}, Case{"statevector", &mixture, true}, Case{"statevector", &relaxation, true}})
+    {
+        const std::string where = std::string(" on ") + entry.method;
+        auto request = Request("execute", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle, *entry.instruction, measure});
+        request["execution"].as_object()["shots"] = 4000;
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 400}, {"channels", j::array{}}};
+        const j::object executed = Call(request);
+        Check(executed.at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+              ("An executed channel instruction was miscounted as drawn or not drawn while the circuit runs" + where).c_str());
+        if (entry.instruction == &mixture)
+        {
+            // The Hadamard branch, drawn in 0.4 of the realizations, sends half of the pair to odd parity.
+            const j::object counts = executed.at("counts").as_object();
+            double odd = 0;
+            for (const char *key : {"01", "10"})
+                if (const auto *count = counts.if_contains(key))
+                    odd += Real(*count);
+            Check(std::abs(odd / 4000 - 0.2) < 0.06, ("A mixture of unitaries was not drawn with its probabilities" + where).c_str());
+        }
+
+        request = Request("estimate", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle, *entry.instruction});
+        request["observables"] = j::array{"ZZ"};
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+              ("An estimated channel instruction was miscounted" + where).c_str());
+
+        request = Request("checkpoint_batch", 2, "", entry.method);
+        request["circuit"] = circuit({hadamard, entangle});
+        request["suffixes"] = j::array{circuit({*entry.instruction, measure})};
+        request["execution"].as_object()["shots"] = 400;
+        request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+        const j::object batch = Call(request);
+        Check(batch.at("noise").at("stochastic_execution").as_bool() == entry.stochastic &&
+                  batch.at("results").at(0).at("stochastic_execution").as_bool() == entry.stochastic,
+              ("A channel instruction of a checkpoint suffix was miscounted" + where).c_str());
+    }
+
+    // Without a noise block nothing is injected: a suffix runs as it is, and a
+    // backend that samples channels draws a Pauli channel too, in every shot.
+    // A density matrix applies it exactly. Under a noise block it is drawn
+    // when the realization is built, which then evolves deterministically.
+    for (const char *method : {"statevector", "matrix_product_state", "density_matrix"})
+    {
+        const bool samples = std::string(method) != "density_matrix";
+        auto request = Request("checkpoint_batch", 2, "", method);
+        request["circuit"] = circuit({hadamard, entangle});
+        request["suffixes"] = j::array{circuit({pauli, measure}), circuit({measure})};
+        request["execution"].as_object()["shots"] = 2000;
+        const j::object plain = Call(request);
+        const j::object drawn = plain.at("results").at(0).as_object();
+        Check(drawn.at("stochastic_execution").as_bool() == samples,
+              (std::string("A suffix without noise misreported the Pauli channel it draws in each shot on ") + method).c_str());
+        Check(!plain.at("results").at(1).at("stochastic_execution").as_bool(), "A suffix of measurements alone was reported as stochastic");
+        // The bit flip of probability 0.4 sends that share of the pair to odd parity.
+        double odd = 0;
+        for (const char *key : {"01", "10"})
+            if (const auto *count = drawn.at("counts").as_object().if_contains(key))
+                odd += Real(*count);
+        Check(std::abs(odd / 2000 - 0.4) < 0.05, (std::string("A suffix without noise did not draw its Pauli channel on ") + method).c_str());
+        if (samples)
+        {
+            request["suffixes"] = j::array{circuit({pauli, measure})};
+            request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
+            Check(!Call(request).at("results").at(0).at("stochastic_execution").as_bool(),
+                  (std::string("A Pauli channel drawn when the realization is built was counted as drawn while it runs on ") + method).c_str());
+        }
     }
 }
 
@@ -258,10 +920,14 @@ void TestFixedBackendNoisyShots()
     // shots must preserve that choice, while different realizations remain
     // independent. Basis-state circuits make this comparison exact, with the
     // single-shot execution path as the reference.
-    for (const char *method : {"statevector", "matrix_product_state"})
+    // Amplitude damping (t1) has no branch drawn without the state: only a
+    // method that does not sample channels draws it at injection, as a reset.
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
-        for (const auto &channel : j::array{Channel("bit_flip", {{"probability", 0.5}}), Channel("t1", {{"gamma", 0.5}}),
-                                            Channel("thermal_relaxation", {{"duration", std::log(2.0)}, {"t1", 1.0}, {"t2", 1.0}})})
+        j::array channels{Channel("bit_flip", {{"probability", 0.5}}), Channel("thermal_relaxation", {{"duration", std::log(2.0)}, {"t1", 1.0}, {"t2", 1.0}})};
+        if (std::string(method) == "path_integral")
+            channels.emplace_back(Channel("t1", {{"gamma", 0.5}}));
+        for (const auto &channel : channels)
         {
             for (size_t realizations : {size_t{1}, size_t{64}})
             {
@@ -280,6 +946,19 @@ void TestFixedBackendNoisyShots()
                 Check(result.at("counts") == Call(request).at("counts"), "Seeded noisy shots are not reproducible");
             }
         }
+    }
+
+    // Where channels are sampled from the state, amplitude damping is drawn as
+    // each shot runs: one realization does not freeze it.
+    for (const char *method : {"statevector", "matrix_product_state"})
+    {
+        auto request = Request("execute", 1, "x q[0]; measure q->c;", method);
+        request["noise"] = j::object{{"seed", 23}, {"realizations", 1}, {"channels", j::array{Channel("t1", {{"gamma", 0.5}})}}};
+        request["execution"].as_object()["shots"] = 4096;
+        const auto result = Call(request);
+        const auto &counts = result.at("counts").as_object();
+        Check(counts.size() == 2 && std::abs(Real(counts.at("0")) / 4096 - 0.5) < 0.05, "Amplitude damping was not drawn per shot");
+        Check(result.at("counts") == Call(request).at("counts"), "Seeded shots of sampled amplitude damping are not reproducible");
     }
 
     // A sampled relaxation reset on one half of a Bell pair must not freeze the
@@ -1435,6 +2114,10 @@ void TestRequestNoiseAndOptions()
     TestMultinomialCountReplay();
     TestReadoutExecution();
     TestThermalApproximation();
+    TestSampledChannelRequests();
+    TestRuntimeNoiseSeeds();
+    TestDeterministicChannelInstructions();
+    TestLoweredChannelDraws();
     TestFixedBackendNoisyShots();
     TestNoisyEstimateResetStreams();
     const double duration = 0.3, t1 = 1, t2 = 0.6, excited = 0.1;

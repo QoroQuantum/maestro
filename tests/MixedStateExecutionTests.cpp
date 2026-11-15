@@ -4,6 +4,7 @@
 #include "../Execution/PrefixCheckpoint.h"
 #include "../Execution/TerminalSampling.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <map>
@@ -16,6 +17,15 @@ using CF = Circuits::CircuitFactory<>;
 using Gate = Circuits::QuantumGateType;
 using Method = Simulators::SimulationType;
 using MaestroExecution::RecordCircuitPtr;
+
+// The entries of a count list come in no particular order: workers merge
+// theirs as they finish, so two runs with equal counts can list them differently.
+bool SameCounts(std::vector<std::pair<std::vector<bool>, size_t>> a, std::vector<std::pair<std::vector<bool>, size_t>> b)
+{
+    std::sort(a.begin(), a.end());
+    std::sort(b.begin(), b.end());
+    return a == b;
+}
 
 class CountedX : public Circuits::XGate<>
 {
@@ -202,9 +212,9 @@ void CheckpointMultinomialCounts()
         const auto first = run(checkpoint, std::nullopt, false);
         Check(first.width == 6 && first.counts.size() == 2 && first.rows.empty(), "Checkpoint count padding or storage changed");
         const auto seeded = run(checkpoint, 42, false).counts;
-        Check(seeded == expectedCounts, "A prior unseeded checkpoint call changed the seeded adaptive histogram");
+        Check(SameCounts(seeded, expectedCounts), "A prior unseeded checkpoint call changed the seeded adaptive histogram");
         Check(run(checkpoint, 42, true).rows == expectedRows, "Adaptive checkpoint raw rows did not replay");
-        Check(run(checkpoint, 42, false).counts == seeded, "Count replay changed after a raw checkpoint call");
+        Check(SameCounts(run(checkpoint, 42, false).counts, seeded), "Count replay changed after a raw checkpoint call");
     }
     config.counts_policy = "auto";
     config.seed = 0;
@@ -213,7 +223,8 @@ void CheckpointMultinomialCounts()
     config.native_options["seed"] = "0";
     config.native_options["counts_policy"] = "auto";
     MaestroExecution::PrefixCheckpoint nativeSeed(prefix, 2, config);
-    Check(run(typedSeed, std::nullopt, false).counts == run(nativeSeed, std::nullopt, false).counts, "Native seed zero lost its checkpoint count stream");
+    Check(SameCounts(run(typedSeed, std::nullopt, false).counts, run(nativeSeed, std::nullopt, false).counts),
+          "Native seed zero lost its checkpoint count stream");
     Check(run(typedSeed, std::nullopt, true).rows == run(nativeSeed, std::nullopt, true).rows, "Native seed zero lost its checkpoint row stream");
     // The small batches use the native fallback kernels. Both they and the
     // multinomial kernels must leave the same saved prefix for the next suffix.
@@ -269,7 +280,7 @@ void ExplicitSamplingPolicyKeepsAdaptiveCheckpoint(Method method)
     const auto expectedRows = run(implicit, true).rows;
     for (size_t repeat = 0; repeat < 2; ++repeat)
     {
-        Check(run(explicitDefault, false).counts == expectedCounts, "Explicit reproducible checkpoint changed the adaptive histogram");
+        Check(SameCounts(run(explicitDefault, false).counts, expectedCounts), "Explicit reproducible checkpoint changed the adaptive histogram");
         Check(run(explicitDefault, true).rows == expectedRows, "Explicit reproducible checkpoint changed adaptive ordered rows");
     }
 }

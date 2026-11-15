@@ -158,7 +158,8 @@ void bind_api(nb::module_ &m)
             "classical-bit-0-first bitstrings to counts.")
         .def_prop_ro(
             "num_qubits", [](const ExtendedFramePlan &self) { return self.plan.Qubits(); }, "Qubits of the compiled register.")
-        .def_prop_ro("num_clbits", [](const ExtendedFramePlan &self) { return self.plan.Width(); }, "Columns of each row: the classical register width.");
+        .def_prop_ro(
+            "num_clbits", [](const ExtendedFramePlan &self) { return self.plan.Width(); }, "Columns of each row: the classical register width.");
     const auto compile_reference = [](const CircuitPtr &circuit, const noise::NoiseModel *model, const SimulatorConfig &config) -> nb::object {
         require_circuit(circuit);
         config.Validate();
@@ -203,7 +204,8 @@ void bind_api(nb::module_ &m)
           "reusable ReferenceFrameSampler. The channels must be Pauli mixtures: Pauli and depolarizing noise, phase damping, "
           "dephasing with T1 infinite, and readout errors qualify; amplitude damping and finite-T1 relaxation do not, except "
           "at excited population 0.5, where relaxation is a Pauli mixture. Channels apply exactly: where noisy_execute "
-          "clamps T2 to T1 (T1 < T2 <= 2 T1, with a ThermalApproximationWarning), compiled samplers keep T2. "
+          "clamps T2 to T1 (T1 < T2 <= 2 T1 on the methods that hold no channels, with a ThermalApproximationWarning), "
+          "compiled samplers keep T2. "
           "With a QCSim ExtendedStabilizer config (no candidate list or sampling reduction), any circuit of its gates "
           "compiles instead into an ExtendedFrameSampler: batched Pauli frames sharing one Clifford basis, with the same "
           "sample/sample_counts interface and an optional noise_realizations. "
@@ -349,17 +351,31 @@ void bind_api(nb::module_ &m)
         "errors. "
         "Does not initialize a simulator.");
 
+    m.def(
+        "_capabilities_json",
+        []() {
+            char *raw = MaestroGetCapabilitiesJson();
+            const std::string text(raw ? raw : "{}");
+            FreeResult(raw);
+            return text;
+        },
+        "The capabilities of the native request API as JSON, with the build's identity (see build_info).");
+
     // --- Probability / Amplitude Access ---
     m.def(
         "get_probabilities",
         [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config) -> nb::list {
-            const auto amplitudes = statevector_core(circuit, config);
+            const auto probabilities = probabilities_core(circuit, config);
             nb::list probs;
-            for (const auto &amp : amplitudes)
-                probs.append(std::norm(amp));
+            for (const double probability : probabilities)
+                probs.append(probability);
             return probs;
         },
-        "circuit"_a, "config"_a = SimulatorConfig{}, "Get the full probability distribution after executing a circuit.");
+        "circuit"_a, "config"_a = SimulatorConfig{},
+        "Get the full probability distribution after executing a circuit.\n\n"
+        "Every simulation type answers, the ones whose state has no statevector too (density matrix, matrix "
+        "product operator, tensor network, Pauli propagator, extended stabilizer): on those, channel "
+        "instructions give the distribution of the mixed state. End measurements are not executed.");
 
     m.def(
         "get_statevector", [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config) { return statevector_core(circuit, config); },

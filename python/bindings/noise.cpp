@@ -221,21 +221,24 @@ void bind_noise(nb::module_ &m)
             "    nm.set_kraus_channel([0, 2], [[[0,1,0,0],[1,0,0,0],"
             "[0,0,0,1],[0,0,1,0]]])")
         .def("has_additional_quantum_channels", &noise::NoiseModel::has_additional_quantum_channels,
-             "Return True if a channel that ONLY a backend applying channels "
-             "exactly (density matrix, MPO or the QCSim Pauli propagator) can "
-             "run is configured: generalized amplitude damping, "
-             "correlated phase flips or custom Kraus maps. Phase damping and "
-             "thermal relaxation are excluded -- both have an exact or "
-             "well-defined stochastic realization on sampled backends.")
+             "Return True if a channel that needs a backend holding channels "
+             "is configured: generalized amplitude damping, correlated phase "
+             "flips or custom Kraus maps. Such a backend applies them exactly "
+             "(density matrix, MPO or the QCSim Pauli propagator) or samples "
+             "them from its state (statevector, matrix product state); the "
+             "other methods reject the model. Phase damping and thermal "
+             "relaxation are excluded -- both have an exact or well-defined "
+             "stochastic realization on every sampled backend.")
         .def("has_thermal_in_sampled_overdephasing_regime", &noise::NoiseModel::has_thermal_in_sampled_overdephasing_regime,
              "Return True if any thermal-relaxation layer has T2 > T1, where "
              "the sampled reset+Z mixture over-dephases. Use density-matrix "
-             "or MPO execution in that regime.")
+             "or MPO execution in that regime, or the statevector or the "
+             "matrix product state, which sample the channel itself.")
         .def("requires_exact_quantum_channels", &noise::NoiseModel::requires_exact_quantum_channels,
-             "Return True if sampled injection cannot faithfully realize this "
-             "model "
-             "(exact-only Kraus maps, or T2 > T1 requiring approximation on "
-             "sampled paths).")
+             "Return True if injection into gates and resets cannot faithfully "
+             "realize this model (Kraus maps, or T2 > T1, which it "
+             "approximates): the model then needs a backend that applies "
+             "channels exactly or samples them from its state.")
         .def("compute_damping_covers_model", &noise::NoiseModel::compute_damping_covers_model,
              "Return True iff compute_damping() captures every layer that "
              "affects Pauli expectations. False for thermal, T1, gate-type "

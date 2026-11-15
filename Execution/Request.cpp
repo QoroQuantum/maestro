@@ -6,6 +6,7 @@
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
 #include "Estimation.h"
+#include "NoisyEstimation.h"
 #include "ReferenceFrameSampler.h"
 #include "SampleRecords.h"
 #include "Sampling.h"
@@ -118,6 +119,122 @@ json::array ExpandInstruction(const json::object &instruction)
     return result;
 }
 
+// Flat row-major matrices of a channel (Kraus operators, unitaries) on one or
+// two qubits; every matrix must have the size of the first.
+Simulators::QuantumChannel::KrausOperators ParseChannelMatrices(const json::value &value, const std::string &what)
+{
+    Simulators::QuantumChannel::KrausOperators matrices;
+    size_t dim = 0;
+    for (const auto &matrix : Array(value))
+    {
+        const auto &entries = Array(matrix);
+        if (matrices.empty())
+            dim = entries.size() == 4 ? 2 : 4;
+        Require(entries.size() == dim * dim, what + " must be flat row-major arrays of 4 or 16 entries, all of one size");
+        Eigen::MatrixXcd op(dim, dim);
+        for (size_t r = 0; r < dim; ++r)
+            for (size_t c = 0; c < dim; ++c)
+                op(r, c) = Complex(entries[r * dim + c]);
+        matrices.push_back(std::move(op));
+    }
+    Require(!matrices.empty(), what + " must not be empty");
+    return matrices;
+}
+
+// One factor of a `channel` instruction, with the positions among the
+// instruction's qubits that it acts on. The kinds and their parameters are
+// those of the QuantumChannel constructors (Python's maestro.QuantumChannel).
+Simulators::QuantumChannel ParseChannelFactor(const json::object &factor, size_t instructionQubits, std::vector<size_t> &positions)
+{
+    using Channel = Simulators::QuantumChannel;
+    const auto kind = String(Field(factor, "kind"));
+    positions.clear();
+    if (const auto *listed = factor.if_contains("qubits"))
+        for (const auto &q : Array(*listed))
+        {
+            Require(UInt(q) < instructionQubits && std::find(positions.begin(), positions.end(), UInt(q)) == positions.end(),
+                    "A channel factor's qubits are positions among the instruction's qubits, each at most once");
+            positions.push_back(UInt(q));
+        }
+    const auto probabilities = [&] {
+        std::vector<double> values;
+        for (const auto &value : Array(Field(factor, "probabilities")))
+            values.push_back(Number(value));
+        return values;
+    };
+    const auto probability = [&](const char *name) {
+        const double p = Number(Field(factor, name));
+        Require(p >= 0 && p <= 1, std::string(name) + " must be in [0, 1]");
+        return p;
+    };
+    const auto build = [&]() -> Channel {
+        if (kind == "pauli")
+        {
+            // Base-4 digit k of an index selects I, X, Y or Z on the factor's qubit k.
+            Keys(factor, {"kind", "qubits", "probabilities"});
+            const auto values = probabilities();
+            Require(values.size() == 4 || values.size() == 16, "A Pauli factor needs 4 or 16 probabilities");
+            return Channel::Pauli(values);
+        }
+        if (kind == "unitary_mixture")
+        {
+            Keys(factor, {"kind", "qubits", "probabilities", "unitaries"});
+            return Channel::UnitaryMixture(probabilities(), ParseChannelMatrices(Field(factor, "unitaries"), "Unitaries"));
+        }
+        if (kind == "kraus")
+        {
+            Keys(factor, {"kind", "qubits", "operators"});
+            return Channel(ParseChannelMatrices(Field(factor, "operators"), "Kraus matrices"));
+        }
+        if (kind == "depolarizing")
+        {
+            Keys(factor, {"kind", "qubits", "probability"});
+            const size_t width = positions.empty() ? instructionQubits : positions.size();
+            return width == 1 ? Channel::Depolarizing(probability("probability")) : Channel::TwoQubitDepolarizing(probability("probability"));
+        }
+        if (kind == "amplitude_damping" || kind == "phase_damping")
+        {
+            Keys(factor, {"kind", "qubits", "gamma"});
+            return kind == "amplitude_damping" ? Channel::AmplitudeDamping(probability("gamma")) : Channel::PhaseDamping(probability("gamma"));
+        }
+        if (kind == "generalized_amplitude_damping")
+        {
+            Keys(factor, {"kind", "qubits", "gamma", "excited_population"});
+            return Channel::GeneralizedAmplitudeDamping(probability("gamma"), probability("excited_population"));
+        }
+        Require(kind == "thermal_relaxation", "Unknown channel factor kind: " + kind);
+        Keys(factor, {"kind", "qubits", "duration", "t1", "t2", "excited_population"});
+        const double duration = Number(Field(factor, "duration"));
+        Require(duration >= 0, "Negative relaxation duration");
+        return Channel::ThermalRelaxation(duration, TimeConstant(factor, "t1"), TimeConstant(factor, "t2"),
+                                          factor.contains("excited_population") ? probability("excited_population") : 0.0);
+    };
+    Channel channel = build();
+    if (positions.empty())
+    {
+        Require(channel.GetNumberOfQubits() == instructionQubits, "A channel factor on fewer qubits than its instruction needs its own qubits");
+        for (size_t q = 0; q < instructionQubits; ++q)
+            positions.push_back(q);
+    }
+    Require(positions.size() == channel.GetNumberOfQubits(), "A channel factor needs one qubit position per qubit it acts on");
+    return channel;
+}
+
+// A `channel` instruction: its factors, applied in order, as one channel that
+// keeps them apart (QuantumChannel::Then).
+Simulators::QuantumChannel ParseChannel(const json::value &factors, size_t instructionQubits)
+{
+    std::optional<Simulators::QuantumChannel> channel;
+    std::vector<size_t> positions;
+    for (const auto &value : Array(factors))
+    {
+        const auto factor = ParseChannelFactor(Object(value), instructionQubits, positions);
+        channel = channel ? channel->Then(factor, positions) : Simulators::QuantumChannel::Placed(factor, positions, instructionQubits);
+    }
+    Require(channel.has_value(), "A channel instruction needs at least one factor");
+    return *channel;
+}
+
 struct ParsedCircuit
 {
     CircuitPtr circuit;
@@ -155,7 +272,7 @@ ParsedCircuit ParseCircuit(const json::object &object)
             auto instruction = Object(value);
             const auto name = String(Field(instruction, "name"));
             Keys(instruction,
-                 {"name", "qubits", "clbits", "params", "conditional_reg", "duration", "operators", "probabilities", "noiseless", "readout_error"});
+                 {"name", "qubits", "clbits", "params", "conditional_reg", "duration", "operators", "probabilities", "factors", "noiseless", "readout_error"});
             Types::qubits_vector targets;
             std::set<uint64_t> unique;
             for (const auto &q : Array(Field(instruction, "qubits")))
@@ -167,7 +284,8 @@ ParsedCircuit ParseCircuit(const json::object &object)
             Require(name != "measure" || !instruction.contains("noiseless"), "noiseless applies only to gates");
             Require(name == "measure" || !instruction.contains("readout_error"), "readout_error applies only to measurement");
             Require(name == "pauli_channel" || !instruction.contains("probabilities"), "probabilities applies only to Pauli channel instructions");
-            if (name == "reset" || name == "delay" || name == "kraus" || name == "pauli_channel")
+            Require(name == "channel" || !instruction.contains("factors"), "factors applies only to channel instructions");
+            if (name == "reset" || name == "delay" || name == "kraus" || name == "pauli_channel" || name == "channel")
             {
                 Require(!instruction.contains("conditional_reg") && !instruction.contains("params") && !instruction.contains("clbits") &&
                             !instruction.contains("noiseless"),
@@ -192,6 +310,13 @@ ParsedCircuit ParseCircuit(const json::object &object)
                         probabilities.push_back(Number(value));
                     Require(probabilities.size() == (size_t{1} << (2 * targets.size())), "A Pauli channel needs 4**len(qubits) probabilities");
                     circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(targets, Simulators::QuantumChannel::Pauli(probabilities)));
+                }
+                else if (name == "channel")
+                {
+                    // The structured form: Python's QuantumChannel constructors composed with then().
+                    Require(targets.size() <= 2, "Channel instructions require one or two qubits");
+                    circuit->AddOperation(
+                        std::make_shared<Circuits::QuantumChannelOperation<>>(targets, ParseChannel(Field(instruction, "factors"), targets.size())));
                 }
                 else
                 {
@@ -313,6 +438,18 @@ CircuitPtr Unmeasured(const CircuitPtr &circuit, bool unitary = false, const std
     return result;
 }
 
+// The circuit noisy_fidelity evolves, without its terminal measurements. As
+// in Python's noisy_fidelity, it may hold channel instructions, which are noise
+// that the ideal circuit does not have, and resets that precede every other
+// operation on their qubit, which prepare it (HasUnitaryIdeal).
+CircuitPtr NoisyFidelityCircuit(const CircuitPtr &circuit)
+{
+    auto result = Unmeasured(circuit);
+    Supported(HasUnitaryIdeal(result), "noisy_fidelity requires a unitary ideal circuit; mid-circuit measurements, resets after other "
+                                       "operations on their qubit and classical control are unsupported");
+    return result;
+}
+
 std::vector<std::string> Observables(const json::object &request, size_t qubits)
 {
     std::vector<std::string> result;
@@ -354,8 +491,7 @@ struct Context
             // width, and single-worker execution then reuses it. Automatic
             // selection prepares its own register, whatever the requested
             // method: a candidate list may not even hold the declared width.
-            const bool exactWidth =
-                exactRegister || (config.fixed_backend && config.simulation_type == Simulators::SimulationType::kMatrixProductOperator);
+            const bool exactWidth = exactRegister || (config.fixed_backend && config.simulation_type == Simulators::SimulationType::kMatrixProductOperator);
             network = ConfigureNetwork(handle, config, exactWidth ? circuit.qubits : 0);
             if (!network || !network->GetSimulator())
                 throw Error("backend_unavailable", "Requested backend could not be created");
@@ -439,6 +575,43 @@ CircuitPtr Inject(const noise::NoiseInjectionPlan &plan, const NoiseConfig &nois
     return noisy;
 }
 
+// The seed of an execution of a circuit that holds all its noise as channels.
+// The noise seed has no injection to drive there, so it joins the execution
+// seed (as RuntimeNoiseExecutionConfig does): either seed alone still changes
+// the errors drawn.
+uint64_t RuntimeNoiseSeed(uint64_t seed, uint32_t noise_seed)
+{
+    return JoinNoiseSeed(Simulators::IState::DeriveSeed(seed, 0), noise_seed);
+}
+
+// The circuit every shot of a count request runs when the backend draws all
+// the noise as it runs (ResolveRuntimeNoise), or null. When null, `first` may
+// hold the first realization, already drawn from `rng`, to run first.
+CircuitPtr SharedRuntimeCircuit(const noise::NoiseInjectionPlan &plan, const NoiseConfig &noise, std::mt19937 &rng, CircuitPtr &first)
+{
+    CircuitPtr shared;
+    if (!noise.enabled || noise.mode == "analytical" || noise.exact || !noise.policy.runtime_channels)
+        return shared;
+    const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    ResolveRuntimeNoise(layer, plan, rng, shared, first);
+    return shared;
+}
+
+// Whether the executions of a request's realizations draw channel branches as they run (RuntimeDraws), from what
+// SharedRuntimeCircuit found. A request without sampled noise has no noise seed to join.
+RuntimeDraws DrawsChannels(const noise::NoiseInjectionPlan &plan, const NoiseConfig &noise, const CircuitPtr &shared, const CircuitPtr &first)
+{
+    const bool sampled = noise.enabled && noise.mode != "analytical" && !noise.exact && noise.policy.runtime_channels;
+    return RuntimeDraws(sampled ? &plan : nullptr, shared, first);
+}
+
+// The seed the executions of the realizations derive theirs from: joined with the noise seed where they draw
+// channels (RuntimeNoiseSeed), whether they share one circuit or not.
+uint64_t ExecutionSeed(uint64_t seed, const NoiseConfig &noise, const RuntimeDraws &draws)
+{
+    return draws ? RuntimeNoiseSeed(seed, noise.seed) : seed;
+}
+
 void ValidateNoisyCircuit(const CircuitPtr &circuit)
 {
     for (const auto &op : circuit->GetOperations())
@@ -465,30 +638,61 @@ bool HasMeasurementReadout(const CircuitPtr &circuit)
     return false;
 }
 
-// Mixed-state backends apply circuit channels exactly unless trajectories were
-// requested. Otherwise each noise realization samples one Pauli per channel,
-// which only Pauli channels and the noise injectors support.
-void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, const NoiseConfig &noise)
+// How a circuit's channel instructions run:
+//  - exactly, on a mixed-state backend or the propagator, unless trajectories
+//    were requested;
+//  - as one branch drawn from the state each time the circuit runs, on a
+//    backend that samples channels (statevector, matrix product state), where
+//    the operation runs the circuit once per shot or realization
+//    (`trajectories`: execute, estimate, noisy_fidelity, checkpoint suffixes)
+//    or once in all, for a query of one state, which then returns the state of
+//    one branch, as Python's get_statevector and get_probabilities do;
+//  - otherwise drawn by noise injection, once per realization: that needs a
+//    noise block with trajectory evaluation and a channel whose branches need
+//    no state (noise::has_sampled_form).
+// A checkpoint_batch prefix runs once, before the saved state, with or without
+// a noise block, as the prefix of Python's PrefixCheckpointedSimulator: a
+// backend that applies channels exactly takes its channel instructions, one
+// that samples them from its state takes those with one branch
+// (SampledPrefixRefusal), and the others hold none.
+void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, const NoiseConfig &noise, bool trajectories, bool prefix = false)
 {
+    if (prefix)
+    {
+        if (const char *refusal = SampledPrefixRefusal(*circuit, config))
+            Supported(false, refusal);
+        Supported(!circuit->HasQuantumChannels() || ExactNoiseApplies(config) || SamplesQuantumChannels(config),
+                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the qcsim pauli_propagator, which apply them "
+                  "exactly, or statevector or matrix_product_state for channels with one branch");
+        return;
+    }
     const bool sampled = noise.enabled && !noise.exact && noise.mode != "analytical";
+    const bool drawn = trajectories && noise.mode != "analytical" && SamplesQuantumChannels(config);
+    // Without a noise block the circuit runs as it is, on the candidate the
+    // network selects: a candidate that cannot run its channels yields to the
+    // next, so one that holds channels is enough, as in Python's execute and
+    // estimate. Noise injection has to know before it selects, and needs all.
+    const bool selected = trajectories && !noise.enabled && SomeBackendHoldsQuantumChannels(config);
     for (const auto &op : circuit->GetOperations())
     {
         // Nested channels execute as part of their circuit; they need the same
         // backend support as top-level ones.
         if (op->GetType() == Circuits::OperationType::kComposite)
         {
-            CheckChannels(std::static_pointer_cast<Circuits::Circuit<>>(op), config, noise);
+            CheckChannels(std::static_pointer_cast<Circuits::Circuit<>>(op), config, noise, trajectories);
             continue;
         }
         if (op->GetType() != Circuits::OperationType::kQuantumChannel)
             continue;
-        if (ExactNoiseApplies(config) && !sampled)
+        if ((ExactNoiseApplies(config) && !sampled) || drawn || selected)
             continue;
         const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
-        Supported(!channel->GetChannel().GetPauliProbabilities().empty(),
-                  "Explicit Kraus instructions require density_matrix, MPO or the qcsim pauli_propagator, with exact evaluation; only Pauli "
-                  "channels can be sampled");
-        Supported(sampled, "Pauli channel instructions on pure-state backends require a noise block with trajectory evaluation; "
+        Supported(noise::has_sampled_form(channel->GetChannel()),
+                  "Channel instructions that need the state (amplitude damping, relaxation with T2 > T1, Kraus maps) require density_matrix, "
+                  "MPO or the qcsim pauli_propagator, with exact evaluation, or statevector or matrix_product_state, which sample them in "
+                  "execute, estimate, noisy_fidelity, checkpoint suffixes and queries of one state; other backends sample only channels whose "
+                  "branches need no state");
+        Supported(sampled, "Channel instructions on this backend require a noise block with trajectory evaluation; "
                            "set noise.realizations to the shot count for independent draws");
     }
 }
@@ -983,7 +1187,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         RefineThermalApproximation(noise, {input.circuit.get()});
         return RunAdjoint(request, operation, config, input, noise, validate, limit);
     }
-    CheckChannels(input.circuit, config, noise);
+    // A query of one state runs the circuit once: where the backend samples
+    // channels from its state, the answer is the state of one branch (as after
+    // a reset on any pure-state backend), which the metadata reports.
+    const bool oneState = operation == "statevector" || operation == "amplitudes" || operation == "probabilities" || operation == "state_probability";
+    CheckChannels(input.circuit, config, noise, operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || oneState,
+                  operation == "checkpoint_batch");
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
     // never reaches the stabilizer; the simulator's own error covers the rest.
@@ -1001,10 +1210,15 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (noise.enabled)
         ValidateNoisyCircuit(input.circuit);
     auto circuit = operation == "execute" || operation == "checkpoint_batch" ? input.circuit
-                   : operation == "estimate"
-                       ? input.circuit->RemoveEndMeasurements()
-                       : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
-    const bool stochastic_estimation = operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config));
+                   : operation == "estimate"                                 ? input.circuit->RemoveEndMeasurements()
+                   : operation == "noisy_fidelity"                           ? NoisyFidelityCircuit(input.circuit)
+                                                   : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity");
+    // Noise injection samples the circuit's Pauli channels into gates before anything runs, and on a backend that
+    // samples no channels its one-qubit mixtures of unitaries too.
+    const bool stochastic_estimation =
+        operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config), true,
+                                                          noise.enabled ? InjectedChannelDraws(InjectsRuntimeChannels(config, noise.exact))
+                                                                        : Circuits::Circuit<double>::ChannelDraws::kAll);
     // Runs again if a checkpoint's suffixes change the automatic evaluation.
     const auto resolveNoisePolicy = [&] {
         const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
@@ -1056,11 +1270,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     if (operation == "checkpoint_batch")
     {
-        // Only suffix measurements are sampled. The prefix's terminal measurements
-        // are removed below, so readout on them would be dropped silently.
+        // The prefix runs once, before the saved state, by the rules of the prefix
+        // of Python's PrefixCheckpointedSimulator. Only suffix measurements are
+        // sampled and returned: the prefix's end measurements are removed
+        // (ExecutedCheckpointPrefix), so a prefix that is a whole program does not
+        // collapse the saved state, and readout on a prefix measurement would be
+        // dropped silently. A measurement that later operations follow or read,
+        // and on a pure state a reset, collapse once, for every suffix shot.
+        // Channel instructions run where the backend takes them (CheckChannels).
         Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
-                                                         "prefix measurements are removed");
-        circuit = Unmeasured(input.circuit, true, "checkpoint_batch prefix");
+                                                         "the outcomes of prefix measurements are not returned");
+        circuit = ExecutedCheckpointPrefix(input.circuit);
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
         Require(!suffixes.empty() && suffixes.size() <= 256, "Invalid suffix count");
@@ -1091,12 +1311,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         }
         if (noise.enabled)
         {
-            // The policy above saw only the unitary prefix. The suffixes hold the
-            // sampled channels and the branches (reported per suffix below).
+            // The policy above saw only the prefix, which runs once. The suffixes
+            // hold the sampled channels and the branches (reported per suffix below).
             noise.policy.stochastic_execution = false;
             if (!noise.exact)
                 for (const auto &suffix : additional)
-                    noise.policy.stochastic_noise = noise.policy.stochastic_noise || suffix.circuit->HasQuantumChannels();
+                    noise.policy.stochastic_noise = noise.policy.stochastic_noise || suffix.circuit->HasDrawnChannels();
             if (noise.policy.stochastic_noise)
                 AddApproximation(noise, "finite_noise_realizations");
         }
@@ -1114,7 +1334,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
     {
-        CheckChannels(other.circuit, config, noise);
+        CheckChannels(other.circuit, config, noise, operation == "checkpoint_batch");
         if (checkStabilizer)
             CheckStabilizerGates(other.circuit, config, false);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
@@ -1441,6 +1661,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         executed.gate_fusion_max_qubits = records.gate_fusion_max_qubits;
         auto metadata = ReductionMetadata(executed, config);
         metadata["sampling_strategy"] = records.sampling_strategy;
+        // Zero where a dedicated sampler drew the rows without realization workers.
+        if (records.realization_workers)
+            metadata["realization_workers"] = records.realization_workers;
         // Report the policy that ran: with the returned seed it replays this result.
         if (records.sampling_strategy == "extended_frame_v1")
             metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
@@ -1559,17 +1782,25 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         size_t bounded = 0;
         EstimationCache cache;
         EstimationResult last;
-        const noise::NoiseInjectionPlan plan(circuit, noise.model);
+        const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
+        // Noise the backend draws as the circuit runs: the realizations share
+        // one circuit and differ by seed, which the noise seed then joins
+        // (SharedRuntimeCircuit, RuntimeNoiseSeed), as in Python's estimate.
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, noise, rng, first_realization);
+        RuntimeDraws draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
         size_t largest = 0, clusters = 0, total_qubits = 0, total_clusters = 0;
         double reduction_time = 0;
         bool reduced = false;
         for (size_t r = 0; r < realizations; ++r)
         {
+            const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
+            draws.See(noisy);
             auto execution_config = config;
-            execution_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
+            execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
             if (noise.enabled && noise.mode != "analytical")
                 execution_config.auto_reduce = false;
-            last = EstimateCircuit(Inject(plan, noise, rng), observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
+            last = EstimateCircuit(noisy, observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
             largest = std::max(largest, last.plan.qubits_after);
             clusters = std::max(clusters, last.plan.groups.size());
             total_qubits += last.plan.total_cluster_qubits;
@@ -1600,6 +1831,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         metadata["stochastic_execution"] = stochastic_estimation;
         metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
         metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
+        // The noise realizations ran one after another, here.
+        if (noise.enabled && noise.mode != "analytical")
+            metadata["realization_workers"] = size_t{1};
         json::object result{{"schema_version", SchemaVersion},
                             {"operation", operation},
                             {"num_qubits", input.qubits},
@@ -1634,16 +1868,24 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (!noise.thermal_approximation_warning.empty())
             std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
         std::mt19937 rng(noise.seed);
-        const auto realizations = std::min(shots, noise.enabled && noise.mode != "analytical" ? noise.realizations : size_t{1});
+        auto realizations = std::min(shots, noise.enabled && noise.mode != "analytical" ? noise.realizations : size_t{1});
         Counts counts;
         SamplingResult last;
-        const noise::NoiseInjectionPlan plan(circuit, noise.model);
+        const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
+        // Noise the backend draws as the circuit runs: one circuit for every shot (SharedRuntimeCircuit).
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, noise, rng, first_realization);
+        const size_t batches = runtime_circuit ? 1 : realizations;
+        RuntimeDraws reduction_draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
         size_t largest = 0, components = 0;
-        for (size_t r = 0; r < realizations; ++r)
+        for (size_t r = 0; r < batches; ++r)
         {
+            const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
+            reduction_draws.See(noisy);
             auto local_config = config;
-            local_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
-            last = SampleCircuit(Inject(plan, noise, rng), local_config, shots / realizations + (r < shots % realizations));
+            local_config.seed = runtime_circuit ? RuntimeNoiseSeed(*config.seed, noise.seed)
+                                                : Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, reduction_draws), r);
+            last = SampleCircuit(noisy, local_config, runtime_circuit ? shots : shots / realizations + (r < shots % realizations));
             largest = std::max(largest, last.largest_component);
             components = std::max(components, last.components);
             for (const auto &[outcome, count] : last.counts)
@@ -1664,6 +1906,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                             {"basis_order", "qubit_0_least_significant"}};
         if (!last.sampling_strategy.empty())
             result["execution_metadata"].as_object()["sampling_strategy"] = last.sampling_strategy;
+        if (runtime_circuit)
+            realizations = shots; // each shot drew its own noise
         if (noise.enabled)
             result["noise"] = NoiseMetadata(noise, realizations);
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
@@ -1688,7 +1932,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (!noise.thermal_approximation_warning.empty())
         std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
     std::mt19937 rng(noise.seed);
-    const noise::NoiseInjectionPlan plan(circuit, noise.model);
+    // On a backend that samples channels from its state, sampled realizations
+    // keep the channels no draw replaces: each execution draws their branches.
+    const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
     bool frame_suffixes = false;
@@ -1701,10 +1947,25 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (operation == "execute")
     {
         Counts counts;
+        // Noise the backend draws as the circuit runs: one circuit for every
+        // shot, and one execution of the network, whose shots are the
+        // realizations (SharedRuntimeCircuit).
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, noise, rng, first_realization);
+        if (runtime_circuit)
+        {
+            context.network->Configure("seed", std::to_string(RuntimeNoiseSeed(*config.seed, noise.seed)).c_str());
+            for (const auto &entry : context.network->RepeatedExecuteOnHost(runtime_circuit, 0, shots))
+                counts[Bits(entry.first, input.clbits)] += entry.second;
+            realizations = shots;
+        }
         // Realization seeds and shot counts are keyed by logical realization,
-        // including when several shots share the same injected circuit.
+        // including when several shots share the same injected circuit. Where the
+        // realizations keep channels that are drawn without sharing a circuit (a
+        // layer drawn for each), the noise seed joins those seeds too (ExecutionSeed).
+        RuntimeDraws draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
         size_t workers = 1;
-        if (realizations > 1 && RunsOnlyQCSim(config))
+        if (!runtime_circuit && realizations > 1 && RunsOnlyQCSim(config))
         {
             // Each worker's network maps the circuit to its own register (at most
             // the declared qubits; the network's ancilla is never allocated),
@@ -1717,12 +1978,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                                                  NetworkRealizationCopies(config, realizations != shots));
         }
         realization_workers = workers;
-        if (workers <= 1)
+        if (runtime_circuit)
+        {
+            // Already run, above.
+        }
+        else if (workers <= 1)
             for (size_t r = 0; r < realizations; ++r)
             {
-                auto noisy = Inject(plan, noise, rng);
+                auto noisy = r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
+                draws.See(noisy);
                 const auto count = shots / realizations + (r < shots % realizations ? 1 : 0);
-                context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
+                context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r)).c_str());
                 const auto raw = context.network->RepeatedExecuteOnHost(noisy, 0, count);
                 for (const auto &entry : raw)
                     counts[Bits(entry.first, input.clbits)] += entry.second;
@@ -1747,10 +2013,15 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             std::vector<size_t> latest(workers, 0);
             std::vector<char> ran(workers, 0);
             Utils::RunRealizations(
-                realizations, workers, [&](size_t) { return Inject(plan, noise, rng); },
+                realizations, workers,
+                [&](size_t r) {
+                    auto noisy = r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
+                    draws.See(noisy);
+                    return noisy;
+                },
                 [&](size_t worker, size_t r, CircuitPtr noisy) {
                     auto &network = contexts[worker]->network;
-                    network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
+                    network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r)).c_str());
                     const auto count = shots / realizations + (r < shots % realizations ? 1 : 0);
                     for (const auto &entry : network->RepeatedExecuteOnHost(noisy, 0, count))
                         local[worker][Bits(entry.first, input.clbits)] += entry.second;
@@ -1779,10 +2050,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     else if (operation == "estimate")
     {
         std::vector<double> sums(observables.size(), 0), squares(observables.size(), 0);
+        RuntimeDraws draws = DrawsChannels(plan, noise, nullptr, nullptr);
         for (size_t r = 0; r < realizations; ++r)
         {
             const auto noisy = Inject(plan, noise, rng);
-            context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
+            draws.See(noisy);
+            context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r)).c_str());
             const auto values = context.network->ExecuteOnHostExpectations(noisy, 0, observables);
             Require(values.size() == sums.size(), "Backend returned an invalid expectation vector");
             for (size_t i = 0; i < values.size(); ++i)
@@ -1915,11 +2188,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         else
         {
             json::array values;
-            // Tensor-network backends intentionally do not provide efficient bulk
-            // probabilities. An explicitly requested full output still uses the
-            // bounded per-index path, just as selected basis states do.
-            const bool scalarProbabilities = !amplitudes && simulator->GetSimulationType() == Simulators::SimulationType::kTensorNetwork;
-            if (!request.contains("basis_states") && !scalarProbabilities)
+            if (!request.contains("basis_states"))
             {
                 if (amplitudes)
                 {
@@ -1928,7 +2197,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 }
                 else
                 {
-                    for (double value : simulator->AllProbabilities())
+                    // The whole distribution, read as Python's get_probabilities
+                    // reads it: a tensor network contracts once per basis state.
+                    for (double value : Simulators::BasisProbabilities(*simulator))
                         values.emplace_back(value);
                 }
                 Require(values.size() == basis.size(), "Backend returned an invalid full state output");
@@ -1975,7 +2246,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (noise.enabled && noise.prefix)
         {
             std::mt19937 prefixRng(noise.seed ^ 0x70726566u);
-            prefixCircuit = Inject(noise::NoiseInjectionPlan(circuit, noise.model), noise, prefixRng);
+            prefixCircuit = Inject(noise::NoiseInjectionPlan(circuit, noise.model, false, noise.policy.chain_order), noise, prefixRng);
         }
         Prepare(context, prefixCircuit, input.clbits);
         simulator->SaveState();
@@ -1994,13 +2265,22 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         for (const auto &suffix : additional)
         {
             // A suffix continues the saved prefix, so even a leading pure-state
-            // reset may branch. Its shots sample those branches exactly.
-            const bool stochastic_suffix = HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false);
+            // reset may branch. Its shots sample those branches exactly. Without
+            // noise nothing is injected: the suffix runs as it is, and the
+            // backend draws every channel instruction it samples, a Pauli one
+            // too, in each shot.
+            const bool stochastic_suffix = HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false,
+                                                                  noise.enabled ? InjectedChannelDraws(simulator->SamplesQuantumChannels())
+                                                                                : Circuits::Circuit<double>::ChannelDraws::kAll);
             noise.policy.stochastic_execution = noise.policy.stochastic_execution || stochastic_suffix;
-            const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model);
+            const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
             Counts counts;
             size_t terminal_batches = 0, trajectory_batches = 0;
             const size_t samples = std::min(realizations, shots);
+            // A suffix whose noise the backend draws as it runs is one circuit for every shot (SharedRuntimeCircuit).
+            CircuitPtr first_sample;
+            const CircuitPtr runtime_suffix = frame_prefix ? CircuitPtr() : SharedRuntimeCircuit(suffixPlan, noise, rng, first_sample);
+            RuntimeDraws draws = DrawsChannels(suffixPlan, noise, runtime_suffix, first_sample);
             // Extended-stabilizer frames evolve a gate-only prefix once and the
             // noisy suffix for a batch of shots at a time; the realization
             // schedule is the same.
@@ -2032,9 +2312,20 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 counts[Bits(state.GetAllBits(), input.clbits)] += count;
             };
             const bool legacy = EffectiveCountsPolicy(config) == "legacy";
+            // The first sample, drawn here as the loop below would draw it, tells whether the executions of the
+            // suffix draw channels. The noise seed has no injection to drive for those and joins the seeds of the
+            // suffix's executions, as in execute, whether the samples share one circuit or not: the streams of its
+            // samples and of its head copies, and the simulator's own, which the shots that run one by one draw from.
+            if (!runtime_suffix && !first_sample)
+                first_sample = Inject(suffixPlan, noise, rng);
+            draws.See(runtime_suffix ? runtime_suffix : first_sample);
+            const uint64_t suffix_seed = ExecutionSeed(*config.seed, noise, draws);
+            const uint64_t suffix_head_streams = draws ? Simulators::IState::DeriveSeed(suffix_seed, 0x6865616473ULL) : head_streams;
+            if (draws)
+                simulator->SetSeed(Simulators::IState::DeriveSeed(suffix_seed, outputs.size()));
             for (size_t r = 0; r < samples; ++r)
             {
-                const auto noisy = Inject(suffixPlan, noise, rng);
+                const auto noisy = runtime_suffix ? runtime_suffix : r == 0 ? first_sample : Inject(suffixPlan, noise, rng);
                 const size_t repetitions = shots / samples + (r < shots % samples ? 1 : 0);
                 simulator->RestoreState();
                 simulator->SetGatesCounter(0);
@@ -2042,7 +2333,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 Circuits::OperationState terminal_state(input.clbits);
                 if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, legacy) &&
                     SamplePreparedTerminal(
-                        *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
+                        *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(suffix_seed, r),
                         [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
                 {
                     ++terminal_batches;
@@ -2051,7 +2342,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 ++trajectory_batches;
                 Circuits::OperationState head_state(input.clbits);
                 if (reuse_heads && SampleSharedHead(
-                                       *noisy, simulator, repetitions, head_state, Simulators::IState::DeriveSeed(head_streams, head_stream++),
+                                       *noisy, simulator, repetitions, head_state, Simulators::IState::DeriveSeed(suffix_head_streams, head_stream++),
                                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
                     continue;
                 for (size_t shot = 0; shot < repetitions; ++shot)
@@ -2087,13 +2378,34 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // under exact evolution, and lower where the backend truncated.
         double sum = 0, squares = 0;
         std::complex<double> overlap;
+        // The unitary to invert. For noisy_fidelity it leaves out the circuit's
+        // channels and turns a leading reset into the preparation it is
+        // (PreparedUnitary), as Python's noisy_fidelity does.
+        const CircuitPtr ideal = operation == "noisy_fidelity" ? PreparedUnitary(WithoutCircuitChannels(circuit)) : circuit;
+        // Noise the backend draws as each realization runs. Where all of it is, the realizations share one
+        // circuit (SharedRuntimeCircuit); wherever a realization keeps channels that are drawn, shared or not,
+        // the noise seed has no injection to drive for them and joins the seed the realizations draw from
+        // (RuntimeNoiseSeed), as in execute and estimate. The first realization tells, before it runs.
+        CircuitPtr first_realization;
+        const CircuitPtr runtime_circuit = operation == "inner_product" ? CircuitPtr() : SharedRuntimeCircuit(plan, noise, rng, first_realization);
+        RuntimeDraws draws =
+            operation == "inner_product" ? RuntimeDraws(nullptr, nullptr, nullptr) : DrawsChannels(plan, noise, runtime_circuit, first_realization);
         for (size_t r = 0; r < realizations; ++r)
         {
-            const auto second = operation == "inner_product" ? additional[0].circuit : Inject(plan, noise, rng);
+            const auto second = operation == "inner_product"  ? additional[0].circuit
+                                : runtime_circuit             ? runtime_circuit
+                                : r == 0 && first_realization ? first_realization
+                                                              : Inject(plan, noise, rng);
+            if (r == 0 && operation != "inner_product")
+            {
+                draws.See(second);
+                if (draws)
+                    simulator->SetSeed(RuntimeNoiseSeed(*config.seed, noise.seed));
+            }
             auto combined = std::make_shared<Circuit>();
             for (const auto &op : second->GetOperations())
                 combined->AddOperation(op->Clone());
-            for (auto it = circuit->GetOperations().rbegin(); it != circuit->GetOperations().rend(); ++it)
+            for (auto it = ideal->GetOperations().rbegin(); it != ideal->GetOperations().rend(); ++it)
                 if (auto adjoint = adjoint_gate(*it))
                     combined->AddOperation(adjoint);
             Prepare(context, combined, input.clbits);
@@ -2135,12 +2447,19 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
     if (operation == "execute")
         result["execution_metadata"].as_object()["realization_workers"] = realization_workers;
+    // The realizations of an estimate and of a noisy fidelity run here one after another, on the request's simulator.
+    else if (operation == "noisy_fidelity" || (operation == "estimate" && noise.enabled && noise.mode != "analytical"))
+        result["execution_metadata"].as_object()["realization_workers"] = size_t{1};
     // Mixed checkpoint suffixes can use frames and multinomial fallback in
     // the same call. Preserve the requested dispatch policy for replay rather
     // than replacing it with the policy of only the frame-compatible suffixes.
     if (frame_suffixes)
         if (auto *options = result["execution_metadata"].as_object().if_contains("configured_options"); options && options->is_object())
             options->as_object()["counts_policy"] = requested_counts_policy;
+    // One execution of a circuit that branches: the state returned is that of
+    // the branch this execution drew.
+    if (oneState && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config)))
+        result["execution_metadata"].as_object()["stochastic_execution"] = true;
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.

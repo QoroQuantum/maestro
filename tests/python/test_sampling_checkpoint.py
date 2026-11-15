@@ -120,10 +120,13 @@ def test_rejected_noisy_suffix_leaves_a_seeded_checkpoint_unchanged(listed):
     clean.h(0)
     clean.measure_all()
     clamped = maestro.NoiseModel()
-    clamped.set_thermal_relaxation(0, 1.0, 1.0, 2.0)  # T2 > T1: sampled relaxation clamps it and warns
+    # T2 > T1: a method that neither holds nor samples channels clamps it and
+    # warns. (The statevector and the matrix product state sample the channel
+    # itself, and say nothing.)
+    clamped.set_thermal_relaxation(0, 1.0, 1.0, 2.0)
     B, S = maestro.SimulatorType, maestro.SimulationType
-    backend = (dict(optimization_candidates=[(B.QCSim, S.Statevector), (B.QCSim, S.PauliPropagator)]) if listed
-               else dict(simulation_type=S.Statevector, fixed_backend=True))
+    backend = (dict(optimization_candidates=[(B.QCSim, S.Stabilizer), (B.QCSim, S.PauliPropagator)]) if listed
+               else dict(simulation_type=S.Stabilizer, fixed_backend=True))
 
     def checkpoint():
         return maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 1, maestro.SimulatorConfig(seed=7, **backend))
@@ -141,8 +144,14 @@ def test_rejected_noisy_suffix_leaves_a_seeded_checkpoint_unchanged(listed):
     warned = checkpoint()
     with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
         noisy = warned.execute_suffix(clean, shots=200, noise_model=clamped)
-    assert noisy["method"] == S.Statevector and noisy["noise_evaluation"] == "trajectories"
+    assert noisy["method"] == S.Stabilizer and noisy["noise_evaluation"] == "trajectories"
     assert warned.execute_suffix(clean, shots=200)["counts"] == second
+    # The statevector samples the relaxation channel: no warning to raise.
+    sampled = maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 1, maestro.SimulatorConfig(seed=7, simulation_type=S.Statevector, fixed_backend=True))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        noisy = sampled.execute_suffix(clean, shots=200, noise_model=clamped)
+    assert noisy["method"] == S.Statevector and noisy["noise_evaluation"] == "trajectories"
 
 
 def test_pauli_propagator_prefix_noise_is_exact_or_refused():

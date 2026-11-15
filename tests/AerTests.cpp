@@ -121,8 +121,106 @@ BOOST_AUTO_TEST_CASE(density_matrix_kraus_target_order_matches_maestro)
     auto statevector = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kStatevector);
     statevector->AllocateQubits(1);
     statevector->Initialize();
+    // The statevector holds no ensemble: it takes one sampled branch of a channel.
     BOOST_TEST(!statevector->SupportsQuantumChannels());
-    BOOST_CHECK_THROW(statevector->ApplyBitFlipNoise(0, 0.1), std::runtime_error);
+    BOOST_TEST(statevector->SamplesQuantumChannels());
+    statevector->ApplyBitFlipNoise(0, 1.0);
+    BOOST_CHECK_CLOSE(statevector->Probability(1), 1.0, 1e-8);
+}
+
+// Aer's statevector and matrix product state take a channel as one sampled
+// Kraus branch; averaged over trajectories they reproduce Aer's density matrix.
+BOOST_AUTO_TEST_CASE(statevector_and_matrix_product_state_sample_channels_as_trajectories)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Method = Simulators::SimulationType;
+    const Channel gateError =
+        Channel::TwoQubitDepolarizing(0.05).Then(Channel::ThermalRelaxation(1.0, 4.0, 6.0), {0}).Then(Channel::ThermalRelaxation(1.0, 3.0, 2.0, 0.2), {1});
+    const Channel damping = Channel::AmplitudeDamping(0.3);
+    const Channel generalized = Channel::GeneralizedAmplitudeDamping(0.25, 0.3);
+    const Channel phase = Channel::PhaseDamping(0.2);
+    Eigen::MatrixXcd hadamard(2, 2);
+    hadamard << 1.0, 1.0, 1.0, -1.0;
+    hadamard /= std::sqrt(2.0);
+    const Channel mixture = Channel::UnitaryMixture({0.8, 0.2}, {Eigen::MatrixXcd::Identity(2, 2), hadamard});
+
+    const auto evolve = [&](Simulators::ISimulator &sim) {
+        sim.ApplyH(0);
+        sim.ApplyCX(0, 1);
+        sim.ApplyRy(1, 0.7);
+        sim.ApplyCX(1, 2);
+        sim.ApplyRx(2, 1.3);
+        sim.ApplyQuantumChannel({1, 0}, gateError);
+        sim.ApplyRy(0, 0.4);
+        sim.ApplyQuantumChannel({2}, damping);
+        sim.ApplyCX(2, 0);
+        sim.ApplyQuantumChannel({0}, generalized);
+        sim.ApplyQuantumChannel({1}, phase);
+        sim.ApplyQuantumChannel({2}, mixture);
+        sim.ApplyQuantumChannel({2, 1}, gateError);
+    };
+    const auto make = [](Method method) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+        sim->AllocateQubits(3);
+        sim->Initialize();
+        return sim;
+    };
+    const std::vector<std::string> observables{"ZII", "IZI", "IIZ", "XXI", "IXX", "YIY", "ZZZ", "XYZ"};
+
+    auto exact = make(Method::kDensityMatrix);
+    BOOST_TEST(!exact->SamplesQuantumChannels());
+    evolve(*exact);
+
+    for (const Method method : {Method::kStatevector, Method::kMatrixProductState})
+    {
+        constexpr size_t trajectories = 20000;
+        auto sim = make(method);
+        BOOST_TEST(sim->SamplesQuantumChannels());
+        BOOST_TEST(!sim->SupportsQuantumChannels());
+        BOOST_TEST(Simulators::SamplesQuantumChannels(Simulators::SimulatorType::kQiskitAer, method));
+
+        sim->SetSeed(2027);
+        std::vector<double> sums(observables.size(), 0.0), squares(observables.size(), 0.0);
+        for (size_t trajectory = 0; trajectory < trajectories; ++trajectory)
+        {
+            sim->Reset();
+            evolve(*sim);
+            for (size_t i = 0; i < observables.size(); ++i)
+            {
+                const double value = sim->ExpectationValue(observables[i]);
+                sums[i] += value;
+                squares[i] += value * value;
+            }
+        }
+        for (size_t i = 0; i < observables.size(); ++i)
+        {
+            const double mean = sums[i] / trajectories;
+            const double error = std::sqrt(std::max(squares[i] / trajectories - mean * mean, 0.0) / trajectories);
+            BOOST_TEST(std::abs(mean - exact->ExpectationValue(observables[i])) < 5.0 * error + 1e-9,
+                       observables[i] << " on Aer method " << static_cast<int>(method) << ": trajectories give " << mean << " +- " << error
+                                      << ", the density matrix " << exact->ExpectationValue(observables[i]));
+        }
+
+        // The same seed replays the same trajectory.
+        const auto replay = [&] {
+            sim->SetSeed(77);
+            sim->Reset();
+            evolve(*sim);
+            return sim->ExpectationValue(observables[3]);
+        };
+        const double first = replay();
+        BOOST_CHECK_SMALL(replay() - first, 1e-12);
+
+        BOOST_CHECK_THROW(sim->ApplyQuantumChannel({0, 1}, damping), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyQuantumChannel({0, 0}, gateError), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyQuantumChannel({3}, damping), std::invalid_argument);
+    }
+
+    // Aer's stabilizer has no Kraus instruction: it neither holds nor samples channels.
+    auto stabilizer = make(Method::kStabilizer);
+    BOOST_TEST(!stabilizer->SamplesQuantumChannels());
+    BOOST_TEST(!Simulators::SamplesQuantumChannels(Simulators::SimulatorType::kQiskitAer, Method::kStabilizer));
+    BOOST_CHECK_THROW(stabilizer->ApplyBitFlipNoise(0, 0.1), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)

@@ -342,9 +342,15 @@ def test_checkpoint_suffixes_run_on_frames():
     assert seeded["sampling_strategy"] == "extended_frame_v1"
     replay = maestro.PrefixCheckpointedSimulator(prefix, 2, _config(seed=3)).execute_suffix(suffix, shots=100, noise_model=_model())
     assert seeded["counts"] == replay["counts"]
-    # A prefix that measures collapses once for every suffix shot: no frames.
+    # The end measurements of a prefix are removed, since only suffixes are
+    # sampled: such a prefix is still gates only and runs on frames.
     measured = QuantumCircuit()
     measured.h(0)
     measured.measure([(0, 0)])
+    ended = maestro.PrefixCheckpointedSimulator(measured, 2, _config()).execute_suffix(suffix, shots=100, noise_model=_model())
+    assert ended["sampling_strategy"] == "extended_frame_v1"
+    # A measurement that a later gate of the prefix follows runs, and
+    # collapses once for every suffix shot: no frames.
+    measured.h(0)
     collapsed = maestro.PrefixCheckpointedSimulator(measured, 2, _config()).execute_suffix(suffix, shots=100, noise_model=_model())
     assert collapsed["sampling_strategy"] != "extended_frame_v1"

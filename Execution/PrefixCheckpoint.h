@@ -17,6 +17,10 @@ class PrefixCheckpoint
     // qubits, or of the prefix's width when num_qubits <= 0, and saves the
     // state. The register is fixed: circuit optimization, initial MPS mapping
     // and swap optimization are off, so suffix qubits keep their indices.
+    // The prefix runs without its end measurements (ExecutedCheckpointPrefix):
+    // only suffixes are sampled, and those measurements would collapse the
+    // saved state once for every suffix shot. A measurement that later
+    // operations of the prefix follow or read runs, and collapses once.
     // prefix_noise, when it has noise, is injected into the prefix as exact
     // channels: it evolves only once, so it must be deterministic there (a
     // density-matrix/MPO backend, or the QCSim Pauli propagator for noise it

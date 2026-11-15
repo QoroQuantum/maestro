@@ -101,6 +101,15 @@ void TestFrameCountRequests()
     Check(noisyAutomatic.at("noise").at("realizations").to_number<size_t>() == 137, "Noisy frame metadata lost independent realizations");
     const auto noisyPolicy = noisyAutomatic.at("execution_metadata").at("configured_options").at("counts_policy");
     Check(noisyPolicy == "frame_v1", "Noisy native metadata did not record the resolved count policy");
+    // Frames draw every shot themselves: no realization worker runs, so none is reported, for counts or for rows.
+    Check(!noisyAutomatic.at("execution_metadata").as_object().contains("realization_workers"),
+          "Counts drawn by frames reported realization workers that never ran");
+    auto noisyRows = noisy;
+    noisyRows["execution"].as_object()["return_samples"] = true;
+    noisyRows["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}, {"max_simulators", 4}};
+    const auto rowFrames = Call(noisyRows).at("execution_metadata").as_object();
+    Check(rowFrames.at("sampling_strategy") == "reference_frame_v1", "Unseeded noisy native rows did not select frames");
+    Check(!rowFrames.contains("realization_workers"), "Rows drawn by frames reported realization workers that never ran");
     uint64_t total = 0;
     for (const auto &entry : noisyAutomatic.at("counts").as_object())
     {
@@ -284,6 +293,33 @@ void TestSeededSharedRealizationWorkers()
           "Dynamic MPS realization workers omitted their clone-owned saved state");
     Check(tensorLimited.at("shots").to_number<size_t>() == 12 && Call(tensor).at("counts") == tensorLimited.at("counts"),
           "Memory-limited MPS shared realizations lost shots or reproducibility");
+
+    // An estimate and a noisy fidelity run their realizations one after another
+    // on the request's simulator, and report that one worker as execute reports its own.
+    for (const char *operation : {"estimate", "noisy_fidelity"})
+    {
+        auto request = Request(operation, 2, "h q[0]; cx q[0],q[1];");
+        request["execution"].as_object()["seed"] = 3;
+        request["noise"] = bounded.at("noise");
+        if (std::string(operation) == "estimate")
+            request["observables"] = j::array{"ZZ"};
+        const auto metadata = Call(request).at("execution_metadata").as_object();
+        Check(metadata.contains("realization_workers") && metadata.at("realization_workers").to_number<size_t>() == 1,
+              "A noisy estimate or fidelity did not report the worker its realizations ran on");
+    }
+
+    // Shot rows whose realizations ran on realization workers report them too, within max_simulators.
+    auto rows = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q->c;");
+    rows["execution"].as_object()["shots"] = 12;
+    rows["execution"].as_object()["seed"] = 3;
+    rows["execution"].as_object()["return_samples"] = true;
+    rows["noise"] = bounded.at("noise");
+    rows["simulator"].as_object()["selection"] = "fixed";
+    rows["simulator"].as_object()["options"] = j::object{{"max_simulators", 2}};
+    const auto rowMetadata = Call(rows).at("execution_metadata").as_object();
+    Check(rowMetadata.contains("realization_workers") && rowMetadata.at("realization_workers").to_number<size_t>() >= 1 &&
+              rowMetadata.at("realization_workers").to_number<size_t>() <= 2,
+          "Noisy shot rows did not report the workers their realizations ran on");
 }
 
 double Real(const j::value &value)
@@ -703,6 +739,7 @@ try
     FreeResult(capabilities);
     Check(caps.at("build").at("version").is_string(), "Missing build version");
     Check(caps.at("build").at("source_revision").is_string(), "Missing build revision");
+    Check(caps.at("build").at("qcsim_revision").is_string() && !caps.at("build").at("qcsim_revision").as_string().empty(), "Missing QCSim revision");
     Check(caps.at("capability_scope") == "validation", "Capabilities must not promise device readiness");
     bool operatorQuery = false, precision = false, workers = false;
     for (const auto &diagnostic : caps.at("diagnostics").as_array())
@@ -1042,15 +1079,82 @@ try
             Check(Call(request, false, validate).at("error").at("code") == "invalid_input", "Instruction errors must be invalid_input");
     }
 
-    for (const auto &operation : j::array{j::object{{"name", "reset"}, {"qubits", j::array{0}}},
-                                          j::object{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}}})
+    // A checkpoint_batch prefix runs once and holds what the prefix of Python's PrefixCheckpointedSimulator holds:
+    // gates, resets and the channel instructions its backend takes there. A density matrix applies a channel
+    // exactly. A statevector or a matrix product state takes one with a single branch, which is a gate (a Kraus set
+    // of one operator, a damping of zero), and refuses one whose branch it would draw once for every suffix shot.
+    const auto prefixed = [&](const char *method, j::array source) {
+        auto checkpoint = Request("checkpoint_batch", 1, "", method);
+        checkpoint["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1}, {"num_clbits", 1}, {"source", std::move(source)}};
+        checkpoint["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit")};
+        checkpoint["execution"].as_object()["shots"] = 2000;
+        return checkpoint;
+    };
+    const j::object flip{{"name", "x"}, {"qubits", j::array{0}}}, reset{{"name", "reset"}, {"qubits", j::array{0}}};
+    const j::object turned{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}};
+    const auto damping = [](double gamma) {
+        return j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{j::object{{"kind", "amplitude_damping"}, {"gamma", gamma}}}}};
+    };
+    const auto ones = [&](const j::object &checkpoint) {
+        // A copy: the response it is read from does not outlive the statement.
+        const j::object counts = Call(checkpoint).at("results").at(0).at("counts").as_object();
+        return counts.contains("1") ? counts.at("1").to_number<double>() / 2000 : 0.0;
+    };
+    for (const char *method : {"density_matrix", "statevector", "matrix_product_state"})
     {
-        request = Request("checkpoint_batch", 1, "", "density_matrix");
-        request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1}, {"source", j::array{operation}}};
-        request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit")};
-        const auto error = Call(request, false, true).at("error").as_object();
-        Check(error.at("code") == "unsupported_capability" && error.at("message") == "checkpoint_batch prefix requires a unitary circuit",
-              "Checkpoint prefix error lost operation context");
+        Check(ones(prefixed(method, {flip, reset})) == 0, "A reset in a checkpoint prefix did not return the qubit to |0>");
+        Check(ones(prefixed(method, {turned})) == 1, "A Kraus instruction of one operator in a checkpoint prefix did not act as its gate");
+        Check(ones(prefixed(method, {flip, damping(0.0)})) == 1, "A damping of zero in a checkpoint prefix changed the state");
+    }
+    Check(std::abs(ones(prefixed("density_matrix", {flip, damping(0.3)})) - 0.7) < 0.04, "A density matrix did not apply the damping of a prefix exactly");
+    for (const char *method : {"statevector", "matrix_product_state"})
+        for (bool validate : {false, true})
+        {
+            const auto error = Call(prefixed(method, {flip, damping(0.3)}), false, validate).at("error").as_object();
+            Check(error.at("code") == "unsupported_capability" &&
+                      std::string(error.at("message").as_string().c_str()).rfind("A checkpoint prefix runs once", 0) == 0,
+                  "A checkpoint prefix drew one branch of a channel for every suffix shot");
+        }
+    Check(Call(prefixed("tensor_network", {flip, damping(0.0)}), false, true).at("error").at("code") == "unsupported_capability",
+          "A checkpoint prefix held a channel on a backend that holds none");
+    // Its end measurements are removed, since only suffixes are sampled: a prefix that is a whole program, with
+    // its measurements at the end as OpenQASM has them, does not collapse the saved state, and every suffix shot
+    // samples it.
+    for (const char *method : {"statevector", "density_matrix"})
+    {
+        request = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1]; measure q->c;", method);
+        request["suffixes"] = j::array{Request("execute", 2, "measure q->c;", method).at("circuit")};
+        request["execution"].as_object()["shots"] = 2000;
+        const j::object whole = Call(request).at("results").at(0).at("counts").as_object();
+        Check(whole.size() == 2 && whole.contains("00") && whole.contains("11") && std::abs(whole.at("11").to_number<double>() / 2000 - 0.5) < 0.05,
+              "The end measurements of a checkpoint prefix collapsed the saved state");
+    }
+    // A measurement that a later operation of the prefix reads or follows runs, once: every suffix shot continues
+    // from the one outcome, and the operation that depends on it has it. The outcome is not returned.
+    for (const char *method : {"statevector", "density_matrix"})
+    {
+        request = Request("checkpoint_batch", 2, "h q[0]; measure q[0]->c[0]; if(c==1) x q[1];", method);
+        request["suffixes"] = j::array{Request("execute", 2, "measure q->c;", method).at("circuit")};
+        request["execution"].as_object()["shots"] = 500;
+        const j::object collapsed = Call(request).at("results").at(0).at("counts").as_object();
+        Check(collapsed.size() == 1 && (collapsed.contains("00") || collapsed.contains("11")) && collapsed.begin()->value().to_number<size_t>() == 500,
+              "A measurement in a checkpoint prefix did not collapse once for every suffix shot");
+    }
+    // A noise block still acts on the suffixes of a prefix that ends with a measurement: the measured qubit reads 1
+    // in every shot, and the other, flipped in the suffix, is flipped back in a quarter of them.
+    request = Request("checkpoint_batch", 2, "x q[0]; measure q[0]->c[0];");
+    request["suffixes"] = j::array{Request("execute", 2, "x q[1]; measure q->c;").at("circuit")};
+    request["execution"].as_object()["shots"] = 2000;
+    request["noise"] = j::object{{"mode", "pauli"},
+                                 {"evaluation", "trajectories"},
+                                 {"realizations", 2000},
+                                 {"seed", 7},
+                                 {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{1}}, {"probability", 0.25}}}}};
+    request["simulator"].as_object()["selection"] = "fixed";
+    {
+        const j::object noisy = Call(request).at("results").at(0).at("counts").as_object();
+        const double kept = noisy.contains("11") ? noisy.at("11").to_number<double>() / 2000 : 0.0;
+        Check(noisy.size() == 2 && noisy.contains("10") && std::abs(kept - 0.75) < 0.04, "Suffix noise after a measuring checkpoint prefix is wrong");
     }
 
     for (const auto *field : {"other_circuit", "step_circuit", "suffixes", "steps", "requests", "diagnostics", "maintenance", "keep_qubits", "basis_states",

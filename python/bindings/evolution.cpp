@@ -21,11 +21,12 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     if (measure_at_steps.empty())
         throw nb::value_error("measure_at_steps must not be empty.");
 
-    // Determine qubit count from circuits and observables
-    int num_qubits = std::max(1, static_cast<int>(init_circuit->GetMaxQubitIndex()) + 1);
-    num_qubits = std::max(num_qubits, static_cast<int>(trotter_step->GetMaxQubitIndex()) + 1);
+    // Determine qubit count from circuits and observables. The simulator runs
+    // the circuits index by index, so the register holds every one of them.
+    size_t width = std::max(CircuitWidth(*init_circuit), CircuitWidth(*trotter_step));
     for (const auto &p : paulis)
-        num_qubits = std::max(num_qubits, (int)p.length());
+        width = std::max(width, p.length());
+    const int num_qubits = RegisterQubits(width);
 
     // Evolution drives the simulator itself: resolve the one backend it runs
     // and allocate exactly its register, without the network's entanglement
@@ -52,7 +53,8 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     nb::list bond_dim_evolution;
     nb::list times_per_step;
 
-    auto network = probed ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(sim.handle) : ConfigureNetwork(sim.handle, resolved, register_qubits);
+    auto network =
+        probed ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(sim.handle) : ConfigureNetwork(sim.handle, resolved, register_qubits);
     if (!network)
         throw std::runtime_error("incremental_evolve: failed to configure network.");
     auto simulator = network->GetSimulator();

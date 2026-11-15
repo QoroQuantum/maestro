@@ -23,7 +23,6 @@
 
 namespace MaestroExecution
 {
-using RecordCircuitPtr = std::shared_ptr<Circuits::Circuit<double>>;
 
 // Columns of a circuit's shot records: every classical bit it writes and, as
 // in 0.3.13's count keys, at least one column per qubit.
@@ -79,7 +78,17 @@ inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations
     workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(state_bytes), RealizationBudgetMB(config), 0, copies_per_worker);
     // A default ceiling only: an explicit max_simulators is honored, within
     // the CPU budget RealizationWorkerCount already applies.
-    return requested ? workers : std::min(workers, size_t{16});
+    if (requested)
+        return workers;
+    // Workers run their realizations single-threaded. From a million
+    // amplitudes on, the statevectors of sixteen workers no longer fit the
+    // caches together and they wait on memory instead: one worker, whose gates
+    // then use every thread on one state that does fit, is faster (20 qubits,
+    // 200 trajectories: 16 s against 27 s; 19 qubits is the break-even).
+    if (!HasCandidateList(config) && config.simulation_type == Simulators::SimulationType::kStatevector &&
+        state_bytes >= static_cast<long double>(size_t{16} << 20))
+        return 1;
+    return std::min(workers, size_t{16});
 }
 
 // Dense backends allocate every index up to the highest qubit. The network
@@ -199,9 +208,9 @@ inline std::string ThermalApproximationMessage(const std::vector<int> &qubits)
             message << ", ";
         message << qubits[i];
     }
-    message << "]: effective T2 clamped to T1. Use density matrix or a supported "
-               "MPO backend to preserve calibrated T2. Kraus trajectories are "
-               "not supported by Maestro's current SV/MPS noise path.";
+    message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
+               "statevector or the matrix product state, which sample the channel itself, "
+               "to preserve the calibrated T2.";
     return message.str();
 }
 
@@ -220,6 +229,20 @@ inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_mo
     if (exact_channels || noise_model.has_additional_quantum_channels())
         return {};
     return ThermalApproximationMessage(noise_model.thermal_approximation_qubits_on(circuit));
+}
+
+// The same for an execution under `config`: nothing is clamped where the
+// backend samples the channels from its state (InjectsRuntimeChannels), so
+// there is nothing to warn about. Entry points that execute use these forms.
+inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, const SimulatorConfig &config, bool exact_channels)
+{
+    return InjectsRuntimeChannels(config, exact_channels) ? std::string() : ThermalApproximationWarning(noise_model, exact_channels);
+}
+
+inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, const SimulatorConfig &config, bool exact_channels,
+                                               const Circuits::Circuit<double> &circuit)
+{
+    return InjectsRuntimeChannels(config, exact_channels) ? std::string() : ThermalApproximationWarning(noise_model, exact_channels, circuit);
 }
 
 // The noise seed is 32 bits, as in the JSON API's noise.seed.
@@ -278,19 +301,15 @@ inline RecordCircuitPtr InjectNoise(NoiseLayer layer, const RecordCircuitPtr &ci
     return noisy;
 }
 
-// InjectNoise(layer, plan.circuit(), plan.model(), rng, exact) drawn from the
-// plan: identical operations and RNG use, without per-realization lookups.
-inline RecordCircuitPtr InjectPlanned(NoiseLayer layer, const noise::NoiseInjectionPlan &plan, std::mt19937 &rng, bool exact)
+// NoiseExecutionConfig for an execution of that circuit. The noise seed has no
+// injection to drive there, so it joins the execution seed: either seed alone
+// still changes the errors drawn.
+inline SimulatorConfig RuntimeNoiseExecutionConfig(const SimulatorConfig &config, std::optional<uint64_t> noise_seed, uint64_t batch)
 {
-    RecordCircuitPtr noisy;
-    if (layer == NoiseLayer::kPauli)
-        noisy = exact ? plan.ExactPauli() : plan.Pauli(rng);
-    else if (layer == NoiseLayer::kCoherent)
-        noisy = plan.Coherent(rng, exact);
-    else
-        noisy = plan.Combined(rng, exact);
-    plan.AttachReadout(noisy);
-    return noisy;
+    auto execution_config = NoiseExecutionConfig(config, noise_seed, batch);
+    if (noise_seed && EffectiveSamplingSeed(config))
+        execution_config.seed = JoinNoiseSeed(*execution_config.seed, *noise_seed);
+    return execution_config;
 }
 
 // Shot records of one execution: a row matrix, or distinct records and counts.
@@ -315,6 +334,8 @@ struct ShotRecords
     size_t max_bond_dimension = 0;
     // Noise realizations executed; zero for a noiseless execution.
     size_t realizations = 0;
+    // Workers the realizations ran on; zero where a dedicated sampler drew the records without them.
+    size_t realization_workers = 0;
     // reference_frame_v1, extended_frame_v1, terminal_v1 or trajectory_v1 when a dedicated
     // sampler drew the records; empty when the ordinary executor counted them.
     std::string sampling_strategy;

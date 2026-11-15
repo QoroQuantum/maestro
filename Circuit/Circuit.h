@@ -2002,6 +2002,74 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return std::make_shared<Circuit<Time>>(flat);
     }
 
+    // A channel whose branch a pure-state backend can only draw from its
+    // state, when the operation runs: any channel that is not a Pauli channel.
+    // Sampled noise injection keeps these as channels for a backend that
+    // samples them, and replaces a Pauli channel by the gates drawn from it.
+    static bool IsStateSampledChannel(const OperationPtr &op)
+    {
+        return op->GetType() == OperationType::kQuantumChannel &&
+               static_cast<const QuantumChannelOperation<Time> &>(*op).GetChannel().GetPauliProbabilities().empty();
+    }
+
+    // A channel that sampled noise injection may draw into a reset, on a
+    // backend that samples no channels and so has every channel drawn into
+    // gates and resets when a realization is built (noise::append_sampled_channel_).
+    // A Pauli part and a one-qubit mixture of unitaries become gates, and the
+    // realization stays deterministic. A relaxation becomes nothing, a phase
+    // flip or a reset, and a reset reads the state when it runs. A part with no
+    // such form is refused there, and counts as drawn.
+    static bool IsDrawnIntoReset(const OperationPtr &op)
+    {
+        using Channel = Simulators::QuantumChannel;
+        const Channel &channel = static_cast<const QuantumChannelOperation<Time> &>(*op).GetChannel();
+        if (!channel.GetPauliProbabilities().empty())
+            return false;
+        for (const auto &factor : channel.GetFactors())
+        {
+            if (factor.kind == Channel::FactorKind::kPauli || (factor.kind == Channel::FactorKind::kUnitaryMixture && factor.qubits.size() == 1))
+                continue;
+            Channel::ThermalMixture mixture;
+            if (factor.kind == Channel::FactorKind::kThermal && Channel::MixtureOf(factor.thermal, mixture) && mixture.reset <= 0.0)
+                continue; // pure dephasing: nothing or a phase flip
+            return true;
+        }
+        return false;
+    }
+
+    // How channel instructions count, on a backend that does not hold them
+    // exactly, when asking whether every shot sees the same evolution.
+    enum class ChannelDraws
+    {
+        kNone,      // not at all: the question is about the circuit without its noise
+        kFromState, // as sampled noise injection leaves them on a backend that samples channels: only the ones it keeps (IsStateSampledChannel)
+        kLowered,   // as it leaves them on a backend that samples none: all drawn into gates and resets, of which a reset counts (IsDrawnIntoReset)
+        kAll        // as executed: a backend that samples channels draws a branch of each one, per shot
+    };
+
+    // A channel with one branch only, a unitary (QuantumChannel::IsDeterministic), is a gate: every execution applies
+    // the same matrix. No branch of it is drawn, and a state that has passed through it serves any number of shots.
+    static bool IsDeterministicChannel(const OperationPtr &op)
+    {
+        return op->GetType() == OperationType::kQuantumChannel && static_cast<const QuantumChannelOperation<Time> &>(*op).IsDeterministic();
+    }
+
+    static bool IsDrawnChannel(const OperationPtr &op, ChannelDraws draws)
+    {
+        return draws != ChannelDraws::kNone && op->GetType() == OperationType::kQuantumChannel && !IsDeterministicChannel(op) &&
+               (draws == ChannelDraws::kAll || (draws == ChannelDraws::kFromState ? IsStateSampledChannel(op) : IsDrawnIntoReset(op)));
+    }
+
+    // Whether any operation, including those inside nested circuits, is a channel that a backend which samples
+    // channels draws a branch of: any explicit channel but one that is a gate (IsDeterministicChannel).
+    bool HasDrawnChannels() const
+    {
+        return std::any_of(operations.begin(), operations.end(), [](const auto &op) {
+            return IsDrawnChannel(op, ChannelDraws::kAll) ||
+                   (op->GetType() == OperationType::kComposite && std::static_pointer_cast<Circuit<Time>>(op)->HasDrawnChannels());
+        });
+    }
+
     // Whether any operation, including those inside nested circuits, is an
     // explicit quantum channel.
     bool HasQuantumChannels() const
@@ -2029,12 +2097,22 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // channels. touched carries the wires used so far across nested circuits.
     bool HasDeterministicEvolution(bool exactChannels, bool freshRegister, std::unordered_set<Types::qubit_t> &touched) const
     {
+        return HasDeterministicEvolutionWith(ChannelDraws::kAll, exactChannels, freshRegister, touched);
+    }
+
+    // The same, saying how channels count. A separate name keeps the method
+    // above unambiguous for callers that bind it.
+    bool HasDeterministicEvolutionWith(ChannelDraws draws, bool exactChannels, bool freshRegister, std::unordered_set<Types::qubit_t> &touched) const
+    {
         for (const auto &op : operations)
         {
             switch (op->GetType())
             {
-            case OperationType::kGate:
             case OperationType::kQuantumChannel:
+                if (!exactChannels && IsDrawnChannel(op, draws))
+                    return false;
+                break;
+            case OperationType::kGate:
             case OperationType::kDelay:
                 break;
             case OperationType::kNoOp:
@@ -2050,7 +2128,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 }
                 break;
             case OperationType::kComposite:
-                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasDeterministicEvolution(exactChannels, freshRegister, touched))
+                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasDeterministicEvolutionWith(draws, exactChannels, freshRegister, touched))
                     return false;
                 continue; // the nested operations recorded their own wires
             default:
@@ -2067,12 +2145,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // sample a branch and must remain in the per-shot suffix.
     bool HasOnlyDeterministicOperations(bool exactChannels = false) const
     {
+        return HasOnlyDeterministicOperationsWith(ChannelDraws::kAll, exactChannels);
+    }
+
+    bool HasOnlyDeterministicOperationsWith(ChannelDraws draws, bool exactChannels) const
+    {
         for (const auto &op : operations)
         {
             switch (op->GetType())
             {
-            case OperationType::kGate:
             case OperationType::kQuantumChannel:
+                if (!exactChannels && IsDrawnChannel(op, draws))
+                    return false;
+                break;
+            case OperationType::kGate:
             case OperationType::kDelay:
             case OperationType::kNoOp:
                 break;
@@ -2081,7 +2167,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                     return false;
                 break;
             case OperationType::kComposite:
-                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels))
+                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperationsWith(draws, exactChannels))
                     return false;
                 break;
             default:
@@ -2115,6 +2201,18 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // &Circuit::HasOpsAfterMeasurements unambiguous for callers that bind it.
     bool HasOpsAfterMeasurementsWithWidth(bool exactChannels, size_t &measuredWidth) const
     {
+        return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, exactChannels, measuredWidth);
+    }
+
+    // As HasOpsAfterMeasurements, saying how channels count.
+    bool HasOpsAfterMeasurementsWith(ChannelDraws draws, bool exactChannels) const
+    {
+        size_t measuredWidth;
+        return HasOpsAfterMeasurementsDrawing(draws, exactChannels, measuredWidth);
+    }
+
+    bool HasOpsAfterMeasurementsDrawing(ChannelDraws draws, bool exactChannels, size_t &measuredWidth) const
+    {
         measuredWidth = 0;
         std::unordered_set<Types::qubit_t> measuredQubits;
         std::unordered_set<Types::qubit_t> affectedQubits;
@@ -2124,7 +2222,13 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         {
             // Deterministic nested circuits execute as one prefix operation. Keep
             // composites with classical results opaque to terminal extraction.
-            if (op->GetType() == OperationType::kComposite && !std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels))
+            if (op->GetType() == OperationType::kComposite &&
+                !std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperationsWith(draws, exactChannels))
+                return true;
+            // A branch drawn per shot: no prepared state can serve several
+            // shots, whether or not its wires are measured afterwards, since
+            // the branch taken conditions every qubit entangled with them.
+            if (!exactChannels && IsDrawnChannel(op, draws))
                 return true;
             const auto qubits = op->AffectedQubits();
 
@@ -2303,8 +2407,10 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 // following gate that affects those qubits
 
                 bool canExecute =
-                    op->GetType() == OperationType::kGate || op->GetType() == OperationType::kQuantumChannel || op->GetType() == OperationType::kDelay ||
-                    op->GetType() == OperationType::kNoOp ||
+                    op->GetType() == OperationType::kGate ||
+                    // a channel is applied once where it is exact or has one branch only; otherwise a branch is drawn per shot
+                    (op->GetType() == OperationType::kQuantumChannel && (exactChannels || IsDeterministicChannel(op))) ||
+                    op->GetType() == OperationType::kDelay || op->GetType() == OperationType::kNoOp ||
                     (op->GetType() == OperationType::kComposite && std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels));
 
                 if (canExecute) // a conditional gate cannot be executed, it needs
@@ -3384,7 +3490,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
     static void ExecuteOperation(const OperationPtr &op, const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim)
     {
-        const bool boundary = sim->IsGateFusionEnabled() && op->GetType() != OperationType::kGate;
+        const auto type = op->GetType();
+        const bool fusion = sim->IsGateFusionEnabled();
+        // A delay changes no state, so it need not end the operations held back
+        // for fusion; the simulator says whether it can step over one.
+        if (fusion && type == OperationType::kDelay && sim->SkipIdleOperation())
+        {
+            op->Execute(sim, state);
+            return;
+        }
+        // A simulator that fuses channels takes them into its pending operations.
+        const bool boundary = fusion && type != OperationType::kGate && !(type == OperationType::kQuantumChannel && sim->FusesQuantumChannels());
         const auto sourcePosition = sim->GetGatesCounter();
         if (boundary)
             sim->FlushPendingGates();

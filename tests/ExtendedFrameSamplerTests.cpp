@@ -999,8 +999,15 @@ void CheckpointSuffixesOnFrames()
     Require(seededRecords.sampling_strategy == "extended_frame_v1", "a seeded checkpoint did not use frames");
     Require(RecordsHistogram(seededRecords, 2) == RecordsHistogram(replayed.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false), 2),
             "seeded checkpoint frames did not replay");
+    // The end measurements of a prefix are removed, since only suffixes are sampled: such a prefix is still
+    // gates only and runs on frames.
     auto measuring = std::make_shared<Circuit>(prefix->GetOperations());
     measuring->AddOperation(Measure(0, 0));
+    MaestroExecution::PrefixCheckpoint ended(measuring, 2, MethodConfig(Method::kExtendedStabilizer, std::nullopt));
+    Require(ended.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false).sampling_strategy == "extended_frame_v1",
+            "a prefix that ends with a measurement did not run on frames");
+    // A measurement that a later gate of the prefix follows runs, and collapses once for every suffix shot: no frames.
+    Add<Circuits::HadamardGate<double>>(measuring, 0);
     MaestroExecution::PrefixCheckpoint collapsed(measuring, 2, MethodConfig(Method::kExtendedStabilizer, std::nullopt));
     Require(collapsed.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false).sampling_strategy != "extended_frame_v1",
             "a measuring prefix ran on frames");
@@ -1234,7 +1241,8 @@ void OutcomesIgnoreBatchMates()
         LaneBatch batch(1, lanes);
         batch.ApplyAxisRotation(0, 1.5, 'Y');
         std::vector<Word> out(batch.Words());
-        batch.MeasureZ(0, [](size_t lane, double) { return lane == 0; }, out.data()); // lane 1 reads zero
+        batch.MeasureZ(
+            0, [](size_t lane, double) { return lane == 0; }, out.data()); // lane 1 reads zero
         batch.ApplyAxisRotation(0, 1.5, 'Y');
         double probability = -1;
         batch.MeasureZ(
@@ -1456,7 +1464,8 @@ void HeadCountsAgainstTheBudget()
     for (size_t q = 0; q < 6; ++q)
         head.ApplyAxisRotation(q, 0.7, 'X');
     std::vector<Word> outcome(head.Words());
-    head.MeasureZ(0, [](size_t, double one) { return one > 0.5; }, outcome.data());
+    head.MeasureZ(
+        0, [](size_t, double one) { return one > 0.5; }, outcome.data());
     Require(head.HeldAmplitudeBytes() > head.Components() * sizeof(std::complex<double>), "a measured batch kept no workspace");
     head.Compact();
     Require(head.HeldAmplitudeBytes() == head.Components() * sizeof(std::complex<double>) && head.AmplitudeBytes() == head.HeldAmplitudeBytes(),
@@ -1552,7 +1561,8 @@ void MeasurementBuffersCountAgainstTheBudget()
     bool threw = false;
     try
     {
-        batch->MeasureZ(0, [](size_t, double one) { return one > 0.5; }, outcome.data());
+        batch->MeasureZ(
+            0, [](size_t, double one) { return one > 0.5; }, outcome.data());
     }
     catch (const MaestroExecution::ExtendedFrames::MemoryLimitExceeded &)
     {
@@ -1577,7 +1587,12 @@ void InvalidOperandsAndShapes()
     Require(Throws([&] { MaestroExecution::CompileExtendedFrameSampler(three, 2, 1); }), "CCX(0,1,0) compiled");
     const auto plan = MaestroExecution::CompileExtendedFrameSampler(MidCircuitCircuit(), 3, 5);
     const MaestroExecution::ExtendedFrameSampler::Shape empty{0, size_t(1) << 20};
-    Require(Throws([&] { plan->SampleCounts(10, 10, {1, 1}, 1, empty); }) && Throws([&] { plan->Sample(10, 10, {1, 1}, 1, empty); }),
+    Require(Throws([&] {
+                plan->SampleCounts(10, 10, {1, 1}, 1, empty);
+            }) &&
+                Throws([&] {
+                    plan->Sample(10, 10, {1, 1}, 1, empty);
+                }),
             "a zero-lane shape was accepted");
     std::cout << "  repeated operands and zero-lane shapes are rejected\n";
 }

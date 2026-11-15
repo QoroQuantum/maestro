@@ -10,6 +10,7 @@ Build from the repository root:
 build on ``PYTHONPATH``. The API reference and the executed pages run against it.
 """
 
+import importlib.util
 import pathlib
 import re
 import tomllib
@@ -44,6 +45,11 @@ myst_heading_anchors = 3
 nb_execution_mode = "cache"
 nb_execution_raise_on_error = True
 nb_execution_timeout = 300
+# The Deltakit page runs deltakit-maestro, which requirements.txt installs only
+# where it has a release for the Python that builds the docs. Without it the
+# page is rendered with its code and not run.
+if importlib.util.find_spec("deltakit_maestro") is None:
+    nb_execution_excludepatterns = ["*getting-started/deltakit.md"]
 
 # API reference.
 autodoc_default_options = {"members": True, "undoc-members": True}

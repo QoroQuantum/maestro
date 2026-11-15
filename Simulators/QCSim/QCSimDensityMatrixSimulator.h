@@ -249,15 +249,39 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
             if (!uniqueTargets.insert(target).second)
                 throw std::invalid_argument("Quantum-channel target qubits must be distinct");
         }
-        const auto &krausOperators = channel.GetKrausOperators();
-        {
-            if (!densityMatrix)
-                throw std::runtime_error("QCSim density-matrix state is not initialized");
-            if (targets.size() == 1)
-                densityMatrix->ApplyChannel(krausOperators, targets[0]);
-            else
-                densityMatrix->ApplyChannel(krausOperators, targets[0], targets[1]);
-        }
+        if (!densityMatrix)
+            throw std::runtime_error("QCSim density-matrix state is not initialized");
+        // The channel was validated when it was built and every operation holding it shares
+        // its superoperator, so an application is one pass with nothing to check or compile.
+        const auto &superoperator = channel.Superoperator();
+        if (targets.size() == 1)
+            densityMatrix->ApplySuperoperator(superoperator, targets[0]);
+        else
+            densityMatrix->ApplySuperoperator(superoperator, targets[0], targets[1]);
+        NotifyObservers(targets);
+    }
+
+    bool SupportsSuperoperators() const override
+    {
+        return true;
+    }
+
+    void ApplySuperoperator(const Types::qubits_vector &targets, const Eigen::MatrixXcd &superoperator) override
+    {
+        if (targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("A superoperator acts on one or two distinct qubits");
+        for (const Types::qubit_t target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Superoperator qubit is out of range");
+        const Eigen::Index dimension = targets.size() == 1 ? 4 : 16;
+        if (superoperator.rows() != dimension || superoperator.cols() != dimension)
+            throw std::invalid_argument("The superoperator size does not match its targets");
+        if (!densityMatrix)
+            throw std::runtime_error("QCSim density-matrix state is not initialized");
+        if (targets.size() == 1)
+            densityMatrix->ApplySuperoperator(superoperator, targets[0]);
+        else
+            densityMatrix->ApplySuperoperator(superoperator, targets[0], targets[1]);
         NotifyObservers(targets);
     }
 

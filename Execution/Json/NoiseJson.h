@@ -92,9 +92,9 @@ inline std::string ThermalClampWarning(const std::vector<int> &qubits)
             message << ", ";
         message << qubits[i];
     }
-    message << "]: effective T2 clamped to T1. Use density matrix or a supported "
-               "MPO backend to preserve calibrated T2. Kraus trajectories are "
-               "not supported by Maestro's current SV/MPS noise path.";
+    message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
+               "statevector or the matrix product state, which sample the channel itself, "
+               "to preserve the calibrated T2.";
     return message.str();
 }
 
@@ -121,11 +121,16 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
 {
     result.approximations.clear();
     result.thermal_approximation_warning.clear();
-    Supported(result.exact || !result.model.has_additional_quantum_channels(),
-              "This noise model requires exact channel evolution: density_matrix, matrix_product_operator or the qcsim pauli_propagator");
+    // A backend that samples channels from its state takes the noise that has
+    // no exact sampled lowering as channels, one branch per execution: nothing
+    // is clamped, drawn as a reset or refused there.
+    const bool runtime = InjectsRuntimeChannels(config, result.exact);
+    Supported(result.exact || runtime || !result.model.has_additional_quantum_channels(),
+              "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the qcsim pauli_propagator) or a "
+              "backend that samples channels from its state (statevector, matrix_product_state)");
     // Match Python's sampled thermal policy without altering calibrated channels
     // used by exact density-matrix/MPO evolution.
-    if (!result.exact)
+    if (!result.exact && !runtime)
     {
         const auto clamped = result.model.thermal_approximation_qubits();
         if (!clamped.empty())
@@ -134,7 +139,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
             result.thermal_approximation_warning = ThermalClampWarning(clamped);
         }
     }
-    if (!result.exact && result.model.has_t1())
+    if (!result.exact && !runtime && result.model.has_t1())
         result.approximations.emplace_back("sampled_T1_reset");
     const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
     result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);

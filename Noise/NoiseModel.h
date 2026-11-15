@@ -59,6 +59,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <map>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -67,6 +68,7 @@
 #include <utility>
 #include <vector>
 
+#include "../Circuit/ChainOrder.h"
 #include "../Circuit/Circuit.h"
 
 namespace noise
@@ -1631,6 +1633,7 @@ class NoiseModel
         }
         return false;
     }
+
     std::unordered_map<int, std::unordered_map<int, Simulators::QuantumChannel>> correlated_phase_flip_;
     std::vector<ConfiguredKrausChannel> kraus_channels_;
 };
@@ -1882,12 +1885,56 @@ inline void inject_1q_pauli_(std::shared_ptr<Circuits::Circuit<double>> &out, Ty
         out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
 }
 
+/**
+ * The channels of one exact injection, built once per distinct parameter set.
+ * A circuit applies the same few channels at thousands of sites; sharing them
+ * saves a validated construction per site and lets every site use the forms a
+ * backend derives from a channel (its superoperator, for example) once.
+ */
+class ExactChannelMemo
+{
+  public:
+    const Simulators::QuantumChannel &Pauli(double px, double py, double pz)
+    {
+        return Find({0.0, px, py, pz, 0.0}, [&]() { return Simulators::QuantumChannel::Pauli(px, py, pz); });
+    }
+
+    const Simulators::QuantumChannel &AmplitudeDamping(double decay)
+    {
+        return Find({1.0, decay, 0.0, 0.0, 0.0}, [&]() { return Simulators::QuantumChannel::AmplitudeDamping(decay); });
+    }
+
+    const Simulators::QuantumChannel &TwoQubitDepolarizing(double probability)
+    {
+        return Find({2.0, probability, 0.0, 0.0, 0.0}, [&]() { return Simulators::QuantumChannel::TwoQubitDepolarizing(probability); });
+    }
+
+    const Simulators::QuantumChannel &ThermalRelaxation(double duration, double t1, double t2, double excited_population)
+    {
+        return Find({3.0, duration, t1, t2, excited_population},
+                    [&]() { return Simulators::QuantumChannel::ThermalRelaxation(duration, t1, t2, excited_population); });
+    }
+
+  private:
+    using Key = std::array<double, 5>;
+
+    template <class Build> const Simulators::QuantumChannel &Find(const Key &key, const Build &build)
+    {
+        auto found = channels_.find(key);
+        if (found == channels_.end())
+            found = channels_.emplace(key, build()).first;
+        return found->second;
+    }
+
+    std::map<Key, Simulators::QuantumChannel> channels_;
+};
+
 /// Append the exact CPTP form of a configured single-qubit Pauli channel.
-inline void inject_1q_pauli_exact_(std::shared_ptr<Circuits::Circuit<double>> &out, Types::qubit_t q, const QubitNoise &qn)
+inline void inject_1q_pauli_exact_(std::shared_ptr<Circuits::Circuit<double>> &out, Types::qubit_t q, const QubitNoise &qn, ExactChannelMemo &memo)
 {
     if (qn.px == 0.0 && qn.py == 0.0 && qn.pz == 0.0)
         return;
-    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Simulators::QuantumChannel::Pauli(qn.px, qn.py, qn.pz)));
+    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.Pauli(qn.px, qn.py, qn.pz)));
 }
 
 /**
@@ -1902,9 +1949,15 @@ inline void inject_1q_pauli_exact_(std::shared_ptr<Circuits::Circuit<double>> &o
  */
 template <class Model>
 inline void inject_thermal_relaxation_(std::shared_ptr<Circuits::Circuit<double>> &out, const Model &nm, Types::qubit_t q, bool is_2q, bool exact_channels,
-                                       std::uniform_real_distribution<double> &dist, std::mt19937 &rng)
+                                       std::uniform_real_distribution<double> &dist, std::mt19937 &rng, bool runtime_channels = false)
 {
     const int qi = static_cast<int>(q);
+    const ThermalRelaxation *params = exact_channels ? nullptr : nm.get_thermal_relaxation_params(qi, is_2q);
+    // A backend that samples channels takes the channel itself where the reset
+    // mixture below is not exact (T2 > T1). Where the mixture is exact it stays:
+    // it draws without reading the state and usually inserts nothing.
+    if (!exact_channels && runtime_channels)
+        exact_channels = params && !params->sampled_realization_is_exact();
     if (exact_channels)
     {
         if (const auto *channel = nm.get_thermal_relaxation_for_gate(qi, is_2q))
@@ -1912,7 +1965,6 @@ inline void inject_thermal_relaxation_(std::shared_ptr<Circuits::Circuit<double>
         return;
     }
 
-    const ThermalRelaxation *params = nm.get_thermal_relaxation_params(qi, is_2q);
     if (!params)
         return;
 
@@ -2075,44 +2127,212 @@ inline std::shared_ptr<Circuits::IOperation<double>> carry_operation_(const std:
 }
 
 /**
- * Append one Pauli drawn from a circuit-level Pauli channel, such as a
- * translated Stim DEPOLARIZE1. Pure-state backends cannot apply a channel, so
- * each noise realization draws the Pauli its shots experience; the ensemble
- * of realizations is the channel.
+ * Whether a circuit-level channel stays in a sampled realization as it is.
+ * A backend that samples channels from its state (runtime_channels) takes
+ * any channel that is not a Pauli mixture that way; a Pauli mixture is
+ * drawn once per realization instead, which needs no state and leaves the
+ * realization deterministic.
  */
-inline void append_sampled_pauli_channel_(std::shared_ptr<Circuits::Circuit<double>> &out, const std::shared_ptr<Circuits::IOperation<double>> &op,
-                                          std::mt19937 &rng)
+inline bool keeps_runtime_channel_(const std::shared_ptr<Circuits::IOperation<double>> &op, bool runtime_channels)
 {
-    const auto channel_op = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
-    const auto &probabilities = channel_op->GetChannel().GetPauliProbabilities();
-    if (probabilities.empty())
-        throw std::invalid_argument("Only Pauli channels can be sampled on pure-state backends; use a "
-                                    "density-matrix or MPO backend, or the QCSim Pauli propagator, for general Kraus channels");
+    // A reference, not a second owner: the operations of a plan are shared with the realizations the workers
+    // release, and a copied pointer would write to the reference count they all contend for.
+    return runtime_channels && op->GetType() == Circuits::OperationType::kQuantumChannel &&
+           static_cast<const Circuits::QuantumChannelOperation<> &>(*op).GetChannel().GetPauliProbabilities().empty();
+}
 
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    double r = dist(rng);
-    size_t index = 0;
-    while (index + 1 < probabilities.size() && r >= probabilities[index])
-        r -= probabilities[index++];
-
-    // Base-4 digit k of the index selects I, X, Y or Z on target k.
-    for (auto q : channel_op->AffectedQubits())
+/**
+ * The U gate that equals a one-qubit unitary:
+ * e^(i gamma) [[cos, -e^(i lambda) sin], [e^(i phi) sin, e^(i (phi + lambda)) cos]] of theta / 2.
+ */
+inline std::shared_ptr<Circuits::IOperation<double>> unitary_gate_(Types::qubit_t q, const Eigen::MatrixXcd &u)
+{
+    const double c = std::abs(u(0, 0)), s = std::abs(u(1, 0));
+    const double theta = 2.0 * std::atan2(s, c);
+    double gamma = 0.0, phi = 0.0, lambda = 0.0;
+    if (c > 1e-12)
     {
-        switch (index % 4)
+        gamma = std::arg(u(0, 0));
+        if (s > 1e-12)
         {
-        case 1:
-            out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
-            break;
-        case 2:
-            out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
-            break;
-        case 3:
-            out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
-            break;
-        default:
-            break; // Identity
+            phi = std::arg(u(1, 0)) - gamma;
+            lambda = std::arg(-u(0, 1)) - gamma;
         }
-        index /= 4;
+        else
+            lambda = std::arg(u(1, 1)) - gamma;
+    }
+    else
+    {
+        phi = std::arg(u(1, 0));
+        lambda = std::arg(-u(0, 1));
+    }
+    return std::make_shared<Circuits::UGate<>>(q, theta, phi, lambda, gamma);
+}
+
+// A one-qubit unitary without its global phase: the first entry that is not zero made real and positive.
+inline Eigen::Matrix2cd phase_free_(const Eigen::Matrix2cd &u)
+{
+    for (Eigen::Index i = 0; i < 4; ++i)
+        if (std::abs(u.data()[i]) > 1e-6)
+            return u / (u.data()[i] / std::abs(u.data()[i]));
+    return u;
+}
+
+struct CliffordWord
+{
+    Eigen::Matrix2cd matrix; // phase free
+    std::vector<char> gates; // 'h' or 's', in the order they are applied
+};
+
+// The 24 one-qubit Cliffords, each with a shortest word of H and S gates.
+inline const std::vector<CliffordWord> &one_qubit_cliffords_()
+{
+    static const std::vector<CliffordWord> table = [] {
+        const double r = std::sqrt(0.5);
+        Eigen::Matrix2cd h, s;
+        h << r, r, r, -r;
+        s << 1.0, 0.0, 0.0, std::complex<double>(0.0, 1.0);
+        std::vector<CliffordWord> found{{Eigen::Matrix2cd::Identity(), {}}};
+        for (size_t next = 0; next < found.size(); ++next)
+            for (const char gate : {'h', 's'})
+            {
+                CliffordWord word{phase_free_((gate == 'h' ? h : s) * found[next].matrix), found[next].gates};
+                word.gates.push_back(gate);
+                if (std::none_of(found.begin(), found.end(), [&](const CliffordWord &known) { return (known.matrix - word.matrix).norm() < 1e-9; }))
+                    found.push_back(std::move(word));
+            }
+        return found;
+    }();
+    return table;
+}
+
+/**
+ * Append the gates that apply a drawn one-qubit unitary. A Clifford becomes H
+ * and S gates, which every backend runs, the stabilizer ones included; the
+ * global phase they may differ by is one no branch of a mixture can show. Any
+ * other unitary becomes one U gate.
+ */
+inline void append_unitary_(std::shared_ptr<Circuits::Circuit<double>> &out, Types::qubit_t q, const Eigen::MatrixXcd &u)
+{
+    const Eigen::Matrix2cd wanted = phase_free_(u);
+    for (const CliffordWord &word : one_qubit_cliffords_())
+        if ((word.matrix - wanted).norm() < 1e-9)
+        {
+            for (const char gate : word.gates)
+                if (gate == 'h')
+                    out->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+                else
+                    out->AddOperation(std::make_shared<Circuits::SGate<>>(q));
+            return;
+        }
+    out->AddOperation(unitary_gate_(q, u));
+}
+
+/**
+ * Whether every part of a channel is drawn without the state: a Pauli, a
+ * one-qubit unitary mixture, or a relaxation with T2 <= T1. Sampled injection
+ * draws such a channel into gates and resets (append_sampled_channel_), which
+ * every backend runs.
+ */
+inline bool has_sampled_form(const Simulators::QuantumChannel &channel)
+{
+    using Channel = Simulators::QuantumChannel;
+    if (!channel.GetPauliProbabilities().empty())
+        return true;
+    Channel::ThermalMixture mixture;
+    for (const auto &factor : channel.GetFactors())
+        if (factor.kind != Channel::FactorKind::kPauli && !(factor.kind == Channel::FactorKind::kUnitaryMixture && factor.qubits.size() == 1) &&
+            !(factor.kind == Channel::FactorKind::kThermal && Channel::MixtureOf(factor.thermal, mixture)))
+            return false;
+    return true;
+}
+
+/**
+ * Append one sampled branch of a circuit-level channel, such as a translated
+ * Stim DEPOLARIZE1 or a gate error given as one channel. Pure-state backends
+ * that do not sample channels themselves cannot apply one, so each noise
+ * realization draws what its shots experience; the ensemble of realizations is
+ * the channel.
+ *
+ * That needs every part of the channel to be drawn without the state: a Pauli,
+ * a one-qubit unitary mixture, or a relaxation with T2 <= T1, which is nothing,
+ * a phase flip or a reset. A channel built by Pauli() draws exactly as it
+ * always has.
+ */
+inline void append_sampled_channel_(std::shared_ptr<Circuits::Circuit<double>> &out, const std::shared_ptr<Circuits::IOperation<double>> &op, std::mt19937 &rng)
+{
+    using Channel = Simulators::QuantumChannel;
+    const auto *channel_op = static_cast<const Circuits::QuantumChannelOperation<> *>(op.get());
+    const Channel &channel = channel_op->GetChannel();
+    const auto targets = channel_op->AffectedQubits();
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    // Base-4 digit k of the index selects I, X, Y or Z on target k.
+    const auto append_paulis = [&out](const Types::qubits_vector &qubits, size_t index) {
+        for (auto q : qubits)
+        {
+            switch (index % 4)
+            {
+            case 1:
+                out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+                break;
+            case 2:
+                out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
+                break;
+            case 3:
+                out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
+                break;
+            default:
+                break; // Identity
+            }
+            index /= 4;
+        }
+    };
+    const auto draw = [&](const std::vector<double> &probabilities) {
+        double r = dist(rng);
+        size_t index = 0;
+        while (index + 1 < probabilities.size() && r >= probabilities[index])
+            r -= probabilities[index++];
+        return index;
+    };
+
+    if (!channel.GetPauliProbabilities().empty())
+    {
+        append_paulis(targets, draw(channel.GetPauliProbabilities()));
+        return;
+    }
+
+    if (!has_sampled_form(channel))
+        throw std::invalid_argument("Only channels whose branches are drawn without the state (Pauli channels, one-qubit unitary mixtures, "
+                                    "relaxation with T2 <= T1) can be sampled on this pure-state backend; use a density-matrix or MPO backend, "
+                                    "the QCSim Pauli propagator, or a backend that samples channels (the QCSim statevector and matrix product "
+                                    "state), for general Kraus channels");
+    const auto &factors = channel.GetFactors();
+    Channel::ThermalMixture mixture;
+    for (const auto &factor : factors)
+    {
+        Types::qubits_vector qubits;
+        for (const size_t local : factor.qubits)
+            qubits.push_back(targets[local]);
+        if (factor.kind == Channel::FactorKind::kPauli)
+            append_paulis(qubits, draw(factor.probabilities));
+        else if (factor.kind == Channel::FactorKind::kUnitaryMixture)
+        {
+            append_unitary_(out, qubits[0], factor.operators[draw(factor.probabilities)]);
+        }
+        else
+        {
+            Channel::MixtureOf(factor.thermal, mixture);
+            const double r = dist(rng);
+            if (r >= mixture.identity + mixture.phaseFlip)
+            {
+                // Reset targets |0>, so an X afterwards realizes the thermal excitation.
+                out->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{qubits[0]}));
+                if ((r - mixture.identity - mixture.phaseFlip) / mixture.reset < factor.thermal.excitedStatePopulation)
+                    out->AddOperation(std::make_shared<Circuits::XGate<>>(qubits[0]));
+            }
+            else if (r >= mixture.identity)
+                out->AddOperation(std::make_shared<Circuits::ZGate<>>(qubits[0]));
+        }
     }
 }
 
@@ -2227,15 +2447,18 @@ inline std::pair<double, double> integrate_ou_band_delay_(const OUBand &band, do
 // NoiseInjectionPlan); either way the same branches draw the same RNG values.
 template <class Model>
 inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::shared_ptr<Circuits::Circuit<double>> &circ, const Model &nm, std::mt19937 &rng,
-                                                                     bool exact_channels, const InjectionCircuitInfo *info = nullptr)
+                                                                     bool exact_channels, const InjectionCircuitInfo *info = nullptr,
+                                                                     bool runtime_channels = false)
 {
     nm.EnsureNoT1ThermalStack();
-    if (!exact_channels && nm.has_additional_quantum_channels())
+    if (!exact_channels && !runtime_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
                                     "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
-                                    "propagator");
+                                    "propagator, or a backend that samples channels from its state (statevector, matrix product "
+                                    "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    ExactChannelMemo memo;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     const auto &operations = circ->GetOperations();
     Types::qubits_vector scratch;
@@ -2244,9 +2467,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
     {
         const auto &op = operations[index];
         // Circuit-level channels are sampled here and applied exactly on DM/MPO.
-        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel)
+        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel && !keeps_runtime_channel_(op, runtime_channels))
         {
-            append_sampled_pauli_channel_(out, op, rng);
+            append_sampled_channel_(out, op, rng);
             continue;
         }
         out->AddOperation(carry_operation_(op, info));
@@ -2264,10 +2487,11 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
                 const auto *idle = nm.get_idle_noise(qi);
                 if (idle)
                 {
-                    if (exact_channels)
+                    if (exact_channels ||
+                        (runtime_channels && !ThermalRelaxation{tau, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact()))
                     {
                         out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
-                            Types::qubits_vector{q}, Simulators::QuantumChannel::ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
+                            Types::qubits_vector{q}, memo.ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
                     }
                     else
                     {
@@ -2317,11 +2541,10 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             // set_thermal_relaxation() to specify T1 and T2 together and get
             // matching coherence decay on both backend families when T2 <= T1.
             double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_multiq);
-            if (exact_channels)
+            if (exact_channels || runtime_channels)
             {
                 if (gamma != 0.0)
-                    out->AddOperation(
-                        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Simulators::QuantumChannel::AmplitudeDamping(gamma)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
             }
             else if (gamma > 0 && dist(rng) < gamma)
             {
@@ -2329,7 +2552,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             }
 
             // T1/T2 thermal relaxation (exact channel or equivalent reset+Z sample)
-            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng);
+            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng, runtime_channels);
 
             // Phase damping (identical to a phase flip, so exact on both paths)
             inject_phase_damping_(out, nm, q, exact_channels, dist, rng);
@@ -2339,7 +2562,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             if (qn)
             {
                 if (exact_channels)
-                    inject_1q_pauli_exact_(out, q, *qn);
+                    inject_1q_pauli_exact_(out, q, *qn, memo);
                 else
                     inject_1q_pauli_(out, q, *qn, dist, rng);
             }
@@ -2349,14 +2572,14 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             if (qn_gate)
             {
                 if (exact_channels)
-                    inject_1q_pauli_exact_(out, q, *qn_gate);
+                    inject_1q_pauli_exact_(out, q, *qn_gate, memo);
                 else
                     inject_1q_pauli_(out, q, *qn_gate, dist, rng);
             }
         }
 
-        // Additional exact CPTP channels.
-        if (exact_channels)
+        // Additional exact CPTP channels. A model without any is not searched once per gate.
+        if ((exact_channels || runtime_channels) && nm.has_additional_quantum_channels())
             inject_additional_exact_channels_(out, nm, affected);
 
         // Two-qubit depolarizing (correlated 2Q Pauli channel)
@@ -2368,8 +2591,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             if (exact_channels)
             {
                 if (p2q != 0.0)
-                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2},
-                                                                                            Simulators::QuantumChannel::TwoQubitDepolarizing(p2q)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
             }
             else if (p2q > 0)
             {
@@ -2522,7 +2744,7 @@ inline void inject_coherent_rotations_(std::shared_ptr<Circuits::Circuit<double>
 template <class Model>
 inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise_impl_(const std::shared_ptr<Circuits::Circuit<double>> &circ, const Model &nm,
                                                                               std::mt19937 &rng, bool exact_channels,
-                                                                              const InjectionCircuitInfo *info = nullptr)
+                                                                              const InjectionCircuitInfo *info = nullptr, bool runtime_channels = false)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
     CoherentSigns signs(rng);
@@ -2533,9 +2755,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise_impl_(co
     {
         const auto &op = operations[index];
         // Circuit-level channels are sampled here and applied exactly on DM/MPO.
-        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel)
+        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel && !keeps_runtime_channel_(op, runtime_channels))
         {
-            append_sampled_pauli_channel_(out, op, rng);
+            append_sampled_channel_(out, op, rng);
             continue;
         }
         out->AddOperation(carry_operation_(op, info));
@@ -2598,7 +2820,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(const 
     {
         if (op->GetType() == Circuits::OperationType::kQuantumChannel)
         {
-            append_sampled_pauli_channel_(out, op, rng);
+            append_sampled_channel_(out, op, rng);
             continue;
         }
         out->AddOperation(op->Clone());
@@ -2708,15 +2930,17 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(const 
 template <class Model>
 inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(const std::shared_ptr<Circuits::Circuit<double>> &circ, const Model &nm,
                                                                               std::mt19937 &rng, bool exact_channels,
-                                                                              const InjectionCircuitInfo *info = nullptr)
+                                                                              const InjectionCircuitInfo *info = nullptr, bool runtime_channels = false)
 {
     nm.EnsureNoT1ThermalStack();
-    if (!exact_channels && nm.has_additional_quantum_channels())
+    if (!exact_channels && !runtime_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
                                     "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
-                                    "propagator");
+                                    "propagator, or a backend that samples channels from its state (statevector, matrix product "
+                                    "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    ExactChannelMemo memo;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     std::normal_distribution<double> normal_dist(0.0, 1.0);
     CoherentSigns coherent_signs(rng);                       // systematic, per realization
@@ -2728,9 +2952,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
     {
         const auto &op = operations[index];
         // Circuit-level channels are sampled here and applied exactly on DM/MPO.
-        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel)
+        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel && !keeps_runtime_channel_(op, runtime_channels))
         {
-            append_sampled_pauli_channel_(out, op, rng);
+            append_sampled_channel_(out, op, rng);
             continue;
         }
         out->AddOperation(carry_operation_(op, info));
@@ -2776,10 +3000,11 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
                 const auto *idle = nm.get_idle_noise(qi);
                 if (idle)
                 {
-                    if (exact_channels)
+                    if (exact_channels ||
+                        (runtime_channels && !ThermalRelaxation{tau, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact()))
                     {
                         out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
-                            Types::qubits_vector{q}, Simulators::QuantumChannel::ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
+                            Types::qubits_vector{q}, memo.ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
                     }
                     else
                     {
@@ -2894,11 +3119,10 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
         for (auto q : affected)
         {
             double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_multiq);
-            if (exact_channels)
+            if (exact_channels || runtime_channels)
             {
                 if (gamma != 0.0)
-                    out->AddOperation(
-                        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Simulators::QuantumChannel::AmplitudeDamping(gamma)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
             }
             else if (gamma > 0 && dist(rng) < gamma)
             {
@@ -2908,7 +3132,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             // T1/T2 thermal relaxation and phase damping. Both are driven from the
             // same physical parameters on either backend, so the coherence decay
             // matches; see inject_thermal_relaxation_.
-            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng);
+            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng, runtime_channels);
             inject_phase_damping_(out, nm, q, exact_channels, dist, rng);
         }
 
@@ -2919,7 +3143,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             if (qn)
             {
                 if (exact_channels)
-                    inject_1q_pauli_exact_(out, q, *qn);
+                    inject_1q_pauli_exact_(out, q, *qn, memo);
                 else
                     inject_1q_pauli_(out, q, *qn, dist, rng);
             }
@@ -2932,14 +3156,14 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             if (qn_gate)
             {
                 if (exact_channels)
-                    inject_1q_pauli_exact_(out, q, *qn_gate);
+                    inject_1q_pauli_exact_(out, q, *qn_gate, memo);
                 else
                     inject_1q_pauli_(out, q, *qn_gate, dist, rng);
             }
         }
 
         // ── 7. Additional exact CPTP channels ──
-        if (exact_channels)
+        if ((exact_channels || runtime_channels) && nm.has_additional_quantum_channels())
             inject_additional_exact_channels_(out, nm, affected);
 
         // ── 8. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
@@ -2951,8 +3175,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             if (exact_channels)
             {
                 if (p2q != 0.0)
-                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2},
-                                                                                            Simulators::QuantumChannel::TwoQubitDepolarizing(p2q)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
             }
             else if (p2q > 0)
             {
@@ -3085,7 +3308,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> drop_outside_spectator_phases(
     const auto message = [width](Types::qubit_t q) {
         return "Noise acts on qubit " + std::to_string(q) + " outside the " + std::to_string(width) + "-qubit register";
     };
-    return drop_spectator_phases_if(noisy, [width](Types::qubit_t q) { return q < width; }, message);
+    return drop_spectator_phases_if(
+        noisy, [width](Types::qubit_t q) { return q < width; }, message);
 }
 
 /**
@@ -3106,10 +3330,30 @@ inline std::shared_ptr<Circuits::Circuit<double>> drop_outside_spectator_phases(
 class NoiseInjectionPlan
 {
   public:
-    NoiseInjectionPlan(std::shared_ptr<Circuits::Circuit<double>> circuit, const NoiseModel &model)
+    // runtime_channels: the backend samples quantum channels from its state,
+    // so sampled realizations keep the channels that have no exact sampled
+    // lowering (relaxation with T2 > T1, amplitude damping, Kraus maps) as
+    // channel operations instead of approximating or rejecting them.
+    // chain_order: the backend is a tensor chain whose work follows the order
+    // of the operations, so every realization is returned in the order of
+    // Circuits::ChainOrdered for that kind of chain.
+    NoiseInjectionPlan(std::shared_ptr<Circuits::Circuit<double>> circuit, const NoiseModel &model, bool runtime_channels = false,
+                       Circuits::ChainOrder chain_order = Circuits::ChainOrder::kNone)
         : circuit_(Required(std::move(circuit))), model_(&model), cache_(model, std::min<size_t>(circuit_->GetMaxQubitIndex() + 1, kMaxCachedQubits)),
-          info_(*circuit_, model)
+          info_(*circuit_, model), runtime_channels_(runtime_channels), chain_order_(chain_order)
     {
+    }
+
+    bool RuntimeChannels() const noexcept
+    {
+        return runtime_channels_;
+    }
+
+    // For a plan built before the backend that runs it was known.
+    void KeepRuntimeChannels(bool keep, Circuits::ChainOrder chain_order = Circuits::ChainOrder::kNone) noexcept
+    {
+        runtime_channels_ = keep;
+        chain_order_ = chain_order;
     }
 
     const std::shared_ptr<Circuits::Circuit<double>> &circuit() const noexcept
@@ -3143,26 +3387,26 @@ class NoiseInjectionPlan
     /// inject_noise(circuit, model, rng).
     std::shared_ptr<Circuits::Circuit<double>> Pauli(std::mt19937 &rng) const
     {
-        return inject_noise_impl_(circuit_, cache_, rng, false, &info_);
+        return Ordered(inject_noise_impl_(circuit_, cache_, rng, false, &info_, runtime_channels_));
     }
 
     /// inject_exact_noise(circuit, model): draws no randomness from the caller.
     std::shared_ptr<Circuits::Circuit<double>> ExactPauli() const
     {
         std::mt19937 unused;
-        return inject_noise_impl_(circuit_, cache_, unused, true, &info_);
+        return Ordered(inject_noise_impl_(circuit_, cache_, unused, true, &info_));
     }
 
     /// inject_coherent_noise / inject_coherent_noise_exact(circuit, model, rng).
     std::shared_ptr<Circuits::Circuit<double>> Coherent(std::mt19937 &rng, bool exact_channels) const
     {
-        return inject_coherent_noise_impl_(circuit_, cache_, rng, exact_channels, &info_);
+        return Ordered(inject_coherent_noise_impl_(circuit_, cache_, rng, exact_channels, &info_, runtime_channels_));
     }
 
     /// inject_combined_noise / inject_combined_noise_exact(circuit, model, rng).
     std::shared_ptr<Circuits::Circuit<double>> Combined(std::mt19937 &rng, bool exact_channels) const
     {
-        return inject_combined_noise_impl_(circuit_, cache_, rng, exact_channels, &info_);
+        return Ordered(inject_combined_noise_impl_(circuit_, cache_, rng, exact_channels, &info_, runtime_channels_));
     }
 
     /// attach_readout_error(noisy, model).
@@ -3182,10 +3426,17 @@ class NoiseInjectionPlan
         return circuit;
     }
 
+    std::shared_ptr<Circuits::Circuit<double>> Ordered(std::shared_ptr<Circuits::Circuit<double>> noisy) const
+    {
+        return chain_order_ == Circuits::ChainOrder::kNone ? noisy : Circuits::ChainOrdered(noisy, chain_order_);
+    }
+
     std::shared_ptr<Circuits::Circuit<double>> circuit_;
     const NoiseModel *model_;
     NoiseModelCache cache_;
     InjectionCircuitInfo info_;
+    bool runtime_channels_ = false;
+    Circuits::ChainOrder chain_order_ = Circuits::ChainOrder::kNone;
 };
 
 } // namespace noise

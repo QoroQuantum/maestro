@@ -1327,12 +1327,16 @@ def test_basis_changes_get_no_noise_model_gate_noise():
     assert _records("RX 0\nH 0\nH 0\nMX 0", shots=500, noise_model=nm).any()
 
 
-def test_pauli_channel_needs_noise_realizations_on_pure_state():
+def test_pauli_channel_on_a_pure_state_is_drawn_per_shot_or_per_realization():
     qc = maestro.circuits.QuantumCircuit()
     qc.pauli_channel([0], [0.25, 0.25, 0.25, 0.25])
     qc.measure([(0, 0)])
+    # The statevector samples channels from its state: a plain execute draws a branch in every shot.
+    counts = qc.execute(maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector, seed=3), shots=2000)["counts"]
+    assert abs(counts.get("1", 0) / 2000 - 0.5) < 0.04
+    # A method that neither holds nor samples channels needs noise realizations to draw them.
     with pytest.raises(Exception):
-        qc.execute(maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector), shots=4)
+        qc.execute(maestro.SimulatorConfig(simulation_type=maestro.SimulationType.TensorNetwork), shots=4)
     counts = qc.full_noise_execute(maestro.NoiseModel(), shots=2000, noise_realizations=2000, noise_seed=5)["counts"]
     assert abs(counts.get("1", 0) / 2000 - 0.5) < 0.04
 

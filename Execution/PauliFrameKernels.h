@@ -204,47 +204,7 @@ template <class Consumer> void TransposeBatch(const std::vector<uint64_t> &class
 // channel (amplitude damping, incomplete Kraus sets, three or more targets).
 inline std::vector<double> PauliMixture(const Simulators::QuantumChannel &channel, size_t targets)
 {
-    if (targets < 1 || targets > 2)
-        return {};
-    const size_t terms = targets == 1 ? 4 : 16;
-    const double dimension = targets == 1 ? 2.0 : 4.0;
-    const auto &kraus = channel.GetKrausOperators();
-    if (kraus.empty() || kraus.front().rows() != static_cast<Eigen::Index>(dimension))
-        return {};
-    std::vector<Simulators::QuantumChannel::Matrix> paulis;
-    paulis.reserve(terms);
-    for (size_t a = 0; a < terms; ++a)
-    {
-        std::vector<double> single(terms, 0.0);
-        single[a] = 1.0;
-        paulis.push_back(Simulators::QuantumChannel::Pauli(single).GetKrausOperators().front());
-    }
-    std::vector<std::vector<std::complex<double>>> coefficients(kraus.size(), std::vector<std::complex<double>>(terms));
-    for (size_t i = 0; i < kraus.size(); ++i)
-        for (size_t a = 0; a < terms; ++a)
-            coefficients[i][a] = (paulis[a].adjoint() * kraus[i]).trace() / dimension;
-    constexpr double tolerance = 1e-12;
-    std::vector<double> probabilities(terms, 0.0);
-    double total = 0;
-    for (size_t a = 0; a < terms; ++a)
-        for (size_t b = 0; b < terms; ++b)
-        {
-            std::complex<double> chi = 0;
-            for (size_t i = 0; i < kraus.size(); ++i)
-                chi += coefficients[i][a] * std::conj(coefficients[i][b]);
-            if (a == b)
-            {
-                if (chi.real() < -tolerance || std::abs(chi.imag()) > tolerance)
-                    return {};
-                probabilities[a] = std::max(0.0, chi.real());
-                total += probabilities[a];
-            }
-            else if (std::abs(chi) > tolerance)
-                return {};
-        }
-    if (std::abs(total - 1.0) > 1e-10)
-        return {};
-    return probabilities;
+    return Simulators::QuantumChannel::PauliMixtureOf(channel.GetKrausOperators(), targets);
 }
 } // namespace FrameKernels
 } // namespace MaestroExecution
