@@ -1927,6 +1927,41 @@ def test_states_are_read_for_qubit_indices_an_int_cannot_hold(first, fixed):
     assert len(amplitudes) == 8 and abs(amplitudes[7]) == pytest.approx(1)
 
 
+@pytest.mark.parametrize("first", [2**31 - 3, 2**31 - 1, 2**31, 2**32 + 1])
+def test_overlaps_are_read_for_qubit_indices_an_int_cannot_hold(first):
+    """inner_product and the full-amplitude mirror fidelity hand their circuit to a network too, which
+    maps the qubits used: the same rule sizes their handle."""
+    circuit = QuantumCircuit()
+    circuit.h(first)
+    circuit.cx(first, first + 1)
+    circuit.x(first + 2)
+    other = QuantumCircuit()
+    for offset in range(3):
+        other.x(first + offset)
+    assert maestro.inner_product(circuit, circuit) == pytest.approx(1)
+    assert abs(maestro.inner_product(circuit, other)) == pytest.approx(1 / math.sqrt(2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # falling back to shots would warn
+        assert maestro.mirror_fidelity(circuit, full_amplitude=True) == pytest.approx(1)
+
+
+@pytest.mark.parametrize("highest", [2**31 - 1, 2**31, 2**32 + 1])
+def test_calls_that_need_every_index_refuse_one_an_int_cannot_hold(highest):
+    """Shot-based mirror fidelity measures every qubit up to the highest index and incremental_evolve
+    drives the simulator index by index: nothing can stand in for a register that an int cannot
+    count, so the call says so. Below that an index is taken as it is."""
+    circuit = QuantumCircuit()
+    circuit.h(highest)
+    with pytest.raises(ValueError, match="do not fit a simulator register"):
+        maestro.mirror_fidelity(circuit, shots=10)
+    with pytest.raises(ValueError, match="do not fit a simulator register"):
+        maestro.incremental_evolve(circuit, circuit, [1], "Z")
+    small = QuantumCircuit()
+    small.h(2)
+    assert maestro.mirror_fidelity(small, shots=10) == pytest.approx(1)
+    assert len(maestro.incremental_evolve(small, small, [1], "IIZ")["expectation_values"]) == 1
+
+
 @pytest.mark.parametrize("method, name", _PROBABILITY_METHODS)
 def test_probabilities_keep_a_qubit_that_only_the_end_measurements_use(method, name):
     """The end measurements are not run, but a qubit they alone use is still one of the circuit's
