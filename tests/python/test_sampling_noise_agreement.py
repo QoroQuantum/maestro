@@ -1911,6 +1911,22 @@ def test_probabilities_without_a_statevector_order_the_qubits_as_the_amplitudes(
     assert [abs(a) ** 2 for a in reference] == pytest.approx([0, 0.25, 0.75, 0], abs=1e-9)
 
 
+@pytest.mark.parametrize("first", [2**31 - 3, 2**31 - 1, 2**31, 2**32 + 1])
+@pytest.mark.parametrize("fixed", [False, True])
+def test_states_are_read_for_qubit_indices_an_int_cannot_hold(first, fixed):
+    """A simulator handle counts its qubits in an int. A circuit whose highest index does not fit
+    one is sized by the qubits it uses, which the network maps onto its host: three qubits give
+    eight basis states, wherever their indices lie."""
+    circuit = QuantumCircuit()
+    for offset in range(3):
+        circuit.x(first + offset)
+    config = maestro.SimulatorConfig(simulation_type=S.Statevector, fixed_backend=fixed)
+    probabilities = maestro.get_probabilities(circuit, config=config)
+    assert len(probabilities) == 8 and probabilities[7] == pytest.approx(1)
+    amplitudes = maestro.get_statevector(circuit, config=config)
+    assert len(amplitudes) == 8 and abs(amplitudes[7]) == pytest.approx(1)
+
+
 @pytest.mark.parametrize("method, name", _PROBABILITY_METHODS)
 def test_probabilities_keep_a_qubit_that_only_the_end_measurements_use(method, name):
     """The end measurements are not run, but a qubit they alone use is still one of the circuit's

@@ -185,7 +185,7 @@ std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Cir
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
-    int num_qubits = std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+    const int num_qubits = HandleQubits(*circuit);
     ScopedSimulator sim(num_qubits);
     if (sim.handle == 0)
         throw std::runtime_error("Failed to create simulator handle.");
@@ -210,7 +210,7 @@ std::vector<double> probabilities_core(std::shared_ptr<Circuits::Circuit<double>
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
-    int num_qubits = std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+    const int num_qubits = HandleQubits(*circuit);
     ScopedSimulator sim(num_qubits);
     if (sim.handle == 0)
         throw std::runtime_error("Failed to create simulator handle.");

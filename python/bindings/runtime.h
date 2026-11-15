@@ -33,4 +33,18 @@ struct ScopedSimulator
     ScopedSimulator &operator=(const ScopedSimulator &) = delete;
 };
 
+// The register a simulator handle is created with for a circuit: its width,
+// the highest qubit index plus one, which holds every qubit a network maps.
+// The handle takes an int. Where the width does not fit one (an index of
+// 2^31 - 1 or more), the number of qubits the circuit uses stands in: the
+// network maps those onto its host, which only has to hold that many.
+inline int HandleQubits(const Circuits::Circuit<double> &circuit)
+{
+    const size_t limit = static_cast<size_t>(std::numeric_limits<int>::max());
+    const size_t highest = circuit.GetMaxQubitIndex();
+    if (highest < limit)
+        return static_cast<int>(highest + 1);
+    return static_cast<int>(std::clamp<size_t>(circuit.GetQubits().size(), 1, limit));
+}
+
 } // namespace maestro_bindings
