@@ -539,6 +539,7 @@ void PathIntegralObserverError()
                 throw std::domain_error("observer failure");
         }
     };
+
     PathProbe sim;
     sim.AllocateQubits(1);
     sim.Initialize();
@@ -609,8 +610,7 @@ void ExtendedRoundingResidue()
         size_t total = 0;
         for (const auto &[key, hits] : counts)
         {
-            Require(!(key & 1) && ((key >> 1) & 1) == ((key >> 2) & 1) && ((key >> 2) & 1) == ((key >> 3) & 1),
-                    "extended marginal drew an impossible outcome");
+            Require(!(key & 1) && ((key >> 1) & 1) == ((key >> 2) & 1) && ((key >> 2) & 1) == ((key >> 3) & 1), "extended marginal drew an impossible outcome");
             total += hits;
         }
         Require(total == 4096, "extended marginal lost shots");
@@ -1521,9 +1521,8 @@ int main(int argc, char **argv)
         for (const auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix})
             run("QCSim seeded batch sampling " + std::to_string(int(method)), [&] { SeededBatchSampling(method); });
         run("QCSim legacy density sampling sequence", [&] { SeededBatchSampling(SimulationType::kDensityMatrix, true); });
-        for (const auto method :
-             {SimulationType::kStatevector, SimulationType::kDensityMatrix, SimulationType::kPathIntegral, SimulationType::kMatrixProductState,
-              SimulationType::kMatrixProductOperator})
+        for (const auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix, SimulationType::kPathIntegral,
+                                  SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
             run("QCSim multinomial counts " + std::to_string(int(method)), [&] { MultinomialBackendCounts(method); });
         run("QCSim single-site MPS multinomial sampling", SingleSiteMPSMultinomial);
         run("QCSim multinomial statevector span", StatevectorSpanCounts);

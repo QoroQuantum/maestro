@@ -5,9 +5,9 @@
 #include "../Noise/NoiseAdd.h"
 
 #include <array>
-#include <cmath>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <numeric>
 #include <optional>
@@ -1625,7 +1625,8 @@ void ClearedMpoStillSamplesInParallel()
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
     const bool fullBatch = network->UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 1000, 2, true, prepared);
-    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, fullBatch, prepared, executed);
+    const auto threads =
+        network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, fullBatch, prepared, executed);
     Check(threads == 4 && prepared && prepared->GetNumberOfQubits() == 2 && calls->load() == 1, "A cleared MPO forced terminal sampling onto one worker");
 
     for (bool onHost : {false, true})
@@ -2691,9 +2692,9 @@ class FirstChoiceCostModel : public Estimators::SimulatorsEstimatorInterface<>
         return true;
     }
 
-    std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::vector<std::pair<Backend, Method>> &candidates, std::shared_ptr<Circuit> &,
-                                                                size_t &, size_t, size_t, size_t, Backend &type, Method &method, std::vector<bool> &,
-                                                                const long long int, const double, const std::string &, const std::string &, size_t,
+    std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::vector<std::pair<Backend, Method>> &candidates, std::shared_ptr<Circuit> &, size_t &,
+                                                                size_t, size_t, size_t, Backend &type, Method &method, std::vector<bool> &, const long long int,
+                                                                const double, const std::string &, const std::string &, size_t,
                                                                 const std::vector<std::string> *, bool) const override
     {
         offers->insert(offers->end(), candidates.begin(), candidates.end());
@@ -2867,50 +2868,50 @@ void CostModelKeepsToTheList()
             for (const bool questFirst : {false, true})
                 for (const bool costModel : {false, true})
                     for (const bool whole : {false, true})
-                {
-                    auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
-                    QuietNetwork(*network);
-                    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
-                    const auto quest = std::make_pair(Backend::kQuestSim, Method::kStatevector);
-                    const auto stabilizer = std::make_pair(Backend::kQCSim, Method::kStabilizer);
-                    const auto first = questFirst ? quest : stabilizer;
-                    const auto second = questFirst ? stabilizer : quest;
-                    network->RemoveAllOptimizationSimulatorsAndAdd(first.first, first.second);
-                    network->AddOptimizationSimulator(second.first, second.second);
-                    network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
-                    network->SetOptimizeSimulator(true);
-                    if (costModel)
-                        network->InstallCostModel();
-                    const auto attached = network->GetSimulator();
-                    bool reported = false;
-                    try
                     {
-                        if (whole)
-                            network->RepeatedExecute(nonClifford, 4);
-                        else
-                            network->RepeatedExecuteOnHost(nonClifford, 0, 4);
+                        auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+                        QuietNetwork(*network);
+                        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                        const auto quest = std::make_pair(Backend::kQuestSim, Method::kStatevector);
+                        const auto stabilizer = std::make_pair(Backend::kQCSim, Method::kStabilizer);
+                        const auto first = questFirst ? quest : stabilizer;
+                        const auto second = questFirst ? stabilizer : quest;
+                        network->RemoveAllOptimizationSimulatorsAndAdd(first.first, first.second);
+                        network->AddOptimizationSimulator(second.first, second.second);
+                        network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+                        network->SetOptimizeSimulator(true);
+                        if (costModel)
+                            network->InstallCostModel();
+                        const auto attached = network->GetSimulator();
+                        bool reported = false;
+                        try
+                        {
+                            if (whole)
+                                network->RepeatedExecute(nonClifford, 4);
+                            else
+                                network->RepeatedExecuteOnHost(nonClifford, 0, 4);
+                        }
+                        catch (const std::exception &)
+                        {
+                            reported = true;
+                        }
+                        Check(reported, "A stabilizer list that could not run fell back to a simulator outside it");
+                        // The rejected run leaves the network's simulator as it was.
+                        const auto kept = network->GetSimulator();
+                        Check(kept && kept->GetSimulationType() == Method::kMatrixProductState &&
+                                  kept->GetNumberOfQubits() == Network::INetwork<>::kBackendPlaceholderQubits,
+                              "A rejected run changed the network's simulator");
+                        // A whole-network run without a cost model does not clear
+                        // the simulator before selection, so the rejection leaves
+                        // the same one, not a re-created copy.
+                        if (whole && !costModel)
+                            Check(kept == attached, "A run that did not touch the network's simulator re-created it");
+                        network->SetOptimizeSimulator(false);
+                        size_t total = 0;
+                        for (const auto &entry : network->RepeatedExecuteOnHost(nonClifford, 0, 4))
+                            total += entry.second;
+                        Check(total == 4, "The network's own backend could not run after a rejected run");
                     }
-                    catch (const std::exception &)
-                    {
-                        reported = true;
-                    }
-                    Check(reported, "A stabilizer list that could not run fell back to a simulator outside it");
-                    // The rejected run leaves the network's simulator as it was.
-                    const auto kept = network->GetSimulator();
-                    Check(kept && kept->GetSimulationType() == Method::kMatrixProductState &&
-                              kept->GetNumberOfQubits() == Network::INetwork<>::kBackendPlaceholderQubits,
-                          "A rejected run changed the network's simulator");
-                    // A whole-network run without a cost model does not clear
-                    // the simulator before selection, so the rejection leaves
-                    // the same one, not a re-created copy.
-                    if (whole && !costModel)
-                        Check(kept == attached, "A run that did not touch the network's simulator re-created it");
-                    network->SetOptimizeSimulator(false);
-                    size_t total = 0;
-                    for (const auto &entry : network->RepeatedExecuteOnHost(nonClifford, 0, 4))
-                        total += entry.second;
-                    Check(total == 4, "The network's own backend could not run after a rejected run");
-                }
             {
                 // When several candidates fail, the first one's failure is
                 // reported: the density matrix's, not that of the stabilizer
@@ -2949,8 +2950,10 @@ void CostModelKeepsToTheList()
                 // network simulator outside the list never runs.
                 auto network = std::make_shared<Net>(Types::qubits_vector{32}, std::vector<size_t>{32});
                 QuietNetwork(*network);
-                const auto first = questFirst ? std::make_pair(Backend::kQuestSim, Method::kStatevector) : std::make_pair(Backend::kQCSim, Method::kDensityMatrix);
-                const auto second = questFirst ? std::make_pair(Backend::kQCSim, Method::kDensityMatrix) : std::make_pair(Backend::kQuestSim, Method::kStatevector);
+                const auto first =
+                    questFirst ? std::make_pair(Backend::kQuestSim, Method::kStatevector) : std::make_pair(Backend::kQCSim, Method::kDensityMatrix);
+                const auto second =
+                    questFirst ? std::make_pair(Backend::kQCSim, Method::kDensityMatrix) : std::make_pair(Backend::kQuestSim, Method::kStatevector);
                 network->RemoveAllOptimizationSimulatorsAndAdd(first.first, first.second);
                 network->AddOptimizationSimulator(second.first, second.second);
                 network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
@@ -3025,8 +3028,7 @@ void ZeroShotsLeaveTheSimulator()
         const auto simulator = network->GetSimulator();
         simulator->ApplyX(0);
         Check(network->RepeatedExecute(x, 0).empty() && network->RepeatedExecuteOnHost(x, 0, 0).empty(), "A zero-shot execution returned results");
-        Check(network->GetSimulator() == simulator && std::abs(simulator->Probability(1) - 1.0) < 1e-12,
-              "A zero-shot execution reset the network's simulator");
+        Check(network->GetSimulator() == simulator && std::abs(simulator->Probability(1) - 1.0) < 1e-12, "A zero-shot execution reset the network's simulator");
     }
 }
 
