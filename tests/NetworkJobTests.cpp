@@ -412,8 +412,8 @@ std::shared_ptr<Circuit> SwapParityCircuit(size_t qubits, size_t layers, unsigne
 }
 
 // disable_optimized_swapping switches off the initial-layout search and the
-// lookahead router. When the bond cap is at least the largest Schmidt rank the
-// register allows, nothing is truncated and the route cannot change the state,
+// lookahead router. With a zero cutoff and a bond cap at least the largest
+// Schmidt rank the register allows, the route cannot change the state,
 // so both settings must reproduce the dense result. Registers and caps sit above
 // the thresholds that turn the optimisation on (12 routed qubits, cap 32); the
 // lookahead check keeps a moved threshold from making the comparison vacuous.
@@ -455,6 +455,7 @@ void SwapOptimizationKeepsExactResults()
                 job.optimiseMultipleShotsExecution = false;
                 job.config.SetConfiguration("matrix_product_state_max_bond_dimension", c.cap);
                 job.config.SetConfiguration("matrix_product_operator_max_bond_dimension", c.cap);
+                job.config.SetConfiguration("matrix_product_state_truncation_threshold", "0");
                 bool lookahead = !optimise;
                 job.onSimulatorReady = [&](const Simulators::ISimulator &sim) { lookahead = sim.IsRoutingLookaheadEnabled(); };
                 job.DoWork();
@@ -1487,17 +1488,22 @@ class ThreadingNetwork : public Net
   public:
     using Net::ExecutionThreads;
     using Net::Net;
+    using Net::UsesFullTerminalBatch;
 };
 
 void MultinomialTerminalDispatch()
 {
     auto network = std::make_shared<ThreadingNetwork>(Types::qubits_vector{10}, std::vector<size_t>{10});
     network->SetMaxSimulators(4);
+    // This dispatch case requires an MPO with no truncation limits.
+    network->Configure("matrix_product_operator_truncation_threshold", "0");
+    network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
     auto circuit = CF::CreateCircuit();
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
     const auto workers = [&](Method method, size_t bits, size_t shots, bool terminal = true) {
-        return network->ExecutionThreads(circuit, 10, 10, 10, shots, Backend::kQCSim, method, terminal, bits, prepared, executed);
+        const bool fullBatch = terminal && network->UsesFullTerminalBatch(Backend::kQCSim, method, shots, bits, true, prepared);
+        return network->ExecutionThreads(circuit, 10, 10, 10, shots, Backend::kQCSim, method, terminal, fullBatch, prepared, executed);
     };
     network->Configure("seed", "0");
     Check(workers(Method::kExtendedStabilizer, 8, 2048) == 1, "The default seeded policy split a terminal marginal");
@@ -1618,7 +1624,8 @@ void ClearedMpoStillSamplesInParallel()
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
-    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, 2, prepared, executed);
+    const bool fullBatch = network->UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 1000, 2, true, prepared);
+    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, fullBatch, prepared, executed);
     Check(threads == 4 && prepared && prepared->GetNumberOfQubits() == 2 && calls->load() == 1, "A cleared MPO forced terminal sampling onto one worker");
 
     for (bool onHost : {false, true})

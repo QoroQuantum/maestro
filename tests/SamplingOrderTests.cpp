@@ -175,6 +175,10 @@ void MultinomialBackendCounts(SimulationType method)
     auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, method);
     sim->AllocateQubits(3);
     sim->Initialize();
+    // This test requires the exact MPO marginal, so override its positive
+    // backend default before applying any potentially truncating gates.
+    if (method == SimulationType::kMatrixProductOperator)
+        sim->Configure("matrix_product_operator_truncation_threshold", "0");
     sim->ApplyRy(1, 2. * std::asin(.5));
     sim->ApplyCX(1, 2);
     // Tensor chains split counts for one distinct measured qubit only.
@@ -302,6 +306,8 @@ void MPOTruncationKeepsNativeSampler()
         if (bond)
             sim->Configure("matrix_product_operator_max_bond_dimension", bond);
         sim->Initialize();
+        // Isolate bond-cap truncation from the default singular-value cutoff.
+        sim->Configure("matrix_product_operator_truncation_threshold", "0");
         const double pi = std::acos(-1.);
         sim->ApplyH(0);
         sim->ApplyRy(2, 3. * pi / 4.);

@@ -31,6 +31,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             InitializeSamplingSeed();
             {
                 mpsSimulator = std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits, Utils::RandomStream::FreshNativeSeed());
+                mpsSimulator->setLimitEntanglement(std::stod(GetConfiguration("matrix_product_state_truncation_threshold")));
                 if (!useOptimalMeetingPosition)
                     mpsSimulator->SetUseOptimalMeetingPosition(false);
                 InstallBondSummary(*mpsSimulator, bondDimensionCallback);
@@ -120,7 +121,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 if (dummySim)
                     dummySim->SetMaxBondDimension(EffectiveLookaheadMaxBondDimension(dummySim->getNrQubits(), limit));
             }
-            else if (std::string(key) == "matrix_product_state_truncation_threshold")
+            else if (Configuration::CanonicalKey(key) == "matrix_product_state_truncation_threshold")
             {
                 const double threshold = configuration.GetConfigurationAsDouble(key);
                 if (threshold >= 0.)
@@ -1051,6 +1052,11 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             cloned->SeedForExecution(seed);
         cloned->RefreshRoutingCallback();
         return cloned;
+    }
+
+    bool CanSampleSingleQubitMarginal() const override
+    {
+        return mpsSimulator && UseProbabilitySampling();
     }
 
   protected:

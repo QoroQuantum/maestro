@@ -1309,6 +1309,21 @@ class IState
 
     virtual const std::unordered_map<std::string, std::string> &GetConfigMap() const = 0;
 
+    // Configuration propagated between backends. Implementations with
+    // implicit defaults can expose them in GetConfigMap while omitting them
+    // here, so selecting another backend preserves its own defaults.
+    virtual const std::unordered_map<std::string, std::string> &GetExplicitConfigMap() const
+    {
+        return GetConfigMap();
+    }
+
+    // Whether the current state admits the exact single-qubit marginal used
+    // by batched terminal counts. This may change after truncation or restore.
+    virtual bool CanSampleSingleQubitMarginal() const
+    {
+        return false;
+    }
+
   protected:
     /** Shared by SetSeed and backend Configure("seed") implementations. */
     void SeedAuxiliaryRng(uint64_t seed)

@@ -1235,6 +1235,10 @@ if(COMPILE_TESTS)
     target_include_directories(backend_specialization_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(backend_specialization_tests PRIVATE maestro Threads::Threads)
     add_test(NAME backend_specialization COMMAND backend_specialization_tests)
+    add_executable(truncation_config_tests tests/TruncationConfigTests.cpp)
+    target_include_directories(truncation_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(truncation_config_tests PRIVATE maestro)
+    add_test(NAME truncation_config COMMAND truncation_config_tests)
     add_executable(gate_fusion_tests tests/GateFusionTests.cpp)
     target_include_directories(gate_fusion_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(gate_fusion_tests PRIVATE maestro)
@@ -1250,6 +1254,12 @@ if(COMPILE_TESTS)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set_property(TARGET backend_specialization_tests APPEND_STRING PROPERTY
             LINK_FLAGS " -Wl,--disable-new-dtags")
+        set_property(TARGET truncation_config_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+        add_dependencies(truncation_config_tests mock_gpu_plugin)
+        add_test(NAME truncation_config_gpu COMMAND ${CMAKE_COMMAND} -E env
+            "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+            $<TARGET_FILE:truncation_config_tests> --mock-gpu)
         add_test(NAME gate_fusion_gpu COMMAND gate_fusion_tests --gpu)
         add_test(NAME gate_fusion_distributed COMMAND gate_fusion_tests --distributed)
         add_test(NAME fusion_routing_gpu COMMAND fusion_routing_tests --gpu)

@@ -31,7 +31,11 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             InitializeSamplingSeed();
             {
                 mpoSimulator = std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits, Utils::RandomStream::FreshNativeSeed());
-                ForgetTruncationSettings();
+                const double threshold = std::stod(GetConfiguration("matrix_product_state_truncation_threshold"));
+                mpoSimulator->setLimitEntanglement(threshold);
+                cutoffEnabled = threshold > 0.;
+                bondLimitEnabled = false;
+                ForgetTruncationHistory();
                 if (!useOptimalMeetingPosition)
                     mpoSimulator->SetUseOptimalMeetingPosition(false);
                 InstallBondSummary(*mpoSimulator, bondDimensionCallback);
@@ -77,6 +81,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         converted.reserve(mixture.size());
         for (const auto &[basisState, weight] : mixture)
             converted.emplace_back(static_cast<size_t>(basisState), weight);
+        NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(converted);
     }
 
@@ -87,6 +92,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         Clear();
         nrQubits = num_qubits;
         Initialize();
+        NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(mixture);
     }
 
@@ -96,6 +102,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         {
             mpoSimulator->Clear();
             curMaxBondDim = 1;
+            stateMayHaveTruncated = false;
         }
         upcomingGateIndex = 0;
         ResetDummySimulator();
@@ -133,6 +140,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             const auto limit = std::stoll(value);
             if (limit < 0)
                 throw std::invalid_argument("Negative MPO bond dimension");
+            bondLimitEnabled = limit > 0;
             if (mpoSimulator)
             {
                 if (limit == 0)
@@ -140,7 +148,6 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 else
                 {
                     mpoSimulator->setLimitBondDimension(limit);
-                    NoteBondLimit(limit);
                 }
             }
             const std::string limitValue(value);
@@ -160,18 +167,13 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         }
         if (mpoSimulator)
         {
-            if (std::string(key) == "matrix_product_state_max_bond_dimension" || std::string(key) == "matrix_product_operator_max_bond_dimension")
-            {
-                mpoSimulator->setLimitBondDimension(configuration.GetConfigurationAsInt(key));
-                NoteBondLimit(configuration.GetConfigurationAsInt(key));
-            }
-            else if (std::string(key) == "matrix_product_state_truncation_threshold" || std::string(key) == "matrix_product_operator_truncation_threshold")
+            if (Configuration::CanonicalKey(key) == "matrix_product_state_truncation_threshold")
             {
                 const double threshold = configuration.GetConfigurationAsDouble(key);
                 if (threshold >= 0.)
                 {
                     mpoSimulator->setLimitEntanglement(threshold);
-                    truncationLimitApplied = truncationLimitApplied || threshold > 0.;
+                    cutoffEnabled = threshold > 0.;
                 }
             }
             else if (std::string(key) == "matrix_product_state_truncation_mode" || std::string(key) == "matrix_product_operator_truncation_mode")
@@ -251,7 +253,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         automaticRoutingDepth = false;
         InvalidateBoundedRouting(true);
         mpoSimulator = nullptr;
-        ForgetTruncationSettings();
+        ForgetTruncationHistory();
         ClearDummySimulator();
         nrQubits = 0;
         upcomingGateIndex = 0;
@@ -345,6 +347,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             throw std::runtime_error("QCSim MPO state is not initialized");
         // As for a channel: the native update can route before it finishes.
         InvalidateDummyHistory();
+        if (targets.size() == 2)
+            NotePossibleTruncation();
         mpoSimulator->ApplySuperoperator(superoperator, static_cast<Eigen::Index>(targets[0]),
                                          targets.size() > 1 ? static_cast<Eigen::Index>(targets[1]) : Eigen::Index{0});
         InvalidateDummyHistory();
@@ -379,6 +383,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]));
             else
             {
+                NotePossibleTruncation();
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]), static_cast<Eigen::Index>(targets[1]));
             }
         }
@@ -440,6 +445,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         // Native channel/operator application can invoke routing before it
         // finishes; discard old estimates both before and after that call.
         InvalidateDummyHistory();
+        if (qubits.size() == 2)
+            NotePossibleTruncation();
         if (normalize)
             mpoSimulator->ApplyOperatorAndNormalize(op);
         else
@@ -454,6 +461,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             return IState::MoveAtBeginningOfChain(qubits);
         const auto selected = MPOValidation::Qubits(qubits, nrQubits);
         const std::set<Eigen::Index> targets(selected.begin(), selected.end());
+        NotePossibleTruncation();
         mpoSimulator->MoveAtBeginningOfChain(targets);
         InvalidateDummyHistory();
     }
@@ -534,6 +542,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         if (!mpoSimulator)
             throw std::runtime_error("Hermitization is only available for QCSim MPO");
+        NotePossibleTruncation();
         mpoSimulator->Hermitize();
     }
 
@@ -541,7 +550,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         InvalidateDummyHistory();
         if (mpoSimulator)
+        {
+            NotePossibleTruncation();
             mpoSimulator->Trim();
+        }
         else
             throw std::runtime_error("Trim is only available for QCSim MPS and MPO");
     }
@@ -741,12 +753,15 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     void SaveState() override
     {
         mpoSimulator->SaveState();
+        savedStateMayHaveTruncated = stateMayHaveTruncated;
         SaveDummyState();
     }
 
     void RestoreState() override
     {
         mpoSimulator->RestoreState();
+        if (savedStateMayHaveTruncated)
+            stateMayHaveTruncated = *savedStateMayHaveTruncated;
         RestoreDummyState();
     }
 
@@ -1041,8 +1056,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         }
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
-        // The copied operator carries this one's truncation history.
-        cloned->truncationLimitApplied = cloned->truncationLimitApplied || truncationLimitApplied;
+        cloned->cutoffEnabled = cutoffEnabled;
+        cloned->bondLimitEnabled = bondLimitEnabled;
+        cloned->stateMayHaveTruncated = stateMayHaveTruncated;
+        cloned->savedStateMayHaveTruncated = savedStateMayHaveTruncated;
         cloned->RefreshRoutingSettings();
         cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
         cloned->dummyHistoryValid = dummyHistoryValid;
@@ -1053,6 +1070,11 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             cloned->SeedForExecution(seed);
         cloned->RefreshRoutingCallback();
         return cloned;
+    }
+
+    bool CanSampleSingleQubitMarginal() const override
+    {
+        return mpoSimulator && !stateMayHaveTruncated;
     }
 
   protected:
@@ -1067,7 +1089,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     template <bool Many> bool TrySingleQubitCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &result)
     {
         return mpoSimulator && SingleQubitCounts<Many>(qubits, shots, result, [&](Types::qubit_t q) -> std::optional<double> {
-                   if (MayHaveTruncated())
+                   if (!CanSampleSingleQubitMarginal())
                        return std::nullopt;
                    try
                    {
@@ -1080,26 +1102,18 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                });
     }
 
-    // Whether a bond cap or a positive singular-value threshold has been
-    // applied since the operator was created. The flag is a property of the
-    // operator's history, not of its current bonds: QCSim installs a basis
-    // mixture and truncates in Trim() and Hermitize() without reporting bond
-    // dimensions, and a saved state can be restored after Reset(). So the flag
-    // survives Reset, SaveState/RestoreState and clones, and only a new or
-    // cleared operator starts without it.
-    bool MayHaveTruncated() const
+    // Configuring a limit cannot truncate a state. Record history only when
+    // an operation can use it; resetting the state clears that history while
+    // a saved snapshot retains its own history for a later restore.
+    void NotePossibleTruncation()
     {
-        return truncationLimitApplied;
+        stateMayHaveTruncated = stateMayHaveTruncated || (nrQubits > 1 && (cutoffEnabled || bondLimitEnabled));
     }
 
-    void NoteBondLimit(long long limit)
+    void ForgetTruncationHistory()
     {
-        truncationLimitApplied = truncationLimitApplied || limit > 0;
-    }
-
-    void ForgetTruncationSettings()
-    {
-        truncationLimitApplied = false;
+        stateMayHaveTruncated = false;
+        savedStateMayHaveTruncated.reset();
     }
 
     std::vector<double> CurrentBondDimensions() const override
@@ -1126,8 +1140,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     }
 
     std::unique_ptr<QC::TensorNetworks::MPOSimulator> mpoSimulator;
-    // A truncation limit was applied since the operator was created (MayHaveTruncated).
-    bool truncationLimitApplied = false;
+    bool cutoffEnabled = true;
+    bool bondLimitEnabled = false;
+    bool stateMayHaveTruncated = false;
+    std::optional<bool> savedStateMayHaveTruncated;
 
   private:
     template <class Function> void ApplyDecomposedGate(Function &&apply, const Types::qubits_vector &affectedQubits)
@@ -1143,6 +1159,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         if constexpr (sizeof...(Qubits) <= 2)
         {
+            if (gate.getQubitsNumber() > 1)
+                NotePossibleTruncation();
             mpoSimulator->ApplyGate(gate, static_cast<Eigen::Index>(qubits)...);
             if constexpr (sizeof...(Qubits) == 2)
             {

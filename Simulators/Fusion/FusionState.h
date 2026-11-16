@@ -89,6 +89,19 @@ class FusionState : public ISimulator
         return config_;
     }
 
+    const std::unordered_map<std::string, std::string> &GetExplicitConfigMap() const override
+    {
+        explicitConfig_ = immediate_->GetExplicitConfigMap();
+        explicitConfig_["gate_fusion"] = RequestedSetting();
+        return explicitConfig_;
+    }
+
+    bool CanSampleSingleQubitMarginal() const override
+    {
+        Synchronize();
+        return immediate_->CanSampleSingleQubitMarginal();
+    }
+
     void SetSeed(uint64_t seed) override
     {
         Flush();
@@ -1803,5 +1816,6 @@ class FusionState : public ISimulator
     bool backendRoutingInstalled_ = false;
     std::optional<Context> saved_, destructiveSaved_;
     mutable std::unordered_map<std::string, std::string> config_;
+    mutable std::unordered_map<std::string, std::string> explicitConfig_;
 };
 } // namespace Simulators::Private
