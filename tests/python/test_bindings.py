@@ -2813,10 +2813,10 @@ class TestOptimizedSwappingParity:
     Those only run for an MPS of at least 12 qubits (an MPO of at least 6)
     whose bond cap is unset or at least 32; anything smaller runs the same
     code either way, so the cases here sit above those thresholds. Each cap is
-    at least the largest Schmidt rank the register allows, so nothing is
-    truncated and both settings must reproduce the statevector. Estimate-time
-    reductions are off so the whole register reaches the tensor-network
-    backend.
+    at least the largest Schmidt rank the register allows, and the singular
+    value cutoff is explicitly disabled so both settings must reproduce the
+    statevector. Estimate-time reductions are off so the whole register
+    reaches the tensor-network backend.
     """
 
     MPS = maestro.SimulationType.MatrixProductState
@@ -2850,6 +2850,7 @@ class TestOptimizedSwappingParity:
             simulator_type=maestro.SimulatorType.QCSim,
             simulation_type=method,
             disable_optimized_swapping=disable,
+            singular_value_threshold=0.0,
             **extra,
         )
         if bond_dimension is not None:

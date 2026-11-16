@@ -2,6 +2,7 @@
 #include "Execution/SimulatorConfig.h"
 #include "Simulators/Core/Factory.h"
 
+#include <boost/json.hpp>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -153,6 +154,75 @@ void CheckNetwork(Method method)
     Check(!network->GetSimulator()->GetExplicitConfigMap().count(kStateThreshold), "reused handle retained its old explicit threshold");
     CheckTruncation(*network->GetSimulator(), 2e-8, true);
     owner.DestroySimpleSimulator(handle);
+}
+
+boost::json::value ReadJsonResult(char *raw)
+{
+    Check(raw != nullptr, "JSON execution returned no result");
+    const std::string result(raw);
+    FreeResult(raw);
+    return boost::json::parse(result);
+}
+
+void CheckJsonThresholds(Method method)
+{
+    namespace j = boost::json;
+    const char *methodName = method == Method::kMatrixProductState ? "matrix_product_state" : "matrix_product_operator";
+    const char *circuit = "OPENQASM 2.0; qreg q[2]; creg c[2]; ry(0.00000002) q[0]; cx q[0],q[1];";
+    for (const char *selection : {"fixed", "automatic"})
+        for (const char *key : {"singular_value_threshold", kStateThreshold})
+            for (const auto &threshold : j::array{nullptr, 0.1, 0, 1e-18, 1e-15})
+            {
+                j::object options{{"auto_reduce", false}, {"enable_causal_cone_reduction", false}, {"enable_observable_clustering", false}};
+                if (!threshold.is_null())
+                    options[key] = threshold;
+                const j::object request{{"schema_version", 2},
+                                        {"operation", "estimate"},
+                                        {"circuit", j::object{{"format", "openqasm"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", circuit}}},
+                                        {"simulator", j::object{{"backend", "qcsim"}, {"method", methodName}, {"selection", selection}, {"options", options}}},
+                                        {"observables", j::array{"XX"}}};
+                const auto result = ReadJsonResult(MaestroRunRequestJson(j::serialize(request).c_str()));
+                Check(result.at("ok").as_bool(), "Native JSON threshold request failed");
+                Check(result.at("execution_metadata").at("method") == methodName, "Native JSON threshold test selected another method");
+                if (!threshold.is_null())
+                    Check(std::stod(result.at("execution_metadata").at("configured_options").at(kStateThreshold).as_string().c_str()) ==
+                              threshold.to_number<double>(),
+                          "Native JSON rounded away the threshold");
+                const double expected = !threshold.is_null() && threshold.to_number<double>() < 1e-15 ? std::sin(2e-8) : 0.;
+                Check(std::abs(result.at("expectation_values").as_array()[0].to_number<double>() - expected) < 1e-12,
+                      "Native JSON threshold did not control truncation");
+            }
+
+    // Legacy JSON accepts numeric strings as well as numbers and reuses a handle.
+    // Exercise both entry points because each forwards the cutoff separately.
+    auto &owner = *static_cast<Maestro *>(GetMaestroObject());
+    for (const bool estimate : {false, true})
+    {
+        const auto handle = owner.CreateSimpleSimulator(2, 2);
+        const auto network = owner.GetSimpleSimulator(handle);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, method);
+        for (const auto &threshold : j::array{nullptr, 0.1, 0, 1e-18, 1e-15, "0.1", "0", "1e-18"})
+        {
+            j::object options{{"shots", 8}, {"seed", 73}};
+            if (!threshold.is_null())
+                options[kStateThreshold] = threshold;
+            const auto input = j::serialize(options);
+            const std::string measured = std::string(circuit) + " measure q -> c;";
+            const auto result =
+                ReadJsonResult(estimate ? SimpleEstimate(handle, circuit, "XX", input.c_str()) : SimpleExecute(handle, measured.c_str(), input.c_str()));
+            const double cutoff = threshold.is_null()     ? 1e-15
+                                  : threshold.is_string() ? std::stod(threshold.as_string().c_str())
+                                                          : threshold.to_number<double>();
+            Check(network->GetLastSimulationType() == method, "Legacy JSON threshold test selected another method");
+            CheckThreshold(*network->GetSimulator(), cutoff);
+            if (estimate)
+                Check(std::abs(result.at("expectation_values").as_array()[0].to_number<double>() - (cutoff < 1e-15 ? std::sin(2e-8) : 0.)) < 1e-12,
+                      "Legacy JSON threshold did not control truncation");
+            else
+                CheckTruncation(*network->GetSimulator(), 2e-8, cutoff >= 1e-15);
+        }
+        owner.DestroySimpleSimulator(handle);
+    }
 }
 
 // Exercise the QCSim placeholder used by automatic backend selection, both
@@ -516,6 +586,7 @@ int main(int argc, char **argv)
             for (bool fused : {false, true})
                 CheckLifecycle(method, fused);
             CheckNetwork(method);
+            CheckJsonThresholds(method);
         }
         CheckDoubleConfiguration();
         CheckAliasBeforeCapture();
