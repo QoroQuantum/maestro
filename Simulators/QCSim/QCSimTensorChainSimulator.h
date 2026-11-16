@@ -54,12 +54,31 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
 
     std::string GetConfiguration(const char *key) const override
     {
+        if (key && Configuration::CanonicalKey(key) == "matrix_product_state_truncation_threshold")
+            return configuration.IsSet(key) ? configuration.GetConfiguration(key) : kDefaultTruncationThreshold;
         if (key && std::string(key) == RoutingConfig::kStrategy && !configuration.IsSet(key))
             return "legacy";
         return RoutingBase::GetConfiguration(key);
     }
 
+    const std::unordered_map<std::string, std::string> &GetConfigMap() const override
+    {
+        effectiveConfig = configuration.GetConfigMap();
+        effectiveConfig.try_emplace("matrix_product_state_truncation_threshold", kDefaultTruncationThreshold);
+        if (operatorChain)
+            effectiveConfig["matrix_product_operator_truncation_threshold"] = effectiveConfig.at("matrix_product_state_truncation_threshold");
+        return effectiveConfig;
+    }
+
+    const std::unordered_map<std::string, std::string> &GetExplicitConfigMap() const override
+    {
+        return configuration.GetConfigMap();
+    }
+
   protected:
+    static constexpr const char *kDefaultTruncationThreshold = "1e-15";
+    mutable std::unordered_map<std::string, std::string> effectiveConfig;
+
     // One distinct measured qubit, possibly repeated. Its marginal comes from a
     // single chain contraction and one binomial draw splits all shots; native
     // terminal sampling contracts once per shot instead. probabilityZero(q)

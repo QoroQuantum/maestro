@@ -108,6 +108,8 @@ struct SimulatorConfig
     // configuration so initial-layout planning and execution share the cap.
     // The three truncation settings also apply to MPO and GPU tensor networks.
     std::optional<size_t> max_bond_dimension = std::nullopt;
+    // Unset keeps the backend default: 1e-15 for QCSim MPS/MPO. Explicit zero
+    // disables this cutoff while retaining the backend's numerical rank floor.
     std::optional<double> singular_value_threshold = std::nullopt;
     // "relative_max" (keep sigma_i >= threshold * sigma_max, the historical
     // QCSim/GPU convention) or "discarded_weight" (discard the smallest singular
@@ -587,6 +589,9 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->SetOptimizeSimulator(!config.fixed_backend);
     network->Configure("counts_policy", config.counts_policy.c_str());
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
+    if (!config.singular_value_threshold && !config.native_options.count("matrix_product_state_truncation_threshold") &&
+        !config.native_options.count("matrix_product_operator_truncation_threshold"))
+        network->RemoveConfiguration("matrix_product_state_truncation_threshold");
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
     if (config.mps_routing_strategy)

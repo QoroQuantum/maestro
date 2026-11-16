@@ -260,6 +260,14 @@ print(result["method"])
 (py_mps_truncation_mode)=
 #### Truncation mode
 
+QCSim MPS and MPO use a default `singular_value_threshold` of `1e-15` when
+the option is `None`. Set a different value to override it, or `0` to retain
+all singular values above the numerical rank cutoff. The simulator's
+`GetConfiguration` reports the effective threshold.
+Automatic backend selection preserves each backend's own default; an explicit
+threshold follows the selection. Reconfiguring a handle with `None` restores the
+backend default unless `native_options` supplies a threshold.
+
 `singular_value_threshold` is read according to `truncation_mode`:
 
 - `"discarded_weight"` (the default on every backend) discards the smallest

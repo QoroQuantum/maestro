@@ -12,6 +12,9 @@
 #ifndef _SIMULATOR_CONFIGURATION_H_
 #define _SIMULATOR_CONFIGURATION_H_
 
+#include <iomanip>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -129,6 +132,11 @@ class Configuration
 
     void SetConfiguration(const std::string &key, const std::string &value)
     {
+        if (key == "matrix_product_operator_truncation_threshold")
+        {
+            SetConfiguration("matrix_product_state_truncation_threshold", value);
+            return;
+        }
         if (key == RoutingConfig::kStrategy)
             RoutingConfig::ParseStrategy(value);
         else if (key == RoutingConfig::kVirtualBonds || key == RoutingConfig::kLegacyCap)
@@ -187,7 +195,10 @@ class Configuration
         // specially handled, ignore it
         if (IgnoredSetting(key))
             return;
-        SetConfiguration(key, std::to_string(value));
+        // std::to_string rounds small cutoffs (including 1e-15) to zero.
+        std::ostringstream text;
+        text << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+        SetConfiguration(key, text.str());
     }
 
     /**
@@ -199,7 +210,7 @@ class Configuration
      */
     void RemoveConfiguration(const std::string &key)
     {
-        configMap.erase(key);
+        configMap.erase(CanonicalKey(key));
     }
 
     /**
@@ -212,7 +223,7 @@ class Configuration
      */
     bool IsSet(const std::string &key) const
     {
-        return configMap.find(key) != configMap.end();
+        return configMap.find(CanonicalKey(key)) != configMap.end();
     }
 
     /**
@@ -225,7 +236,7 @@ class Configuration
      */
     std::string GetConfiguration(const std::string &key) const
     {
-        auto it = configMap.find(key);
+        auto it = configMap.find(CanonicalKey(key));
         if (it != configMap.end())
         {
             return it->second;
@@ -235,7 +246,7 @@ class Configuration
 
     long long int GetConfigurationAsInt(const std::string &key) const
     {
-        auto it = configMap.find(key);
+        auto it = configMap.find(CanonicalKey(key));
         if (it != configMap.end())
         {
             return std::stoll(it->second);
@@ -247,7 +258,7 @@ class Configuration
     // the whole range, and a value near SIZE_MAX misconverts through double.
     unsigned long long int GetConfigurationAsUnsigned(const std::string &key) const
     {
-        auto it = configMap.find(key);
+        auto it = configMap.find(CanonicalKey(key));
         if (it != configMap.end())
         {
             return std::stoull(it->second);
@@ -257,7 +268,7 @@ class Configuration
 
     double GetConfigurationAsDouble(const std::string &key) const
     {
-        auto it = configMap.find(key);
+        auto it = configMap.find(CanonicalKey(key));
         if (it != configMap.end())
         {
             return std::stod(it->second);
@@ -320,7 +331,7 @@ class Configuration
     {
         if (!simulator)
             return;
-        ApplyConfigurationFromMap(simulator->GetConfigMap());
+        ApplyConfigurationFromMap(simulator->GetExplicitConfigMap());
     }
 
     void ApplyConfigurationFromMap(const std::unordered_map<std::string, std::string> &config)
@@ -336,11 +347,20 @@ class Configuration
 
     bool WasApplied(const std::string &key, const std::string &value) const
     {
-        auto it = configMap.find(key);
+        auto it = configMap.find(CanonicalKey(key));
         if (it != configMap.end())
             return it->second == value;
 
         return false;
+    }
+
+    // Store one spelling so aliases work before capture and replay is ordered
+    // by the caller's updates, never by unordered-map iteration.
+    static std::string CanonicalKey(const std::string &key)
+    {
+        if (key == "matrix_product_operator_truncation_threshold")
+            return "matrix_product_state_truncation_threshold";
+        return key;
     }
 
   private:

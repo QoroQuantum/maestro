@@ -839,14 +839,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
+        const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
+                                    simulator->GetNumberOfQubits() != nrQubits;
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim);
         const size_t nrThreads =
-            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
+            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, fullTerminalBatch, optSim, executed);
 
         std::mutex resultsMutex;
 
         auto dcirc = distCirc;
 
-        const bool logicalTerminal = terminalSampling && shots > 1 && !UsesFullTerminalBatch(simType, method, shots, measuredWidth);
+        const bool logicalTerminal = terminalSampling && shots > 1 && !fullTerminalBatch;
         if (reproducibleSampling &&
             (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
@@ -1083,16 +1086,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
         const size_t nrThreads =
-            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
+            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, fullTerminalBatch, optSim, executed);
 
         std::mutex resultsMutex;
 
         auto dcirc = distCirc;
 
-        const bool logicalTerminal = terminalSampling && shots > 1 && !UsesFullTerminalBatch(simType, method, shots, measuredWidth);
+        const bool logicalTerminal = terminalSampling && shots > 1 && !fullTerminalBatch;
         if (reproducibleSampling &&
             (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
@@ -1400,7 +1404,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // gets them from the network's configuration.
         configuration = EffectiveConfiguration();
         configuration.RemoveConfiguration(key);
-        if (simulator && simulator->GetConfigMap().count(key))
+        if (simulator && simulator->GetExplicitConfigMap().count(Simulators::Configuration::CanonicalKey(key)))
             CreateSimulator(simulator->GetType(), simulator->GetSimulationType(), simulatorQubits);
     }
 
@@ -3172,7 +3176,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // Keep adaptive terminal samplers on the full request: splitting it could
     // put every block below the crossover. This decision must not depend on
     // the requested worker count, since it also selects the logical RNG layout.
-    bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth) const
+    bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth, bool startsFromZero,
+                               const std::shared_ptr<Simulators::ISimulator> &prepared = nullptr) const
     {
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
             method == Simulators::SimulationType::kDensityMatrix)
@@ -3187,15 +3192,23 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (method == Simulators::SimulationType::kMatrixProductState)
             return !configuration.IsSet("mps_sample_measure_algorithm") ||
                    configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities";
-        // A truncating MPO retains its native sampler instead of using an
-        // exact marginal contraction.
+        // A prepared state has already executed a circuit prefix, so its history
+        // matters even when the execution started from zero. For an unprepared
+        // reset/reallocation, the old state (possibly already cleared) will be
+        // discarded: only the limits the pending circuit may use matter.
+        const auto &state = prepared ? prepared : simulator;
+        if (method != Simulators::SimulationType::kMatrixProductOperator || !state || state->GetType() != type || state->GetSimulationType() != method)
+            return false;
+        if ((prepared || !startsFromZero) && !state->CanSampleSingleQubitMarginal())
+            return false;
+        // Implicit defaults are absent from network settings but remain visible
+        // on the backend wrapper, including after Clear().
         const auto truncates = [&](const char *key) {
-            const auto value = configuration.GetConfiguration(key);
+            const auto value = configuration.IsSet(key) ? configuration.GetConfiguration(key) : state->GetConfiguration(key);
             return !value.empty() && std::strtod(value.c_str(), nullptr) > 0.;
         };
-        return method == Simulators::SimulationType::kMatrixProductOperator && !truncates("matrix_product_state_max_bond_dimension") &&
-               !truncates("matrix_product_operator_max_bond_dimension") && !truncates("matrix_product_state_truncation_threshold") &&
-               !truncates("matrix_product_operator_truncation_threshold");
+        return !truncates("matrix_product_state_max_bond_dimension") && !truncates("matrix_product_operator_max_bond_dimension") &&
+               !truncates("matrix_product_state_truncation_threshold") && !truncates("matrix_product_operator_truncation_threshold");
     }
 
     // Shot workers for one execution. Dense states draw every terminal shot
@@ -3204,8 +3217,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // workers help, but only by sampling clones of one prepared state. Without
     // one from backend selection, prepare it here once; if that is impossible,
     // keep a single worker rather than evolving the MPO once per worker.
+    // Use the same batch decision as the caller's logical RNG partition, made
+    // before any worker-dependent preparation can change the simulator state.
     size_t ExecutionThreads(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, size_t shots,
-                            Simulators::SimulatorType simType, Simulators::SimulationType method, bool terminalSampling, size_t measuredWidth,
+                            Simulators::SimulatorType simType, Simulators::SimulationType method, bool terminalSampling, bool fullTerminalBatch,
                             std::shared_ptr<Simulators::ISimulator> &optSim, std::vector<bool> &executed)
     {
         size_t nrThreads = GetMaxSimulators();
@@ -3213,7 +3228,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (Simulators::IsGpuSimulator(simType))
             return 1;
 #endif
-        if (simType == Simulators::SimulatorType::kQuestSim || (terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth)))
+        if (simType == Simulators::SimulatorType::kQuestSim || fullTerminalBatch)
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)

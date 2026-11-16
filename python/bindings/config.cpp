@@ -274,7 +274,8 @@ void bind_config(nb::module_ &m)
                     "of singular values; under 'discarded_weight' it bounds the discarded "
                     "normalised squared weight, so the same number truncates much harder "
                     "(1e-8 drops singular values up to about 1e-4 of the spectrum's norm). "
-                    "None uses the backend default.");
+                    "None uses the backend default (1e-15 for QCSim MPS and MPO). "
+                    "An explicit value, including zero, replaces that default.");
     BindConfigField(config_class, "truncation_mode", &SimulatorConfig::truncation_mode,
                     "'relative_max' drops singular values below singular_value_threshold "
                     "times the largest; 'discarded_weight' (the default on every backend) "

@@ -36,7 +36,7 @@ The constructor takes every option by keyword only.
 | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend. `Gpu`, `DistributedGpu` and `DistributedMpiGpu` require GPU access; see {doc}`/getting-started/gpu-access`. |
 | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
 | `max_bond_dimension` | `int` or `None` | `None` | Bond dimension limit for MPS, MPO and GPU tensor networks. For GPU MPS/MPO, `None` uses 128. Other backends keep their own defaults. |
-| `singular_value_threshold` | `float` or `None` | `None` | Truncation threshold for MPS, MPO and GPU tensor networks, read according to `truncation_mode` |
+| `singular_value_threshold` | `float` or `None` | `None` | Truncation threshold for MPS, MPO and GPU tensor networks, read according to `truncation_mode`. `None` uses the backend default: `1e-15` for QCSim MPS/MPO. An explicit value, including `0`, replaces that default. |
 | `truncation_mode` | `str` or `None` | `None` (`"discarded_weight"`) | `"discarded_weight"` (Qiskit Aer and ITensor convention: discard the smallest singular values until their cumulative squared weight reaches the threshold) or `"relative_max"` (discard singular values below `threshold * sigma_max`). The first compares squared weights, so the same threshold truncates much harder. Only QCSim and GPU support `"relative_max"`; Aer raises `ValueError`. |
 | `precision` | `str` or `None` | `None` | `"single"` or `"double"` for Qiskit Aer and the GPU simulators; `None` keeps each backend's default. QCSim always uses double precision. |
 | `seed` | `int` or `None` | `None` | Seeds all backend and Maestro sampling random streams. Parallel jobs derive deterministic, distinct child streams. |
