@@ -1865,6 +1865,62 @@ BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
         // A mixed-state backend holds the state and is unaffected.
         BOOST_CHECK(MaestroExecution::InjectsExactChannels(density, *model));
     }
+    // A truncation threshold bounds the propagated operator: relaxation then runs as exact channels.
+    {
+        auto truncated = propagator;
+        truncated.pp_coefficient_threshold = 1e-4;
+        auto native = propagator;
+        native.native_options["pauli_propagator_coefficient_threshold"] = "1e-4";
+        auto zero = propagator;
+        zero.pp_coefficient_threshold = 0.0;
+        auto capped = propagator;
+        capped.pp_max_pauli_weight = 2;
+        auto relaxing = std::make_shared<Circuits::Circuit<>>();
+        relaxing->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+        relaxing->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+        relaxing->AddOperation(std::make_shared<Circuits::CXGate<>>(1, 2));
+        auto narrow = std::make_shared<Circuits::Circuit<>>();
+        narrow->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+        narrow->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+        // Two qubits numbered 0 and 4: execution compacts them to a register of two.
+        auto sparse = std::make_shared<Circuits::Circuit<>>();
+        sparse->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+        sparse->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 4));
+        // A candidate list that may select the propagator carries its thresholds too.
+        auto candidates = truncated;
+        candidates.simulation_type = Method::kStatevector;
+        candidates.fixed_backend = false;
+        candidates.optimization_candidates = {{Backend::kQCSim, Method::kPauliPropagator}};
+        for (const auto *model : {&thermal, &t1, &idle})
+        {
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(truncated, *model));
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(native, *model));
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(truncated, *model, *relaxing));
+            // A zero threshold drops nothing.
+            BOOST_CHECK(!MaestroExecution::InjectsExactChannels(zero, *model));
+            // A weight cap counts only below the circuit's width, which the model alone does not give.
+            BOOST_CHECK(!MaestroExecution::InjectsExactChannels(capped, *model));
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(capped, *model, *relaxing));
+            // (Idle relaxation without a delay is never injected: that circuit is exact anyway.)
+            if (model != &idle)
+            {
+                BOOST_CHECK(!MaestroExecution::InjectsExactChannels(capped, *model, *narrow));
+                // The cap of 2 drops nothing on the two qubits used, whatever their numbers.
+                BOOST_CHECK(!MaestroExecution::InjectsExactChannels(capped, *model, *sparse));
+            }
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(candidates, *model));
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(candidates, *model, *relaxing));
+            BOOST_CHECK(MaestroExecution::TruncatesPauliTerms(capped, 3) && !MaestroExecution::TruncatesPauliTerms(capped, 2));
+            // Another method is unaffected by Pauli-propagator options.
+            auto statevector = truncated;
+            statevector.simulation_type = Method::kStatevector;
+            BOOST_CHECK(!MaestroExecution::InjectsExactChannels(statevector, *model));
+            // The realization policy follows: one exact evaluation.
+            const auto policy =
+                MaestroExecution::ResolveNoiseRealizations(std::nullopt, *model, truncated, MaestroExecution::NoiseLayer::kCombined, 100, relaxing, true);
+            BOOST_CHECK(policy.exact_channels && policy.realizations == 1);
+        }
+    }
     // An infinite T1 leaves pure dephasing, which is diagonal.
     noise::NoiseModel dephasing;
     dephasing.set_thermal_relaxation(0, 1.0, std::numeric_limits<double>::infinity(), 15.0);

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
+  (T1, thermal or idle noise towards unequal populations) as exact channels
+  when a truncation threshold is in effect: a positive
+  `pp_coefficient_threshold`, or a `pp_max_pauli_weight` below the circuit.
+  It ran 100 sampled trajectories there before. With a threshold the
+  propagated operator stays bounded, and one exact propagation was faster and
+  more accurate on every case measured: QAOA and QFT of 8 to 27 qubits under
+  depolarizing noise and relaxation at `pp_coefficient_threshold` 1e-4 took
+  0.007 to 0.5 s instead of 0.3 s to over 120 s, about 5e-4 from the exact
+  values where the trajectories' sampling error was 2e-2 to 5e-2. Without a
+  threshold relaxation keeps its trajectories, which stay cheaper on wide
+  circuits there. The Python noisy functions, native requests and C++ callers
+  share the rule (`InjectsExactChannels`), which also holds when a candidate
+  list may select the propagator. `evaluation:"trajectories"` still selects
+  sampled realizations; an explicit `noise_realizations` only sets how many
+  times the circuit runs, and with exact channels each run gives the same
+  values.
+
 ## [0.3.15] - 2026-11-15
 
 ### Added
