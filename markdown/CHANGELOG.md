@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (statevector) and 22.7 s (MPS) to 1.5 s and 1.7 s. The single worker that
   QCSim keeps for statevectors from 20 qubits does not apply to Aer, whose
   shots in parallel stay ahead there.
+- On the Aer statevector and matrix product state, one-qubit Kraus channels
+  on two qubits (each qubit's relaxation after a two-qubit gate) are applied
+  as one two-qubit Kraus operation. Aer renormalizes after every Kraus
+  operation, the MPS with an SVD of each entangled bond along the chain, so
+  this halves that work, as Aer's own noise sampling does. The distribution
+  is unchanged; a seeded run draws different samples than before.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive

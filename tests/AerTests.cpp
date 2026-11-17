@@ -136,6 +136,9 @@ BOOST_AUTO_TEST_CASE(statevector_and_matrix_product_state_sample_channels_as_tra
     using Method = Simulators::SimulationType;
     const Channel gateError =
         Channel::TwoQubitDepolarizing(0.05).Then(Channel::ThermalRelaxation(1.0, 4.0, 6.0), {0}).Then(Channel::ThermalRelaxation(1.0, 3.0, 2.0, 0.2), {1});
+    // Both relaxations are Kraus branches (T2 > T1): Aer applies them as one
+    // two-qubit Kraus operation, whose qubit order these targets check.
+    const Channel bothRelax = Channel::OnQubit(Channel::ThermalRelaxation(1.0, 2.0, 3.5), 0).Then(Channel::ThermalRelaxation(0.8, 1.5, 2.5, 0.15), {1});
     const Channel damping = Channel::AmplitudeDamping(0.3);
     const Channel generalized = Channel::GeneralizedAmplitudeDamping(0.25, 0.3);
     const Channel phase = Channel::PhaseDamping(0.2);
@@ -158,6 +161,9 @@ BOOST_AUTO_TEST_CASE(statevector_and_matrix_product_state_sample_channels_as_tra
         sim.ApplyQuantumChannel({1}, phase);
         sim.ApplyQuantumChannel({2}, mixture);
         sim.ApplyQuantumChannel({2, 1}, gateError);
+        sim.ApplyQuantumChannel({1, 0}, bothRelax);
+        sim.ApplyRx(1, 0.9);
+        sim.ApplyQuantumChannel({0, 2}, bothRelax);
     };
     const auto make = [](Method method) {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
