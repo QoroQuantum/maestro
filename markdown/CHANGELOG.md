@@ -21,8 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values where the trajectories' sampling error was 2e-2 to 5e-2. Without a
   threshold relaxation keeps its trajectories, which stay cheaper on wide
   circuits there. The Python noisy functions, native requests and C++ callers
-  share the rule (`InjectsExactChannels`); `evaluation:"trajectories"` or an
-  explicit `noise_realizations` still selects sampled realizations.
+  share the rule (`InjectsExactChannels`), which also holds when a candidate
+  list may select the propagator. `evaluation:"trajectories"` still selects
+  sampled realizations; an explicit `noise_realizations` only sets how many
+  times the circuit runs, and with exact channels each run gives the same
+  values.
 
 ## [0.3.15] - 2026-11-15
 

@@ -1877,10 +1877,20 @@ BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
         capped.pp_max_pauli_weight = 2;
         auto relaxing = std::make_shared<Circuits::Circuit<>>();
         relaxing->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
-        relaxing->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 2));
+        relaxing->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+        relaxing->AddOperation(std::make_shared<Circuits::CXGate<>>(1, 2));
         auto narrow = std::make_shared<Circuits::Circuit<>>();
         narrow->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
         narrow->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+        // Two qubits numbered 0 and 4: execution compacts them to a register of two.
+        auto sparse = std::make_shared<Circuits::Circuit<>>();
+        sparse->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+        sparse->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 4));
+        // A candidate list that may select the propagator carries its thresholds too.
+        auto candidates = truncated;
+        candidates.simulation_type = Method::kStatevector;
+        candidates.fixed_backend = false;
+        candidates.optimization_candidates = {{Backend::kQCSim, Method::kPauliPropagator}};
         for (const auto *model : {&thermal, &t1, &idle})
         {
             BOOST_CHECK(MaestroExecution::InjectsExactChannels(truncated, *model));
@@ -1893,7 +1903,13 @@ BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
             BOOST_CHECK(MaestroExecution::InjectsExactChannels(capped, *model, *relaxing));
             // (Idle relaxation without a delay is never injected: that circuit is exact anyway.)
             if (model != &idle)
+            {
                 BOOST_CHECK(!MaestroExecution::InjectsExactChannels(capped, *model, *narrow));
+                // The cap of 2 drops nothing on the two qubits used, whatever their numbers.
+                BOOST_CHECK(!MaestroExecution::InjectsExactChannels(capped, *model, *sparse));
+            }
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(candidates, *model));
+            BOOST_CHECK(MaestroExecution::InjectsExactChannels(candidates, *model, *relaxing));
             BOOST_CHECK(MaestroExecution::TruncatesPauliTerms(capped, 3) && !MaestroExecution::TruncatesPauliTerms(capped, 2));
             // Another method is unaffected by Pauli-propagator options.
             auto statevector = truncated;

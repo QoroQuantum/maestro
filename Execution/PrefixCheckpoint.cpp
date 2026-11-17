@@ -54,7 +54,8 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
         if (!policy.exact_channels && UsesExactQuantumChannels(config_))
             throw std::invalid_argument("Prefix noise must be deterministic: the QCSim Pauli propagator samples relaxation that acts on the "
                                         "prefix (T1, thermal or idle noise towards unequal populations) without a truncation threshold, which a prefix "
-                                        "evolved once cannot be; set pp_coefficient_threshold to apply it exactly");
+                                        "evolved once cannot be; set pp_coefficient_threshold, or pp_max_pauli_weight below the "
+                                        "circuit's width, to apply it exactly");
         if (!policy.exact_channels || policy.stochastic_noise)
             throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend or on the QCSim "
                                         "Pauli propagator, without coherent or correlated noise");
