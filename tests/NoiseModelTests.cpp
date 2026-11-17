@@ -1900,8 +1900,8 @@ BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
             statevector.simulation_type = Method::kStatevector;
             BOOST_CHECK(!MaestroExecution::InjectsExactChannels(statevector, *model));
             // The realization policy follows: one exact evaluation.
-            const auto policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, *model, truncated, MaestroExecution::NoiseLayer::kCombined, 100,
-                                                                           relaxing, true);
+            const auto policy =
+                MaestroExecution::ResolveNoiseRealizations(std::nullopt, *model, truncated, MaestroExecution::NoiseLayer::kCombined, 100, relaxing, true);
             BOOST_CHECK(policy.exact_channels && policy.realizations == 1);
         }
     }
