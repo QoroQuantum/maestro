@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation, the MPS with an SVD of each entangled bond along the chain, so
   this halves that work, as Aer's own noise sampling does. The distribution
   is unchanged; a seeded run draws different samples than before.
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer a0c18fd, which fixes its
+  MPS SVD (`csvd`) looping forever on a zero matrix. Noisy MPS runs could
+  reach one while renormalizing the chain, and then hung.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive

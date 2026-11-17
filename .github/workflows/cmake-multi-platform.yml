@@ -55,7 +55,7 @@ jobs:
           QCSim
           json
           qiskit-aer
-        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v3
+        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v4
 
     # 2. SETUP CCACHE (only main saves; PRs and releases restore main's cache)
     - name: Restore ccache
