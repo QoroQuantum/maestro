@@ -98,23 +98,6 @@ inline std::string ThermalClampWarning(const std::vector<int> &qubits)
     return message.str();
 }
 
-// Whether a truncation threshold of the Pauli propagator is in effect on a
-// register of this size: a positive coefficient threshold, or a weight cap
-// below the register. Either one drops terms, with or without noise.
-inline bool TruncatesPauliTerms(const SimulatorConfig &config, size_t qubits)
-{
-    if (config.simulation_type != Method::kPauliPropagator)
-        return false;
-    const auto native = [&](const char *key) {
-        const auto it = config.native_options.find(key);
-        return it == config.native_options.end() ? std::optional<double>() : std::optional<double>(std::strtod(it->second.c_str(), nullptr));
-    };
-    const auto coefficient = config.pp_coefficient_threshold ? config.pp_coefficient_threshold : native("pauli_propagator_coefficient_threshold");
-    const auto weight = config.pp_max_pauli_weight ? std::optional<double>(static_cast<double>(*config.pp_max_pauli_weight))
-                                                   : native("pauli_propagator_pauli_weight_threshold");
-    return (coefficient && *coefficient > 0) || (weight && *weight < static_cast<double>(qubits));
-}
-
 // Everything that follows from noise.exact: the support check, the policy and
 // the approximations a result reports. Run again when the evaluation changes.
 inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &config, size_t qubits)

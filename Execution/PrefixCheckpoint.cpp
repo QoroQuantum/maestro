@@ -50,10 +50,11 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
     {
         const auto policy = ResolveNoiseRealizations(std::nullopt, *prefix_noise, config_, NoiseLayer::kCombined, 64, prefix);
         // A backend that applies channels exactly and still samples is the
-        // Pauli propagator with relaxation (InjectsExactChannels).
+        // Pauli propagator with relaxation and no truncation threshold (InjectsExactChannels).
         if (!policy.exact_channels && UsesExactQuantumChannels(config_))
             throw std::invalid_argument("Prefix noise must be deterministic: the QCSim Pauli propagator samples relaxation that acts on the "
-                                        "prefix (T1, thermal or idle noise towards unequal populations), which a prefix evolved once cannot be");
+                                        "prefix (T1, thermal or idle noise towards unequal populations) without a truncation threshold, which a prefix "
+                                        "evolved once cannot be; set pp_coefficient_threshold to apply it exactly");
         if (!policy.exact_channels || policy.stochastic_noise)
             throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend or on the QCSim "
                                         "Pauli propagator, without coherent or correlated noise");

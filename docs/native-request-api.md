@@ -615,12 +615,20 @@ the request's circuits receive:
 - Every channel is diagonal in the Pauli basis (Pauli, depolarizing, dephasing,
   phase damping, correlated phase flips): exact channels. Each channel only
   scales terms, at about one extra pass per channel.
-- T1, thermal or idle relaxation with a finite T1 acts on the circuits: sampled
-  realizations, as before. Relaxation also sends Z to the identity. Without a
-  truncation threshold those branches fill the operator space of the
-  observable's light cone (`4^width` terms), which costs far more than the
-  trajectories. Ask for `evaluation:"exact"` to apply relaxation exactly, with
-  the calibrated T2; combine it with `pp_coefficient_threshold` for wide cones.
+- T1, thermal or idle relaxation with a finite T1 acts on the circuits, and no
+  truncation threshold is in effect: sampled realizations, as before.
+  Relaxation also sends Z to the identity. Without a truncation threshold
+  those branches fill the operator space of the observable's light cone
+  (`4^width` terms), which costs far more than the trajectories. Ask for
+  `evaluation:"exact"` to apply relaxation exactly, with the calibrated T2.
+- The same relaxation with a truncation threshold in effect (a positive
+  `pp_coefficient_threshold`, or a `pp_max_pauli_weight` below the widest
+  circuit): exact channels. The threshold bounds the operator, and one exact
+  propagation is then both faster and closer to the exact values than the
+  trajectories (QAOA and QFT of 8 to 27 qubits at `pp_coefficient_threshold`
+  1e-4: 20 to 200 times faster, about 5e-4 from the exact values against a
+  sampling error of 2e-2 to 5e-2 for 100 trajectories). `noise.approximations`
+  lists `Pauli_truncation`, as for any truncated propagation.
 - Relaxation counts by the channel it applies, not by its kind. A zero T1
   probability is the identity. Thermal or idle relaxation towards equal
   populations (`excited_population: 0.5`) only scales terms, at any T2 the
