@@ -587,7 +587,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                 else
                 {
                     SamplingResult result;
-                    if (batches == shots && config.simulator_type == Simulators::SimulatorType::kQCSim && !config.enable_sampling_reduction)
+                    if (batches == shots && (config.simulator_type == Simulators::SimulatorType::kQCSim || IsAerTrajectoryBackend(config)) &&
+                        !config.enable_sampling_reduction)
                     {
                         if (!sessions[worker])
                             sessions[worker] = std::make_unique<SamplingSession>(host_qubits, execution_config);

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Noisy trajectories on the Qiskit Aer statevector and matrix product state
+  run on realization workers, as on QCSim, from the Python noisy functions,
+  C++ callers (`ExecuteNoisy`, `EstimateNoisy`) and native requests. They ran
+  one after another before, each on a multithreaded Aer state, and were up to
+  12x (statevector) and 30x (MPS) slower than Aer running the same noise
+  model itself. With 200 shots: QFT 16 statevector 28.4 s -> 2.4 s (Aer
+  2.9 s), GHZ 20 statevector 75 s -> 8.9 s (Aer 9.0 s), QFT 16 MPS
+  24.9 s -> 1.4 s (Aer 1.1 s); a noisy Python estimate went from 14.7 s
+  (statevector) and 22.7 s (MPS) to 1.5 s and 1.7 s. The single worker that
+  QCSim keeps for statevectors from 20 qubits does not apply to Aer, whose
+  shots in parallel stay ahead there.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive

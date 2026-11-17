@@ -66,7 +66,7 @@ inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config)
 
 inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits, size_t copies_per_worker = 2)
 {
-    if (!RunsOnlyQCSim(config))
+    if (!RunsRealizationWorkerBackends(config))
         return 1;
     const auto requested = EffectiveMaxSimulators(config);
     auto workers = Utils::RealizationWorkerCount(realizations, requested.value_or(0));
@@ -85,8 +85,10 @@ inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations
     // caches together and they wait on memory instead: one worker, whose gates
     // then use every thread on one state that does fit, is faster (20 qubits,
     // 200 trajectories: 16 s against 27 s; 19 qubits is the break-even).
-    if (!HasCandidateList(config) && config.simulation_type == Simulators::SimulationType::kStatevector &&
-        state_bytes >= static_cast<long double>(size_t{16} << 20))
+    // Measured on QCSim; Aer's per-gate threading gains less, and its shots
+    // in parallel stay ahead at 20 qubits (Aer itself runs them so).
+    if (!HasCandidateList(config) && config.simulator_type == Simulators::SimulatorType::kQCSim &&
+        config.simulation_type == Simulators::SimulationType::kStatevector && state_bytes >= static_cast<long double>(size_t{16} << 20))
         return 1;
     return std::min(workers, size_t{16});
 }

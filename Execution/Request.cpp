@@ -1965,7 +1965,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // layer drawn for each), the noise seed joins those seeds too (ExecutionSeed).
         RuntimeDraws draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
         size_t workers = 1;
-        if (!runtime_circuit && realizations > 1 && RunsOnlyQCSim(config))
+        if (!runtime_circuit && realizations > 1 && RunsRealizationWorkerBackends(config))
         {
             // Each worker's network maps the circuit to its own register (at most
             // the declared qubits; the network's ancilla is never allocated),

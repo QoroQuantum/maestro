@@ -384,6 +384,41 @@ inline bool RunsOnlyQCSim(const SimulatorConfig &config)
                        [](const auto &candidate) { return candidate.first == Simulators::SimulatorType::kQCSim; });
 }
 
+// A fixed CPU Aer statevector or matrix product state: the Aer methods whose
+// trajectories run as QCSim's do, on realization workers and reused sessions.
+inline bool IsAerTrajectoryBackend(const SimulatorConfig &config)
+{
+#ifndef NO_QISKIT_AER
+    return !HasCandidateList(config) && config.simulator_type == Simulators::SimulatorType::kQiskitAer &&
+           (config.simulation_type == Simulators::SimulationType::kStatevector || config.simulation_type == Simulators::SimulationType::kMatrixProductState);
+#else
+    (void)config;
+    return false;
+#endif
+}
+
+// Whether every backend a request may run can host realization workers: QCSim,
+// and the CPU Aer statevector and matrix product state. An Aer worker runs
+// single-threaded (the network turns its internal threads off under a worker),
+// so the workers supply the parallelism that Aer gives shots on its own.
+inline bool RunsRealizationWorkerBackends(const SimulatorConfig &config)
+{
+    const auto supported = [](Simulators::SimulatorType type, Simulators::SimulationType method) {
+        if (type == Simulators::SimulatorType::kQCSim)
+            return true;
+#ifndef NO_QISKIT_AER
+        if (type == Simulators::SimulatorType::kQiskitAer)
+            return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState;
+#endif
+        (void)method;
+        return false;
+    };
+    if (!HasCandidateList(config))
+        return supported(config.simulator_type, config.simulation_type);
+    return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                       [&](const auto &candidate) { return supported(candidate.first, candidate.second); });
+}
+
 // Whether every backend a request may run evolves an ensemble: a density
 // matrix or MPO, or the QCSim Pauli propagator, whose observable passes
 // through the adjoint channels. Planning may then treat resets and channels
