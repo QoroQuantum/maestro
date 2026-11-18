@@ -105,6 +105,10 @@ class RuntimeDraws
     }
 
     // To be called with the realizations as they are prepared, in order; only the first one is looked at.
+    // Realization workers read the decision (ExecutionSeed, operator bool) while later realizations are
+    // still prepared. That is safe: the only write is this first call, and Utils::RunRealizations queues a
+    // realization under its mutex only after preparing it, so the write happens-before every worker's read;
+    // later calls find draws_ set and only read it.
     void See(const RecordCircuitPtr &realization)
     {
         if (!draws_)
