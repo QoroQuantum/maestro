@@ -51,7 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (22% more SVDs, on larger bonds): QFT 16 1.44 s -> 0.87 s (Aer 0.86 s),
   QFT 24 32.4 s -> 15.3 s, random 12 22.2 s -> 15.6 s, 200 shots. Pauli and
   unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
-  draws. The distribution is unchanged; seeded runs draw differently. This
+  draws. Only the targets the channel acts on are sent: a channel given on
+  two targets that leaves one alone does not make Aer move that one (under a
+  bond limit the move truncated the state). The distribution is unchanged;
+  seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on
   those qubits wrong.

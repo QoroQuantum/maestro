@@ -496,10 +496,25 @@ class AerState : public ISimulator
         // through Kraus operators anyway. A channel drawn without them (Pauli,
         // unitary mixture, T2 <= T1 relaxation as nothing, a phase flip or a
         // rare reset) keeps its cheaper draws below.
+        //
+        // Only the targets the channel acts on go to Aer. To apply an operation
+        // on two qubits, the matrix product state first moves them next to
+        // each other, and under a bond limit that move truncates the state: a
+        // channel given on two targets that damps only one of them changed
+        // the other, and the qubits entangled with it.
         if (simulationType == SimulationType::kMatrixProductState &&
             std::any_of(factors.begin(), factors.end(), [](const QuantumChannel::Factor &factor) { return AppliesAsKraus(factor); }))
         {
-            state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            const std::vector<size_t> active = channel.ActiveQubits();
+            if (active.size() == targets.size())
+                state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            else
+            {
+                AER::reg_t activeTargets;
+                for (const size_t local : active)
+                    activeTargets.push_back(targets[local]);
+                state->apply_kraus(activeTargets, toAer(channel.OnActiveQubits().GetKrausOperators()));
+            }
             NotifyObservers(targets);
             return;
         }

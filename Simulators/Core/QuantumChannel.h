@@ -338,6 +338,47 @@ class QuantumChannel
         return FromFactors(std::move(factors), GetNumberOfQubits());
     }
 
+    /**
+     * The targets some part of the channel acts on, in ascending order. A
+     * channel leaves its other targets alone (OnQubit, Placed): a simulator
+     * that has to bring the targets of an operation together, as a matrix
+     * product state does, should not move those.
+     */
+    std::vector<size_t> ActiveQubits() const
+    {
+        std::vector<bool> used(GetNumberOfQubits(), false);
+        for (const Factor &factor : GetFactors())
+            for (const size_t q : factor.qubits)
+                used[q] = true;
+        std::vector<size_t> active;
+        for (size_t q = 0; q < used.size(); ++q)
+            if (used[q])
+                active.push_back(q);
+        return active;
+    }
+
+    /**
+     * This channel as a channel on its active targets only: target k of the
+     * result is target ActiveQubits()[k] of this one. The channel itself when
+     * it acts on all its targets; it must act on at least one.
+     */
+    QuantumChannel OnActiveQubits() const
+    {
+        const std::vector<size_t> active = ActiveQubits();
+        if (active.size() == GetNumberOfQubits())
+            return *this;
+        if (active.empty())
+            throw std::invalid_argument("A channel that acts on none of its targets has no active part");
+        std::vector<size_t> position(GetNumberOfQubits(), 0);
+        for (size_t k = 0; k < active.size(); ++k)
+            position[active[k]] = k;
+        std::vector<Factor> factors = GetFactors();
+        for (Factor &factor : factors)
+            for (size_t &q : factor.qubits)
+                q = position[q];
+        return FromFactors(std::move(factors), active.size());
+    }
+
     /** A one-qubit channel on one target of a two-qubit channel that leaves the other target alone. */
     static QuantumChannel OnQubit(const QuantumChannel &channel, size_t localQubit, size_t numQubits = 2)
     {
