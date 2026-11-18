@@ -887,13 +887,16 @@ their shared noise and execute as complete batches; outer workers use one inner
 simulator each. `execution_metadata.realization_workers` reports the actual
 outer concurrency for ordinary noisy execute requests, and for shot-row
 requests whose realizations ran on such workers (a dedicated sampler, such as
-frames, draws the rows without them and leaves it out). Noisy `estimate` and
-`noisy_fidelity` requests run their realizations one after another on the
-request's simulator and report 1. Checkpoint suffixes retain
-their defined call order. The Python noisy execute, estimate and fidelity
-functions report the number as `realization_workers` in their result, by the
-same rule; there the realizations of an estimate and of a fidelity run on
-several workers.
+frames, draws the rows without them and leaves it out). Noisy `estimate`
+requests run their realizations on such workers too and sum them in
+realization order; they report the realizations that ran at once, which the
+first one, run alone to warm the estimation cache, does not count towards
+(two realizations report 1). `noisy_fidelity` requests run their realizations
+one after another on the request's simulator and report 1. Checkpoint
+suffixes retain their defined call order. The Python noisy execute, estimate
+and fidelity functions report the number as `realization_workers` in their
+result, by the same rule; there the realizations of a fidelity run on several
+workers too.
 
 ### Shot rows
 

@@ -323,6 +323,19 @@ void TestSeededSharedRealizationWorkers()
                   serial.at("realization_standard_errors") == parallel.at("realization_standard_errors"),
               "A noisy estimate depended on the number of its realization workers");
     }
+    // Two realizations run one after the other whatever the workers: the first warms the
+    // estimation cache alone, and one is left. The estimate reports what ran at once.
+    {
+        auto estimate = Request("estimate", 2, "h q[0]; cx q[0],q[1];");
+        estimate["execution"].as_object()["seed"] = 3;
+        estimate["noise"] = bounded.at("noise");
+        estimate["noise"].as_object()["realizations"] = 2;
+        estimate["observables"] = j::array{"ZZ"};
+        estimate["simulator"].as_object()["selection"] = "fixed";
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 4}};
+        Check(Call(estimate).at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
+              "A two-realization estimate reported workers that never ran at once");
+    }
 #ifndef NO_QISKIT_AER
     // The trajectory memory budget applies to the CPU Aer statevector and matrix product state,
     // so a request may set it there; Aer's density matrix runs no trajectories and rejects it.

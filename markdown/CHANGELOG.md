@@ -44,11 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
   draws. The distribution is unchanged; seeded runs draw differently.
 - Noisy `estimate` requests run their realizations on realization workers, as
-  Python's estimate does, with values identical to the serial loop: they are
-  summed in realization order. Aer statevector GHZ 20 with 64 realizations:
-  7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
-  `execution_metadata.realization_workers` reports the workers; a noisy
-  fidelity still runs its realizations one after another and reports 1.
+  Python's estimate does. They are summed in realization order, each as soon
+  as the earlier ones are in, so the sums do not depend on the scheduling and
+  memory does not grow with the number of realizations. A realization's own
+  value can still depend on the threads its simulator uses: on Aer
+  statevectors from 14 qubits a single worker lets Aer thread its loops, and
+  values differed from four workers' by 7e-17. Aer statevector GHZ 20 with 64
+  realizations: 7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
+  `realization_workers`, there and in Python's estimate, is the number of
+  realizations that ran at once: the first one warms the estimation cache
+  alone, so two realizations report 1. A noisy fidelity still runs its
+  realizations one after another and reports 1.
 - QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
   one pass over the matrix instead of two, from 11 qubits for dense gates

@@ -19,9 +19,12 @@
 #include <chrono>
 #include <climits>
 #include <complex>
+#include <condition_variable>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 
@@ -1793,19 +1796,24 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         bool reduced = false;
         // Realizations run on workers as Python's estimate does (EstimateNoisy):
         // drawn in order from the noise stream, each with its derived seed, and
-        // summed below in realization order, so the values do not depend on the
-        // number of workers. A cache serves one thread; realization 0 warms the
-        // one every worker starts from.
+        // summed in realization order, so the sums do not depend on how the
+        // realizations were scheduled. A cache serves one thread; realization 0
+        // warms the one every worker starts from.
         size_t qubits = std::max({size_t{1}, circuit->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
         for (const auto &observable : observables)
             qubits = std::max(qubits, observable.size());
         const size_t workers = realizations > 1 ? SamplingWorkers(config, realizations, qubits) : 1;
+        // The warm-up realization runs alone, so the others decide how many run at once.
+        const size_t concurrency = workers > 1 ? std::max<size_t>(1, std::min(workers, realizations - 1)) : 1;
         const bool cached = noise.enabled && noise.mode != "analytical";
         std::vector<EstimationCache> caches(workers);
 
-        // What the sums need of each realization, kept in realization order;
-        // its plan (rebuilt circuits included) is released as it completes.
-        // Only the last realization's result is kept whole, for the metadata.
+        // What the sums need of a realization. Its plan (rebuilt circuits
+        // included) is released as it completes, and the record itself as soon
+        // as every earlier realization has been summed: only a window of
+        // records, proportional to the workers, waits out of order. One worker
+        // sums each realization at once, as the serial loop did. Only the last
+        // realization's result is kept whole, for the metadata.
         struct Realization
         {
             std::vector<double> values, bounds;
@@ -1814,50 +1822,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             bool reduced = false;
         };
 
-        std::vector<Realization> results(realizations);
-        const auto realize = [&](size_t r) {
-            const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
-            draws.See(noisy);
-            return noisy;
-        };
-        const auto run = [&](EstimationCache &worker_cache, size_t r, const CircuitPtr &noisy) {
-            auto execution_config = config;
-            execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
-            if (cached)
-                execution_config.auto_reduce = false;
-            auto result = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
-            auto &record = results[r];
-            record.values = std::move(result.values);
-            record.bounds = std::move(result.plan.error_bounds);
-            record.after = result.plan.qubits_after;
-            record.groups = result.plan.groups.size();
-            record.cluster_qubits = result.plan.total_cluster_qubits;
-            record.bounded = result.plan.bounded_observables;
-            record.reduction_time = result.plan.reduction_time;
-            record.reduced = result.plan.auto_reduced;
-            // Each realization writes its own record; only the last one writes `last`.
-            if (r + 1 == realizations)
-                last = std::move(result);
-        };
-        size_t first = 0, warm_hits = 0;
-        if (workers > 1)
-        {
-            run(caches[0], 0, realize(0));
-            first = 1;
-            warm_hits = caches[0].hits;
-            caches[0].hits = 0;
-            for (size_t worker = 1; worker < workers; ++worker)
-                caches[worker] = caches[0];
-        }
-        Utils::RunRealizations(
-            realizations - first, workers, [&](size_t i) { return realize(i + first); },
-            [&](size_t worker, size_t i, CircuitPtr noisy) { run(caches[worker], i + first, noisy); });
-        EstimationCache cache;
-        cache.hits = warm_hits;
-        for (const auto &worker_cache : caches)
-            cache.hits += worker_cache.hits;
-        for (const auto &record : results)
-        {
+        std::mutex order_mutex;
+        std::condition_variable order_advanced;
+        std::map<size_t, Realization> waiting;
+        size_t next = 0;
+        bool aborted = false;
+        const size_t window = 2 * concurrency;
+        const auto sum = [&](const Realization &record) {
             largest = std::max(largest, record.after);
             clusters = std::max(clusters, record.groups);
             total_qubits += record.cluster_qubits;
@@ -1873,7 +1844,75 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 sums[i] += value;
                 squares[i] += value * value;
             }
+        };
+        const auto realize = [&](size_t r) {
+            const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
+            draws.See(noisy);
+            return noisy;
+        };
+        const auto run = [&](EstimationCache &worker_cache, size_t r, const CircuitPtr &noisy) {
+            try
+            {
+                {
+                    // A realization far ahead of the one the sums wait for holds back,
+                    // so the records waiting out of order stay within the window.
+                    std::unique_lock lock(order_mutex);
+                    order_advanced.wait(lock, [&] { return aborted || r < next + window; });
+                    if (aborted)
+                        return;
+                }
+                auto execution_config = config;
+                execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
+                if (cached)
+                    execution_config.auto_reduce = false;
+                auto result = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+                Realization record;
+                record.values = std::move(result.values);
+                record.bounds = std::move(result.plan.error_bounds);
+                record.after = result.plan.qubits_after;
+                record.groups = result.plan.groups.size();
+                record.cluster_qubits = result.plan.total_cluster_qubits;
+                record.bounded = result.plan.bounded_observables;
+                record.reduction_time = result.plan.reduction_time;
+                record.reduced = result.plan.auto_reduced;
+                const std::lock_guard lock(order_mutex);
+                // Only the last realization writes `last`.
+                if (r + 1 == realizations)
+                    last = std::move(result);
+                waiting.emplace(r, std::move(record));
+                for (auto it = waiting.begin(); it != waiting.end() && it->first == next; it = waiting.erase(it), ++next)
+                    sum(it->second);
+                order_advanced.notify_all();
+            }
+            catch (...)
+            {
+                // Release the realizations holding back: the one they wait for will not come.
+                {
+                    const std::lock_guard lock(order_mutex);
+                    aborted = true;
+                }
+                order_advanced.notify_all();
+                throw;
+            }
+        };
+        size_t first = 0, warm_hits = 0;
+        if (workers > 1)
+        {
+            run(caches[0], 0, realize(0));
+            first = 1;
+            warm_hits = caches[0].hits;
+            caches[0].hits = 0;
+            for (size_t worker = 1; worker < workers; ++worker)
+                caches[worker] = caches[0];
         }
+        Utils::RunRealizations(
+            realizations - first, workers, [&](size_t i) { return realize(i + first); },
+            [&](size_t worker, size_t i, CircuitPtr noisy) { run(caches[worker], i + first, noisy); });
+        Require(next == realizations && waiting.empty(), "Estimation lost a realization");
+        EstimationCache cache;
+        cache.hits = warm_hits;
+        for (const auto &worker_cache : caches)
+            cache.hits += worker_cache.hits;
         json::array values, errors, methods, error_bounds;
         for (auto bound : bounds)
             error_bounds.emplace_back(bound);
@@ -1889,8 +1928,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         metadata["stochastic_execution"] = stochastic_estimation;
         metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
         metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
+        // The realizations that ran at once, which the warm-up one does not count towards.
         if (noise.enabled && noise.mode != "analytical")
-            metadata["realization_workers"] = workers;
+            metadata["realization_workers"] = concurrency;
         json::object result{{"schema_version", SchemaVersion},
                             {"operation", operation},
                             {"num_qubits", input.qubits},
