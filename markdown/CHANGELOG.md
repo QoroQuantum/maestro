@@ -47,9 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
   `execution_metadata.realization_workers` reports the workers; a noisy
   fidelity still runs its realizations one after another and reports 1.
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer a0c18fd, which fixes its
-  MPS SVD (`csvd`) looping forever on a zero matrix. Noisy MPS runs could
-  reach one while renormalizing the chain, and then hung.
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 1a13914. It fixes the MPS
+  SVD (`csvd`) looping forever on a zero matrix (a0c18fd); noisy MPS runs
+  could reach one while renormalizing the chain, and then hung. It inlines
+  the statevector index helpers, which the compiler had left out of line in
+  Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
+  gates on up to five qubits on the scalar kernels, which beat the AVX2 one
+  there (3.7x on one qubit). Maestro -> Aer statevector trajectories, 200
+  shots: random 14 with Pauli noise 0.84 s -> 0.31 s (Aer 0.56 s), with
+  relaxation 2.27 s -> 1.54 s (Aer 2.38 s), GHZ 20 9.19 s -> 7.85 s (Aer
+  8.53 s). It also merges upstream qiskit-aer main through 5cb4a838,
+  including rx, ry, rzz, rxx, ryy and rzx at Clifford angles on the
+  extended stabilizer, and per-simulator MPS settings instead of shared
+  global ones.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive
