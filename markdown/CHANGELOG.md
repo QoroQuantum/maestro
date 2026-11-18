@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QFT 24 32.4 s -> 15.3 s, random 12 22.2 s -> 15.6 s, 200 shots. Pauli and
   unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
   draws. The distribution is unchanged; seeded runs draw differently.
+- Noisy `estimate` requests run their realizations on realization workers, as
+  Python's estimate does, with values identical to the serial loop: they are
+  summed in realization order. Aer statevector GHZ 20 with 64 realizations:
+  7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
+  `execution_metadata.realization_workers` reports the workers; a noisy
+  fidelity still runs its realizations one after another and reports 1.
 - Qiskit Aer is pinned to QoroQuantum/qiskit-aer a0c18fd, which fixes its
   MPS SVD (`csvd`) looping forever on a zero matrix. Noisy MPS runs could
   reach one while renormalizing the chain, and then hung.

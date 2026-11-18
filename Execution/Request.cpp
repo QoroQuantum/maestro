@@ -1780,7 +1780,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         const size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
         std::vector<double> sums(observables.size()), squares(observables.size()), bounds(observables.size());
         size_t bounded = 0;
-        EstimationCache cache;
         EstimationResult last;
         const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
         // Noise the backend draws as the circuit runs: the realizations share
@@ -1792,15 +1791,50 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         size_t largest = 0, clusters = 0, total_qubits = 0, total_clusters = 0;
         double reduction_time = 0;
         bool reduced = false;
-        for (size_t r = 0; r < realizations; ++r)
-        {
+        // Realizations run on workers as Python's estimate does (EstimateNoisy):
+        // drawn in order from the noise stream, each with its derived seed, and
+        // summed below in realization order, so the values do not depend on the
+        // number of workers. A cache serves one thread; realization 0 warms the
+        // one every worker starts from.
+        size_t qubits = std::max({size_t{1}, circuit->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+        for (const auto &observable : observables)
+            qubits = std::max(qubits, observable.size());
+        const size_t workers = realizations > 1 ? SamplingWorkers(config, realizations, qubits) : 1;
+        const bool cached = noise.enabled && noise.mode != "analytical";
+        std::vector<EstimationCache> caches(workers);
+        std::vector<EstimationResult> results(realizations);
+        const auto realize = [&](size_t r) {
             const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
             draws.See(noisy);
+            return noisy;
+        };
+        const auto run = [&](EstimationCache &worker_cache, size_t r, const CircuitPtr &noisy) {
             auto execution_config = config;
             execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
-            if (noise.enabled && noise.mode != "analytical")
+            if (cached)
                 execution_config.auto_reduce = false;
-            last = EstimateCircuit(noisy, observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
+            results[r] = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+        };
+        size_t first = 0, warm_hits = 0;
+        if (workers > 1)
+        {
+            run(caches[0], 0, realize(0));
+            first = 1;
+            warm_hits = caches[0].hits;
+            caches[0].hits = 0;
+            for (size_t worker = 1; worker < workers; ++worker)
+                caches[worker] = caches[0];
+        }
+        Utils::RunRealizations(
+            realizations - first, workers, [&](size_t i) { return realize(i + first); },
+            [&](size_t worker, size_t i, CircuitPtr noisy) { run(caches[worker], i + first, noisy); });
+        EstimationCache cache;
+        cache.hits = warm_hits;
+        for (const auto &worker_cache : caches)
+            cache.hits += worker_cache.hits;
+        for (size_t r = 0; r < realizations; ++r)
+        {
+            last = std::move(results[r]);
             largest = std::max(largest, last.plan.qubits_after);
             clusters = std::max(clusters, last.plan.groups.size());
             total_qubits += last.plan.total_cluster_qubits;
@@ -1808,6 +1842,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             reduction_time += last.plan.reduction_time;
             reduced = reduced || last.plan.auto_reduced;
             bounded = std::max(bounded, last.plan.bounded_observables);
+            Require(last.values.size() == sums.size() && last.plan.error_bounds.size() == sums.size(), "Estimation returned an invalid expectation vector");
             for (size_t i = 0; i < sums.size(); ++i)
             {
                 bounds[i] += last.plan.error_bounds[i] / realizations;
@@ -1831,9 +1866,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         metadata["stochastic_execution"] = stochastic_estimation;
         metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
         metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
-        // The noise realizations ran one after another, here.
         if (noise.enabled && noise.mode != "analytical")
-            metadata["realization_workers"] = size_t{1};
+            metadata["realization_workers"] = workers;
         json::object result{{"schema_version", SchemaVersion},
                             {"operation", operation},
                             {"num_qubits", input.qubits},

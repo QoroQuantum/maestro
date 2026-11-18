@@ -294,18 +294,34 @@ void TestSeededSharedRealizationWorkers()
     Check(tensorLimited.at("shots").to_number<size_t>() == 12 && Call(tensor).at("counts") == tensorLimited.at("counts"),
           "Memory-limited MPS shared realizations lost shots or reproducibility");
 
-    // An estimate and a noisy fidelity run their realizations one after another
-    // on the request's simulator, and report that one worker as execute reports its own.
-    for (const char *operation : {"estimate", "noisy_fidelity"})
+    // A noisy fidelity runs its realizations one after another on the request's
+    // simulator, and reports that one worker as execute reports its own.
     {
-        auto request = Request(operation, 2, "h q[0]; cx q[0],q[1];");
+        auto request = Request("noisy_fidelity", 2, "h q[0]; cx q[0],q[1];");
         request["execution"].as_object()["seed"] = 3;
         request["noise"] = bounded.at("noise");
-        if (std::string(operation) == "estimate")
-            request["observables"] = j::array{"ZZ"};
         const auto metadata = Call(request).at("execution_metadata").as_object();
         Check(metadata.contains("realization_workers") && metadata.at("realization_workers").to_number<size_t>() == 1,
-              "A noisy estimate or fidelity did not report the worker its realizations ran on");
+              "A noisy fidelity did not report the worker its realizations ran on");
+    }
+    // A noisy estimate runs its realizations on workers, within max_simulators,
+    // and sums them in realization order: the values do not depend on how many ran.
+    {
+        auto estimate = Request("estimate", 2, "h q[0]; cx q[0],q[1];");
+        estimate["execution"].as_object()["seed"] = 3;
+        estimate["noise"] = bounded.at("noise");
+        estimate["observables"] = j::array{"ZZ", "XX"};
+        estimate["simulator"].as_object()["selection"] = "fixed";
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 1}};
+        const auto serial = Call(estimate);
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 2}};
+        const auto parallel = Call(estimate);
+        Check(serial.at("execution_metadata").at("realization_workers").to_number<size_t>() == 1, "A noisy estimate ignored max_simulators=1");
+        const auto workers = parallel.at("execution_metadata").at("realization_workers").to_number<size_t>();
+        Check(workers >= 1 && workers <= 2, "A noisy estimate did not report the workers its realizations ran on");
+        Check(serial.at("expectation_values") == parallel.at("expectation_values") &&
+                  serial.at("realization_standard_errors") == parallel.at("realization_standard_errors"),
+              "A noisy estimate depended on the number of its realization workers");
     }
 
     // Shot rows whose realizations ran on realization workers report them too, within max_simulators.
