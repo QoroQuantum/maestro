@@ -891,7 +891,8 @@ frames, draws the rows without them and leaves it out). Noisy `estimate`
 requests run their realizations on such workers too and sum them in
 realization order; they report the workers available to the realizations
 after the first one, which runs alone to warm the estimation cache: at most
-one fewer than the realizations (two realizations report 1). It is an upper
+one fewer than the realizations, and at least 1 (one or two realizations
+report 1). It is an upper
 bound on the realizations that overlap, not a count of them. `noisy_fidelity` requests run their realizations
 one after another on the request's simulator and report 1. Checkpoint
 suffixes retain their defined call order. The Python noisy execute, estimate
