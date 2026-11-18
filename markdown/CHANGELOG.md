@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation, the MPS with an SVD of each entangled bond along the chain, so
   this halves that work, as Aer's own noise sampling does. The distribution
   is unchanged; a seeded run draws different samples than before.
+- Without `trajectory_max_memory_mb`, trajectories on the CPU Aer
+  statevector and MPS may use half of the machine's memory (respecting a
+  cgroup limit) instead of 1 GiB, in realization workers and in the network's
+  shot workers. Aer runs as many shots at once as its memory holds; 1 GiB
+  held 22 qubits to five workers, at twice Aer's time (GHZ 22: 22.5 s ->
+  12.5 s, Aer 11.7 s; QAOA 22: 33.4 s -> 20.0 s, Aer 21.9 s). QCSim and an
+  explicit budget are unchanged.
 - Qiskit Aer is pinned to QoroQuantum/qiskit-aer a0c18fd, which fixes its
   MPS SVD (`csvd`) looping forever on a zero matrix. Noisy MPS runs could
   reach one while renormalizing the chain, and then hung.

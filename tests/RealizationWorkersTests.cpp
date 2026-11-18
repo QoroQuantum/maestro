@@ -176,6 +176,33 @@ void BudgetsAndEmptyWork()
             "native worker limit did not constrain realization scheduling");
     config.max_simulators = 3;
     Require(MaestroExecution::EffectiveMaxSimulators(config) == 3, "typed worker limit did not override the native option");
+    // Unset, the trajectory budget is 1 GiB, and on the CPU Aer statevector and
+    // MPS half the machine's memory, as Aer fills it with parallel shots.
+    MaestroExecution::SimulatorConfig budget;
+    budget.simulation_type = Simulators::SimulationType::kStatevector;
+    budget.fixed_backend = true;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 1024, "QCSim's default trajectory budget changed");
+#ifndef NO_QISKIT_AER
+    budget.simulator_type = Simulators::SimulatorType::kQiskitAer;
+    const size_t machine = Utils::MachineTrajectoryBudgetMB();
+    Require(machine >= 1024 && MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's statevector did not take the machine-sized budget");
+    budget.simulation_type = Simulators::SimulationType::kMatrixProductState;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's MPS did not take the machine-sized budget");
+    budget.simulation_type = Simulators::SimulationType::kDensityMatrix;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 1024, "Aer's density matrix took the trajectory budget");
+    budget.simulation_type = Simulators::SimulationType::kStatevector;
+    budget.native_options["trajectory_max_memory_mb"] = "300";
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 300, "a native trajectory budget lost to Aer's default");
+    budget.trajectory_max_memory_mb = 200;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 200, "a typed trajectory budget lost to Aer's default");
+    // 22 qubits on Aer: 1 GiB held them to five workers; with 16 GiB the CPUs decide.
+    budget.trajectory_max_memory_mb.reset();
+    budget.native_options.clear();
+    budget.max_simulators = 16;
+    if (machine >= 16 * 1024)
+        Require(MaestroExecution::SamplingWorkers(budget, 64, 22) == Utils::RealizationWorkerCount(64, 16),
+                "Aer's 22-qubit trajectories were still held by a 1 GiB budget");
+#endif
 #endif
     Utils::RunRealizations(
         0, 4,
@@ -842,8 +869,7 @@ void NoiseAddBudgetsNetworkAllocation()
             // one qubit the circuit uses, so the 512 KiB caller leaves room for
             // workers within 1 MiB, while the 2 MiB one exhausts 1-2 MiB alone
             // and forces a serial fallback.
-            auto network =
-                std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{hostQubits}, std::vector<size_t>{hostQubits});
+            auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{hostQubits}, std::vector<size_t>{hostQubits});
             network->Configure("trajectory_max_memory_mb", std::to_string(budgetMB).c_str());
             network->SetMaxSimulators(4);
             network->SetOptimizeSimulator(false);

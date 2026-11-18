@@ -18,6 +18,7 @@
 #include "../Circuit/ChainOrder.h"
 #include "../Estimators/SimulatorsEstimatorInterface.h"
 #include "../Utils/Sampling/Multinomial.h"
+#include "../Utils/SystemMemory.h"
 #include "NetworkJob.h"
 #include "QubitRegister.h"
 #include "SimpleController.h"
@@ -3286,6 +3287,23 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return prepared;
     }
 
+    // trajectory_max_memory_mb, or its default: 1 GiB, and on the CPU Aer
+    // statevector and MPS half the machine's memory, as Aer itself runs as many
+    // shots at once as its memory holds (Utils::MachineTrajectoryBudgetMB).
+    size_t TrajectoryBudgetMB(Simulators::SimulatorType type, Simulators::SimulationType method) const
+    {
+        if (configuration.IsSet("trajectory_max_memory_mb"))
+            return std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb"));
+#ifndef NO_QISKIT_AER
+        if (type == Simulators::SimulatorType::kQiskitAer &&
+            (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
+            return Utils::MachineTrajectoryBudgetMB();
+#endif
+        (void)type;
+        (void)method;
+        return 1024;
+    }
+
     bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
         return configuration.GetConfiguration("sampling_policy") != "legacy" && ExecuteJob<Time>::ReproducibleMethod(type, method);
@@ -3314,8 +3332,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             {
                 const size_t elements = size_t{1} << (bitsPerQubit * qubits);
                 const size_t bytes = elements * sizeof(std::complex<double>);
-                const size_t mb =
-                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                const size_t mb = TrajectoryBudgetMB(type, method);
                 const size_t slots = (mb << 20) / bytes;
                 // Prepared executions retain a source and one shared checkpoint.
                 // Without preparation each worker owns its own checkpoint too.
@@ -3360,8 +3377,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const long double bytes = Utils::RealizationStateBytes(state, qubits, bond);
             if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
             {
-                const size_t mb =
-                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                const size_t mb = TrajectoryBudgetMB(type, method);
                 // Tensor/tableau clones copy their saved checkpoint rather
                 // than sharing it. Keep two copies per worker also for terminal
                 // batches: explicit MPS measurement and a wide stabilizer tail

@@ -1,6 +1,7 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
 #include "../Simulators/Core/RandomSeed.h"
+#include "../Utils/SystemMemory.h"
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "../maestrolib/Interface.h"
 #include "../maestrolib/Maestro.h"
@@ -289,13 +290,21 @@ inline size_t ConfiguredBondCap(const SimulatorConfig &config)
     return value == config.native_options.end() ? 0 : static_cast<size_t>(std::stoull(value->second));
 }
 
-// The soft realization memory budget in MiB (trajectory_max_memory_mb).
+inline bool IsAerTrajectoryBackend(const SimulatorConfig &config);
+
+// The soft realization memory budget in MiB (trajectory_max_memory_mb). Unset,
+// it is 1 GiB, except on the CPU Aer statevector and MPS: Aer itself runs as
+// many shots at once as the machine's memory holds, so their trajectories take
+// half of it (Utils::MachineTrajectoryBudgetMB). With 1 GiB, 22 qubits got 5
+// workers where Aer runs 16 shots, at twice its time.
 inline size_t RealizationBudgetMB(const SimulatorConfig &config)
 {
     if (config.trajectory_max_memory_mb)
         return *config.trajectory_max_memory_mb;
     const auto value = config.native_options.find("trajectory_max_memory_mb");
-    return value == config.native_options.end() ? 1024 : static_cast<size_t>(std::stoull(value->second));
+    if (value != config.native_options.end())
+        return static_cast<size_t>(std::stoull(value->second));
+    return IsAerTrajectoryBackend(config) ? Utils::MachineTrajectoryBudgetMB() : 1024;
 }
 
 // ConfigureNetwork applies the typed worker limit after native options.

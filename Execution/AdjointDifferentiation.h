@@ -62,6 +62,7 @@
 #endif
 
 #include "../Circuit/Circuit.h"
+#include "../Utils/SystemMemory.h"
 
 #include "QuantumGate.h"
 #include "QubitRegisterCalculator.h"
@@ -186,75 +187,7 @@ namespace Detail
 /** Physical memory of the machine in bytes, or 0 if unknown. */
 inline double PhysicalMemoryBytes()
 {
-#if defined(__APPLE__)
-    uint64_t bytes = 0;
-    size_t len = sizeof(bytes);
-    if (sysctlbyname("hw.memsize", &bytes, &len, nullptr, 0) == 0)
-        return static_cast<double>(bytes);
-#elif defined(__linux__)
-    const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGE_SIZE);
-    double mem = 0.;
-    if (pages > 0 && pageSize > 0)
-        mem = static_cast<double>(pages) * static_cast<double>(pageSize);
-
-    auto readLimit = [](const std::string &path) -> double {
-        std::ifstream f(path);
-        if (!f.is_open())
-            return 0.;
-        std::string token;
-        if (!(f >> token) || token == "max")
-            return 0.;
-        try
-        {
-            const auto limit = std::stoull(token);
-            // Treat limits >= LONG_MAX (typical cgroup v1 unlimited indicator) as unlimited.
-            if (limit > 0 && limit < 9223372036854771712ULL)
-                return static_cast<double>(limit);
-        }
-        catch (...)
-        {
-        }
-        return 0.;
-    };
-
-    double limit = readLimit("/sys/fs/cgroup/memory.max"); // cgroup v2
-    if (limit <= 0.)
-        limit = readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
-    if (limit <= 0.)
-        limit = readLimit("/sys/fs/cgroup/memory.limit_in_bytes");
-
-    std::ifstream cgroups("/proc/self/cgroup");
-    if (cgroups.is_open())
-    {
-        std::string line;
-        while (std::getline(cgroups, line))
-        {
-            if (line.rfind("0::", 0) == 0)
-            {
-                std::string sub = line.substr(3);
-                while (!sub.empty() && sub.front() == '/')
-                    sub.erase(sub.begin());
-                if (!sub.empty())
-                {
-                    double l = readLimit("/sys/fs/cgroup/" + sub + "/memory.max");
-                    if (l > 0.)
-                        limit = (limit > 0.) ? std::min(limit, l) : l;
-                }
-            }
-        }
-    }
-
-    if (limit > 0.)
-        mem = (mem > 0.) ? std::min(mem, limit) : limit;
-
-    return mem;
-#elif defined(_WIN32)
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status))
-        return static_cast<double>(status.ullTotalPhys);
-#endif
-    return 0.;
+    return Utils::PhysicalMemoryBytes();
 }
 
 inline unsigned Popcount(uint64_t x)
