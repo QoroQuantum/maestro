@@ -580,11 +580,19 @@ class AerState : public ISimulator
         return factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture);
     }
 
-    // Two one-qubit Kraus factors on different qubits, which commute.
+    // Two one-qubit Kraus factors on different qubits, which commute, with at
+    // most 16 products of their operators: the number a two-qubit channel needs
+    // at most, and what two relaxations give (four operators each). Factors
+    // given with more operators (a channel may come with any number) would
+    // multiply into as many matrices, and into as many branches for Aer to
+    // weigh, as the product of their counts; they are applied one by one.
     static bool MergesIntoTwoQubitKraus(const QuantumChannel::Factor &first, const QuantumChannel::Factor &second)
     {
-        return first.qubits.size() == 1 && second.qubits.size() == 1 && first.qubits[0] != second.qubits[0] && AppliesAsKraus(first) && AppliesAsKraus(second);
+        return first.qubits.size() == 1 && second.qubits.size() == 1 && first.qubits[0] != second.qubits[0] && AppliesAsKraus(first) &&
+               AppliesAsKraus(second) && first.operators.size() * second.operators.size() <= kMaxMergedKrausOperators;
     }
+
+    static constexpr size_t kMaxMergedKrausOperators = 16;
 
     // The Kraus operators of two one-qubit channels side by side, the first on
     // the local bit zero (LSB). The first operators lead, so the likeliest
