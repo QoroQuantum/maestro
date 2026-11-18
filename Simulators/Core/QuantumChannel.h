@@ -347,9 +347,14 @@ class QuantumChannel
      * A Pauli part acts on a target when a term of non-zero probability has a
      * Pauli other than the identity there. Its list of targets does not tell:
      * placed on one target of a two-qubit channel, or merged with another
-     * Pauli part, it is kept as a mixture over all the targets.
+     * Pauli part, it is kept as a mixture over all the targets. A part whose
+     * operators are all multiples of the identity (a damping of strength zero,
+     * a relaxation of zero duration) acts on none.
+     *
+     * The list is kept with the channel. Called on a temporary channel, it is
+     * returned by value: a reference would not outlive the channel.
      */
-    const std::vector<size_t> &ActiveQubits() const
+    const std::vector<size_t> &ActiveQubits() const &
     {
         std::call_once(data_->activeOnce, [this]() {
             std::vector<bool> used(GetNumberOfQubits(), false);
@@ -362,6 +367,12 @@ class QuantumChannel
                     data_->active.push_back(q);
         });
         return data_->active;
+    }
+
+    std::vector<size_t> ActiveQubits() const &&
+    {
+        const QuantumChannel &self = *this;
+        return self.ActiveQubits();
     }
 
     /**
@@ -387,6 +398,9 @@ class QuantumChannel
             std::vector<Factor> factors;
             for (const Factor &original : GetFactors())
             {
+                // A factor that changes nothing is no part of the channel on its active targets.
+                if (original.kind != FactorKind::kPauli && FactorIsIdentity(original))
+                    continue;
                 Factor factor = original;
                 if (factor.kind == FactorKind::kPauli)
                 {
@@ -1182,12 +1196,35 @@ class QuantumChannel
     }
 
     // Probabilities over a factor's targets as probabilities over all targets, identity elsewhere.
+    // Whether a factor is known to change nothing: each of its operators that counts (non-zero, and of non-zero
+    // probability in a mixture) is a multiple of the identity. A damping of strength zero, a relaxation of zero
+    // duration and a mixture of the identity alone are written that way; the comparison is exact.
+    static bool FactorIsIdentity(const Factor &factor)
+    {
+        if (factor.kind == FactorKind::kPauli)
+        {
+            for (size_t index = 1; index < factor.probabilities.size(); ++index)
+                if (factor.probabilities[index] != 0.0)
+                    return false;
+            return true;
+        }
+        for (size_t index = 0; index < factor.operators.size(); ++index)
+        {
+            if (factor.kind == FactorKind::kUnitaryMixture && index < factor.probabilities.size() && factor.probabilities[index] == 0.0)
+                continue;
+            const Matrix &op = factor.operators[index];
+            if (op.rows() == 0 || !(op - op(0, 0) * Matrix::Identity(op.rows(), op.cols())).isZero(0.0))
+                return false;
+        }
+        return !factor.operators.empty();
+    }
+
     // Whether a factor acts on the k-th of its qubits. A Pauli mixture does when a term of non-zero probability has
-    // a Pauli other than the identity there; any other factor is taken to act on all its qubits.
+    // a Pauli other than the identity there; any other factor acts on all its qubits unless it is the identity.
     static bool FactorActsOn(const Factor &factor, size_t k)
     {
         if (factor.kind != FactorKind::kPauli)
-            return true;
+            return !FactorIsIdentity(factor);
         for (size_t index = 0; index < factor.probabilities.size(); ++index)
             if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
                 return true;

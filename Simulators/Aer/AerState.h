@@ -505,10 +505,10 @@ class AerState : public ISimulator
         if (simulationType == SimulationType::kMatrixProductState &&
             std::any_of(factors.begin(), factors.end(), [](const QuantumChannel::Factor &factor) { return AppliesAsKraus(factor); }))
         {
-            const std::vector<size_t> active = channel.ActiveQubits();
+            const std::vector<size_t> &active = channel.ActiveQubits();
             if (active.size() == targets.size())
                 state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
-            else
+            else if (!active.empty()) // a channel that acts on no target changes nothing
             {
                 AER::reg_t activeTargets;
                 for (const size_t local : active)

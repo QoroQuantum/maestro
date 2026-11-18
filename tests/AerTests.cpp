@@ -16,6 +16,7 @@ namespace utf = boost::unit_test;
 #include <framework/avx2_detect.hpp>
 
 #include <cmath>
+#include <type_traits>
 #include <vector>
 
 #undef min
@@ -395,6 +396,22 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
     BOOST_TEST((Channel::OnQubit(flip, 0).Then(strong, {1}).ActiveQubits() == std::vector<size_t>{0, 1}));
     BOOST_TEST(Channel::OnQubit(flip, 1).Then(strong, {1}).OnActiveQubits().GetNumberOfQubits() == 1u);
     BOOST_TEST(Channel::OnQubit(Channel::BitFlip(0.), 1).ActiveQubits().empty());
+    // A part that is the identity, however it is written, acts on no target.
+    const Channel noDamping = Channel::AmplitudeDamping(0.), noRelaxation = Channel::ThermalRelaxation(0., 1e-4, 1e-4),
+                  noMixture = Channel::UnitaryMixture({1.}, {Eigen::MatrixXcd::Identity(2, 2)});
+    for (const Channel &idle : {noDamping, noRelaxation, noMixture})
+    {
+        BOOST_TEST(idle.ActiveQubits().empty());
+        BOOST_TEST((Channel::OnQubit(idle, 0).Then(damping, {1}).ActiveQubits() == std::vector<size_t>{1}));
+        BOOST_TEST(Channel::OnQubit(idle, 0).Then(damping, {1}).OnActiveQubits().GetFactors().size() == 1u);
+    }
+    // The list is kept with the channel: a reference for a channel that stays, a copy for a temporary.
+    static_assert(std::is_same_v<decltype(damping.ActiveQubits()), const std::vector<size_t> &>);
+    static_assert(std::is_same_v<decltype(Channel::BitFlip(0.2).ActiveQubits()), std::vector<size_t>>);
+    {
+        const auto &kept = Channel::OnQubit(flip, 1).ActiveQubits(); // extends the copy's lifetime
+        BOOST_TEST((kept == std::vector<size_t>{1}));
+    }
     // The reduced channel is built once and kept with the channel and its copies: applying the channel
     // again does not derive its Kraus operators again.
     {
@@ -410,7 +427,12 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
     };
 
     // The same operation on qubit 2, given several ways: a damping, and a bit flip followed by a damping.
-    const std::vector<std::vector<Form>> operations{{{{2}, damping}, {{0, 2}, Channel::OnQubit(damping, 1)}, {{2, 0}, Channel::OnQubit(damping, 0)}},
+    const std::vector<std::vector<Form>> operations{{{{2}, damping},
+                                                     {{0, 2}, Channel::OnQubit(damping, 1)},
+                                                     {{2, 0}, Channel::OnQubit(damping, 0)},
+                                                     {{0, 2}, Channel::OnQubit(noDamping, 0).Then(damping, {1})},
+                                                     {{0, 2}, Channel::OnQubit(noRelaxation, 0).Then(damping, {1})},
+                                                     {{0, 2}, Channel::OnQubit(noMixture, 0).Then(damping, {1})}},
                                                     {{{2}, flip.Then(strong)},
                                                      {{0, 2}, Channel::OnQubit(flip, 1).Then(strong, {1})},
                                                      {{2, 0}, Channel::OnQubit(flip, 0).Then(strong, {0})},
