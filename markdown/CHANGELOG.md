@@ -76,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8.53 s). It also merges upstream qiskit-aer main through 5cb4a838,
   including rx, ry, rzz, rxx, ryy and rzx at Clifford angles on the
   extended stabilizer, and per-simulator MPS settings instead of shared
-  global ones.
+  global ones. The wheel builds and `build.sh` check out the pinned
+  revision too, where they cloned Aer's default branch.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive

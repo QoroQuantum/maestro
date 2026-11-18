@@ -49,10 +49,7 @@ jobs:
     # The Qiskit Aer revision CMake pins (FetchContent GIT_TAG): CI builds the
     # same one, and the dependency cache is keyed by it.
     - name: Read the pinned Qiskit Aer revision
-      run: |
-        AER_VERSION=$(awk '/GIT_REPOSITORY https:\/\/github.com\/QoroQuantum\/qiskit-aer.git/ {getline; print $2; exit}' CMakeLists.txt)
-        echo "$AER_VERSION" | grep -Eq '^[0-9a-f]{40}$' || { echo "No qiskit-aer GIT_TAG in CMakeLists.txt"; exit 1; }
-        echo "AER_VERSION=$AER_VERSION" >> "$GITHUB_ENV"
+      run: echo "AER_VERSION=$(.github/scripts/fetch_pinned_aer.sh --print)" >> "$GITHUB_ENV"
 
     # 1. CACHE GIT DEPENDENCIES (QCSim/JSON/AER)
     - name: Cache Git Dependencies
@@ -87,11 +84,7 @@ jobs:
         if [ ! -d QCSim ]; then git clone https://github.com/QoroQuantum/QCSim.git; fi
         cd QCSim && git checkout ${{ env.QCSIM_VERSION }} && cd ..
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
-        if [ ! -d qiskit-aer ]; then
-          git init -q qiskit-aer
-          git -C qiskit-aer fetch -q --depth 1 https://github.com/QoroQuantum/qiskit-aer.git ${{ env.AER_VERSION }}
-          git -C qiskit-aer checkout -q FETCH_HEAD
-        fi
+        .github/scripts/fetch_pinned_aer.sh qiskit-aer
 
     # 4. BUILD WITH CCACHE + NINJA
     - name: Run CMake
