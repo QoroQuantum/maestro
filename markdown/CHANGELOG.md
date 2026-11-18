@@ -75,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are faster there. With gate fusion, which hands the density matrix fused
   two-qubit blocks, run times do not change; with `gate_fusion` off they
   were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer b4fddaa, and the wheel
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer ba4c60a, and the wheel
   builds and `build.sh` check out that revision too, where they cloned Aer's
   default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
   matrix; noisy MPS runs could reach one while renormalizing the chain, and
@@ -85,7 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between, where its probabilities give 0.34. The MPS settings (threads,
   sample-measure algorithm, swap direction, LAPACK and others) belong to
   each simulator instead of being shared by the process, so simulators on
-  different threads no longer write them concurrently. It inlines the
+  different threads no longer write them concurrently; the temporary copy
+  an MPS makes of itself to answer a query has no bond limit, so a
+  bond-limited state is not truncated by being queried. It inlines the
   statevector index helpers, which the compiler had left out of line in
   Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
   gates on up to five qubits on the scalar kernels, which beat the AVX2 one

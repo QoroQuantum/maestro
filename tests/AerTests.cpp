@@ -274,6 +274,45 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_on_distant_qubits_keeps_specta
         }
 }
 
+// A bond limit describes the simulated state, not the temporary copy Aer makes of it to answer a
+// query: moving the queried qubits together can need larger bonds for a while, and a temporary that
+// truncated them (qiskit-aer b4fddaa, the previous pin) changed the answer. Bell pairs on neighbouring
+// qubits fit a bond limit of 2 exactly; every marginal across pairs is uniform.
+BOOST_AUTO_TEST_CASE(matrix_product_state_bond_limit_does_not_truncate_marginal_queries)
+{
+    constexpr size_t qubits = 6;
+    const std::vector<Types::qubits_vector> queries{{0, 2}, {2, 0}, {1, 4}, {0, 3, 5}, {5, 2, 1}};
+    for (const char *bond : {"2", "4", ""})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+        if (std::string(bond) != "")
+            sim->Configure("matrix_product_state_max_bond_dimension", bond);
+        sim->AllocateQubits(qubits);
+        sim->Initialize();
+        for (size_t q = 0; q + 1 < qubits; q += 2)
+        {
+            sim->ApplyH(q);
+            sim->ApplyCX(q, q + 1);
+        }
+        for (const auto &query : queries)
+        {
+            const auto marginal = sim->Probabilities(query);
+            BOOST_REQUIRE_EQUAL(marginal.size(), size_t{1} << query.size());
+            for (size_t outcome = 0; outcome < marginal.size(); ++outcome)
+                BOOST_TEST(std::abs(marginal[outcome] - 1. / marginal.size()) < 1e-9, "bond limit '" << bond << "', marginal of " << query.size()
+                                                                                                     << " qubits starting at " << query[0] << ", outcome "
+                                                                                                     << outcome << ": " << marginal[outcome]);
+        }
+        // The queries left the state as it was.
+        const auto all = sim->AllProbabilities();
+        for (size_t i = 0; i < all.size(); ++i)
+        {
+            const bool paired = ((i ^ (i >> 1)) & 0b010101) == 0;
+            BOOST_TEST(std::abs(all[i] - (paired ? 0.125 : 0.)) < 1e-9, "bond limit '" << bond << "': probability of outcome " << i << " is " << all[i]);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();

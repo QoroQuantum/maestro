@@ -210,7 +210,7 @@ if(QAER)
         FetchContent_Declare(
             qiskit_aer
             GIT_REPOSITORY https://github.com/QoroQuantum/qiskit-aer.git
-            GIT_TAG b4fddaa4a7ec8b8ace38d11ce6a90391f6f59683
+            GIT_TAG ba4c60af45004aa65b16c79b517efa2b62348eb0
         )
         FetchContent_GetProperties(qiskit_aer)
         if(NOT qiskit_aer_POPULATED)
