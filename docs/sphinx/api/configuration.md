@@ -87,6 +87,48 @@ fields = {n for n in dir(maestro.SimulatorConfig)
 assert fields <= listed, sorted(fields - listed)
 ```
 
+## Bond limits on the Qiskit Aer matrix product state
+
+A `max_bond_dimension` that the circuit reaches (or a truncation threshold
+that discards weight) makes a matrix product state approximate on every
+backend. On the Qiskit Aer MPS it has two further effects. Both come from Aer
+itself: Aer run from Qiskit (qiskit-aer 0.17.2) behaves the same way, and
+gives the same numbers for the small case below.
+
+**Reads of the same state can disagree.** After it truncates, Aer does not
+restore the canonical form of the chain, which its expectation values rely
+on. An expectation value and the same quantity computed from the state's
+probabilities then differ, by about as much as the truncation changed the
+result in the first place. For 60 random circuits of 60 one- and two-qubit
+gates on 10 qubits, whose largest bond is 16:
+
+| Bond limit | Circuits truncated | ⟨Z⟩ error against the exact state (mean, max) | ⟨Z⟩ against the state's own probabilities (mean, max) |
+|---|---|---|---|
+| 2 | 59 | 0.51, 1.0 | 0.17, 1.0 |
+| 4 | 46 | 0.12, 0.72 | 0.058, 0.69 |
+| 8 | 22 | 0.020, 0.23 | 0.016, 0.23 |
+| 16 or more, or none | 0 | 2e-11, 1.5e-10 | 1.3e-11, 1.5e-10 |
+
+A small case: `H(0), H(1), CX(1,2), CX(2,3), CCX(0,1,2)` under a limit of 2
+gives ⟨Z₃⟩ = 0 as an expectation value and +1/3 from the probabilities; under
+a limit of 4 both give 0. So with a limit that bites, `estimate` and the
+counts or probabilities of the same circuit may describe different states.
+
+**An operation on qubits that are apart changes other qubits.** To apply a
+two-qubit gate or a two-qubit channel, the chain first moves the two qubits
+next to each other, and under the limit that move truncates: qubits the
+operation does not act on, and the ones entangled with them, change too.
+Maestro sends a channel only to the targets it acts on, so a channel given on
+two targets that leaves one alone does not move that one.
+
+Neither applies without a limit, or with one the circuit does not reach (no
+bond of an n-qubit register exceeds 2^(n/2)): the Aer MPS then agrees with the
+statevector to about 1e-10 in the table above. QCSim's MPS records when a
+truncation has left the canonical form approximate and then computes what a
+read needs from the tensors, so its expectation values agree with its
+probabilities under any limit; they are still approximations of the exact
+state.
+
 ## Reference
 
 ```{eval-rst}
