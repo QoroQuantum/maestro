@@ -1093,6 +1093,99 @@ void NoiseAddBudgetsNetworkAllocation()
         }
 }
 
+#ifndef NO_QISKIT_AER
+// The network's shot workers on the Aer statevector and matrix product state follow the trajectory
+// memory budget. A circuit with a gate after a measurement runs shot by shot on those workers; the
+// gate records whether a thread other than the caller executed it.
+void AerShotWorkersFollowTheBudget()
+{
+    class ObserveThreadX : public Circuits::XGate<>
+    {
+      public:
+        ObserveThreadX(std::shared_ptr<std::atomic<bool>> foreign, std::thread::id caller) : XGate(0), foreign(std::move(foreign)), caller(caller)
+        {
+        }
+
+        void Execute(const std::shared_ptr<Simulators::ISimulator> &simulator, Circuits::OperationState &state) const override
+        {
+            if (std::this_thread::get_id() != caller)
+                *foreign = true;
+            XGate::Execute(simulator, state);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Clone() const override
+        {
+            return std::make_shared<ObserveThreadX>(*this);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &,
+                                                      const std::unordered_map<Types::qubit_t, Types::qubit_t> & = {}) const override
+        {
+            return Clone(); // The test uses qubit 0.
+        }
+
+      private:
+        std::shared_ptr<std::atomic<bool>> foreign;
+        std::thread::id caller;
+    };
+
+    struct Case
+    {
+        Simulators::SimulationType method;
+        size_t qubits;
+        const char *budget; // trajectory_max_memory_mb, or null for the default
+        const char *bond;   // matrix_product_state_max_bond_dimension, or null
+        bool workers;       // whether shot workers are expected
+        const char *what;
+    };
+
+    const std::vector<Case> cases{
+        // A 17-qubit statevector is 2 MiB, and a worker holds two.
+        {Simulators::SimulationType::kStatevector, 17, "1", nullptr, false, "a 1 MiB budget did not hold 17-qubit Aer statevector shots to one worker"},
+        {Simulators::SimulationType::kStatevector, 17, "64", nullptr, true, "a 64 MiB budget kept 17-qubit Aer statevector shots off the workers"},
+        {Simulators::SimulationType::kStatevector, 17, nullptr, nullptr, true, "the default budget kept 17-qubit Aer statevector shots off the workers"},
+        // A matrix product state without a bond limit has no known size: one worker under an
+        // explicit budget, not limited without one.
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", nullptr, false,
+         "an explicit budget did not hold Aer MPS shots of unknown size to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, nullptr, nullptr, true,
+         "Aer MPS shots without a budget or a bond limit were kept off the workers"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", "32", false, "a 1 MiB budget did not hold bounded Aer MPS shots to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "64", "4", true, "a 64 MiB budget kept small bounded Aer MPS shots off the workers"},
+    };
+    for (const auto &c : cases)
+    {
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{c.qubits}, std::vector<size_t>{2});
+        if (c.budget)
+            network->Configure("trajectory_max_memory_mb", c.budget);
+        if (c.bond)
+            network->Configure("matrix_product_state_max_bond_dimension", c.bond);
+        network->SetMaxSimulators(4);
+        network->SetOptimizeSimulator(false);
+        network->GetController()->SetOptimizeCircuit(false);
+        network->CreateSimulator(Simulators::SimulatorType::kQiskitAer, c.method);
+        auto foreign = std::make_shared<std::atomic<bool>>(false);
+        auto circuit = std::make_shared<Circuits::Circuit<>>();
+        // The register holds the qubits the circuit uses: a gate on each makes it the whole host.
+        for (size_t q = 0; q < c.qubits; ++q)
+            circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}}));
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 64);
+        size_t total = 0;
+        for (const auto &entry : counts)
+        {
+            total += entry.second;
+            // The X after the first measurement flips the qubit: the two bits always differ.
+            Require(entry.first.size() >= 2 && entry.first[0] != entry.first[1], "Aer shot workers returned a wrong outcome");
+        }
+        Require(total == 64, "Aer shot workers lost shots");
+        Require(foreign->load() == c.workers, c.what);
+    }
+}
+#endif
+
 void NoiseAddPreservesRealizationStreams()
 {
     using Method = Simulators::SimulationType;
@@ -1443,6 +1536,9 @@ int main()
         NoiseInjectionPlanMatchesInjectors();
         InjectionCopiesAndRegisterWidth();
         NoiseAddBudgetsNetworkAllocation();
+#ifndef NO_QISKIT_AER
+        AerShotWorkersFollowTheBudget();
+#endif
         NoiseAddFrameCountPolicies();
         NoiseAddParallelEstimatesAndBatches();
         LibraryRealizationsMatchSerial();

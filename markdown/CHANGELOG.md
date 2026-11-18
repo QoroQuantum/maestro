@@ -35,7 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process's cgroup or of a group above it. Aer runs as many shots at once as
   its memory holds; 1 GiB held 22 qubits to five workers, at twice Aer's
   time (GHZ 22: 22.5 s -> 12.5 s, Aer 11.7 s; QAOA 22: 33.4 s -> 20.0 s, Aer
-  21.9 s). QCSim's default is unchanged.
+  21.9 s). QCSim's default is unchanged. A prepared state that the shot
+  workers clone is counted in the budget, and each worker clones it when it
+  starts a job instead of every queued job holding a clone (20 qubits, seven
+  shots, 128 MiB: peak 473 MiB -> 297 MiB). An Aer MPS without a bond limit
+  has no known size: under an explicit budget its shots keep one worker;
+  without one they are not limited. The budget counts two copies of the
+  state per worker; a measurement of many qubits at once on the Aer
+  statevector allocates up to two more for its duration.
 - On the Aer matrix product state, a channel with any part that reads the
   state through Kraus operators is applied as one Kraus operation, with its
   canonical Kraus set, as Aer applies a gate's error. Drawn as Pauli gates

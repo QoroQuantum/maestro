@@ -883,6 +883,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             threadsPool.SetFinishLimit(shots);
 
             uint64_t jobStream = 0;
+            const auto cloneOrder = std::make_shared<typename ExecuteJob<Time>::CloneOrder>();
             while (shots > 0)
             {
                 const size_t curCnt = std::min(cntPerThread, shots);
@@ -909,10 +910,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (optSim)
                 {
-                    job->optSim = optSim->Clone();
+                    // Cloned when a worker takes the job, not here: there can be
+                    // more jobs than workers, and a clone made for each queued
+                    // job held a whole state beyond the memory budget.
+                    job->cloneSource = optSim;
+                    job->cloneOrder = cloneOrder;
+                    job->cloneIndex = job->randomStream;
                     job->executedGates = executed;
-                    if (job->config.IsSet("seed"))
-                        job->optSim->SetSeed(std::stoull(job->config.GetConfiguration("seed")));
                 }
 
                 threadsPool.AddRunJob(std::move(job));
@@ -1123,6 +1127,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             threadsPool.SetFinishLimit(shots);
 
             uint64_t jobStream = 0;
+            const auto cloneOrder = std::make_shared<typename ExecuteJob<Time>::CloneOrder>();
             while (shots > 0)
             {
                 const size_t curCnt = std::min(cntPerThread, shots);
@@ -1148,10 +1153,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (optSim)
                 {
-                    job->optSim = optSim->Clone();
+                    // Cloned when a worker takes the job, not here: there can be
+                    // more jobs than workers, and a clone made for each queued
+                    // job held a whole state beyond the memory budget.
+                    job->cloneSource = optSim;
+                    job->cloneOrder = cloneOrder;
+                    job->cloneIndex = job->randomStream;
                     job->executedGates = executed;
-                    if (job->config.IsSet("seed"))
-                        job->optSim->SetSeed(std::stoull(job->config.GetConfiguration("seed")));
                 }
 
                 threadsPool.AddRunJob(std::move(job));
@@ -3237,8 +3245,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // The CPU Aer statevector and matrix product state run their shots on
         // these workers, one state each with its saved copy, and not on the
         // logical shot blocks, which only QCSim reaches: the trajectory memory
-        // budget is applied to them here. A matrix product state without a
-        // bond limit has no known size and is not limited.
+        // budget is applied to them here. A prepared simulator, which the
+        // workers clone, and its saved copy are reserved out of the budget. A
+        // matrix product state without a bond limit has no known size: under
+        // an explicit budget it keeps one worker, as realization workers do;
+        // without one it is not limited.
         if (nrThreads > 1 && simType == Simulators::SimulatorType::kQiskitAer &&
             (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
         {
@@ -3250,7 +3261,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                       : bond ? Utils::RealizationStateBytes(Utils::RealizationState::kMatrixProductState, nrQubits, bond)
                                              : 0.L;
             if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
-                nrThreads = Utils::LimitRealizationWorkersByMemory(nrThreads, static_cast<size_t>(bytes), TrajectoryBudgetMB(simType, method), 0, 2);
+                nrThreads =
+                    Utils::LimitRealizationWorkersByMemory(nrThreads, static_cast<size_t>(bytes), TrajectoryBudgetMB(simType, method), optSim ? 2 : 0, 2);
+            else if (!(bytes > 0) && configuration.IsSet("trajectory_max_memory_mb"))
+                nrThreads = 1;
         }
 #endif
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)

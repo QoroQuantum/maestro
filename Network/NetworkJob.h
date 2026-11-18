@@ -25,6 +25,7 @@
 
 #include "Configuration.h"
 #include <algorithm>
+#include <condition_variable>
 #include <functional>
 #ifdef _OPENMP
 #include <omp.h>
@@ -54,11 +55,44 @@ template <typename Time = Types::time_type> class ExecuteJob
         ScopedInternalThreads threadBudget(internalThreads);
         if (cloneSource)
         {
-            // Clone only when a worker starts, so queued logical blocks do not
-            // each retain another statevector/density matrix. Fusion flushes
+            // Clone only when a worker starts, so queued jobs do not each
+            // retain another statevector/density matrix. Fusion flushes
             // during cloning, hence the short lock around the source.
-            const std::lock_guard lock(*cloneMutex);
-            optSim = cloneSource->CloneForExecution(std::stoull(config.GetConfiguration("seed")));
+            if (cloneOrder)
+            {
+                // The shot workers outside the logical shot blocks: a full
+                // clone, seeded only when the job has a seed. Clones are made
+                // in job order, as when each job was given its clone before it
+                // was queued: Clone() advances the source's own clone seeds,
+                // so the order decides what an unseeded job draws from a
+                // seeded source. The pool hands jobs out in order, so the
+                // earlier jobs are already running and cloning.
+                std::unique_lock lock(cloneOrder->mutex);
+                cloneOrder->turn.wait(lock, [&] { return cloneOrder->next == cloneIndex; });
+
+                // The next job's turn comes also if the clone throws.
+                struct Advance
+                {
+                    CloneOrder &order;
+                    std::unique_lock<std::mutex> &lock;
+
+                    ~Advance()
+                    {
+                        ++order.next;
+                        lock.unlock();
+                        order.turn.notify_all();
+                    }
+                } advance{*cloneOrder, lock};
+
+                optSim = cloneSource->Clone();
+                if (config.IsSet("seed"))
+                    optSim->SetSeed(std::stoull(config.GetConfiguration("seed")));
+            }
+            else
+            {
+                const std::lock_guard lock(*cloneMutex);
+                optSim = cloneSource->CloneForExecution(std::stoull(config.GetConfiguration("seed")));
+            }
         }
         // The dispatcher assigns this job a share of the internal thread budget.
         ConfigureTrajectoryArithmetic();
@@ -789,6 +823,20 @@ template <typename Time = Types::time_type> class ExecuteJob
     std::shared_ptr<Simulators::ISimulator> optSim;
     std::shared_ptr<Simulators::ISimulator> cloneSource;
     std::shared_ptr<std::mutex> cloneMutex;
+
+    // For jobs that take a full clone of cloneSource (Clone() and an optional
+    // seed) in the order they were queued, instead of CloneForExecution(seed)
+    // under cloneMutex: the turn shared by the jobs of one execution, and this
+    // job's place in it.
+    struct CloneOrder
+    {
+        std::mutex mutex;
+        std::condition_variable turn;
+        size_t next = 0;
+    };
+
+    std::shared_ptr<CloneOrder> cloneOrder;
+    size_t cloneIndex = 0;
     std::vector<bool> executedGates;
 
     // relevant only if the simulator is not passed or the simulator doesn't have
