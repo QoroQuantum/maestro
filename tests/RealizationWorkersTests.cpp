@@ -269,6 +269,19 @@ void BudgetsAndEmptyWork()
             Require(movedFiles.size() == 2 && listed(movedFiles, ("/mnt/job/job/" + file).c_str()) && listed(movedFiles, ("/mnt/job/" + file).c_str()),
                     "a mount the process has moved out of was read for its memory limit");
         }
+        // The same without mount information: nothing is assumed for a group that leaves its
+        // hierarchy's root, neither paths that climb out of the conventional mount point nor that
+        // mount point's own limit.
+        for (const bool v2 : {true, false})
+        {
+            std::istringstream moved(std::string(v2 ? "0::" : "9:memory:") + "/../../other/job\n"), none("");
+            for (const auto &file : Utils::SystemMemoryDetail::CgroupLimitFiles(moved, none))
+            {
+                Require(file.find("..") == std::string::npos, "a cgroup limit was looked up outside the conventional mount point");
+                Require(file != (v2 ? "/sys/fs/cgroup/memory.max" : "/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+                        "the limit of a hierarchy root the process has left was read");
+            }
+        }
         // mountinfo escapes a space in a path as \040 (and a backslash as \134).
         std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
         const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);

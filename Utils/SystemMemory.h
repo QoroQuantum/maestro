@@ -90,9 +90,9 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
     // path below it the namespace hides, so the mount's own limit is read and
     // nothing below it. A root that goes up and down again ("/../other") without
     // holding the group is a sibling.
-    const auto below = [](const std::string &root, const std::string &group, std::string &relative) {
-        // A path that starts by going up leaves the subtree it is taken in.
-        const auto leaves = [](const std::string &path) { return path.compare(0, 3, "/..") == 0 && (path.size() == 3 || path[3] == '/'); };
+    // A path that starts by going up leaves the subtree it is taken in.
+    const auto leaves = [](const std::string &path) { return path.compare(0, 3, "/..") == 0 && (path.size() == 3 || path[3] == '/'); };
+    const auto below = [&leaves](const std::string &root, const std::string &group, std::string &relative) {
         if (root == "/" || root.empty())
         {
             // The root of the process's namespace: a group outside it is not below it.
@@ -161,18 +161,27 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
         // No mount information: the conventional mount points, and their roots
         // whatever /proc/self/cgroup listed (a cgroup namespace shows the
         // process's group as the root). The tightest limit wins, so a file that
-        // does not apply can only be absent, never loosen it.
-        if (hasUnified)
+        // does not apply can only be absent, never loosen it. A group that
+        // leaves the hierarchy's root (/../../other/job, a process moved out of
+        // its namespace's subtree) is not below the assumed mount point: nothing
+        // is read for it, not paths that climb out of the mount point and not the
+        // root's limit, which is another subtree's.
+        const bool unifiedInside = !hasUnified || !leaves(unified), memoryInside = !hasMemory || !leaves(memory);
+        if (hasUnified && unifiedInside)
             addHierarchy("/sys/fs/cgroup", unified, "memory.max");
-        if (hasMemory)
+        if (hasMemory && memoryInside)
         {
             // The v1 memory controller is mounted at /sys/fs/cgroup/memory, or on some systems at /sys/fs/cgroup itself.
             addHierarchy("/sys/fs/cgroup/memory", memory, "memory.limit_in_bytes");
             addHierarchy("/sys/fs/cgroup", memory, "memory.limit_in_bytes");
         }
-        files.push_back("/sys/fs/cgroup/memory.max");                   // cgroup v2
-        files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
-        files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
+        if (unifiedInside)
+            files.push_back("/sys/fs/cgroup/memory.max"); // cgroup v2
+        if (memoryInside)
+        {
+            files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
+            files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
+        }
     }
     return files;
 }
