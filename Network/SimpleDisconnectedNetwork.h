@@ -29,6 +29,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 #include <optional>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
