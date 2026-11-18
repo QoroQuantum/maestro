@@ -47,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
   `execution_metadata.realization_workers` reports the workers; a noisy
   fidelity still runs its realizations one after another and reports 1.
+- QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
+  one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
+  one pass over the matrix instead of two, from 11 qubits for dense gates
+  (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y
+  (1.1-2x). Smaller registers and two-qubit gates keep the two passes, which
+  are faster there. With gate fusion, which hands the density matrix fused
+  two-qubit blocks, run times do not change; with `gate_fusion` off they
+  were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
 - Qiskit Aer is pinned to QoroQuantum/qiskit-aer 1a13914. It fixes the MPS
   SVD (`csvd`) looping forever on a zero matrix (a0c18fd); noisy MPS runs
   could reach one while renormalizing the chain, and then hung. It inlines
