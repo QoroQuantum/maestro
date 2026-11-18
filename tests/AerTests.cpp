@@ -229,6 +229,51 @@ BOOST_AUTO_TEST_CASE(statevector_and_matrix_product_state_sample_channels_as_tra
     BOOST_CHECK_THROW(stabilizer->ApplyBitFlipNoise(0, 0.1), std::runtime_error);
 }
 
+// A Kraus channel on two qubits that are apart in the chain: Aer brings them together to apply it,
+// and has to renormalize the tensors around where they are then. Renormalizing around where they
+// were, as Aer did before the revision pinned here, left the tensors between them stale:
+// the probabilities stayed right, and an expectation value on a qubit in between was wrong.
+BOOST_AUTO_TEST_CASE(matrix_product_state_channel_on_distant_qubits_keeps_spectators_consistent)
+{
+    using Channel = Simulators::QuantumChannel;
+    constexpr size_t qubits = 6;
+    const Channel damping = Channel::OnQubit(Channel::AmplitudeDamping(0.3), 0).Then(Channel::AmplitudeDamping(0.3), {1});
+    const std::vector<Types::qubits_vector> placements{{0, 5}, {5, 0}, {1, 4}, {4, 2}, {2, 3}};
+    for (const auto &targets : placements)
+        for (uint64_t seed = 1; seed <= 4; ++seed)
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+            sim->AllocateQubits(qubits);
+            sim->Initialize();
+            sim->SetSeed(seed);
+            sim->ApplyH(0);
+            for (size_t q = 0; q + 1 < qubits; ++q)
+                sim->ApplyCX(q, q + 1);
+            for (size_t q = 0; q < qubits; ++q)
+                sim->ApplyRy(q, 0.2 + 0.1 * q);
+            sim->ApplyQuantumChannel(targets, damping);
+
+            // The Z expectation of each qubit against its marginal from the probabilities of the same state.
+            std::vector<double> expectations(qubits);
+            for (size_t q = 0; q < qubits; ++q)
+            {
+                std::string pauli(qubits, 'I');
+                pauli[q] = 'Z';
+                expectations[q] = sim->ExpectationValue(pauli);
+            }
+            const auto probabilities = sim->AllProbabilities();
+            for (size_t q = 0; q < qubits; ++q)
+            {
+                double marginal = 0.;
+                for (size_t i = 0; i < probabilities.size(); ++i)
+                    marginal += probabilities[i] * ((i >> q) & 1 ? -1. : 1.);
+                BOOST_TEST(std::abs(expectations[q] - marginal) < 1e-9, "Z on qubit " << q << " after a channel on qubits " << targets[0] << " and "
+                                                                                      << targets[1] << " (seed " << seed << "): expectation " << expectations[q]
+                                                                                      << ", marginal " << marginal);
+            }
+        }
+}
+
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();

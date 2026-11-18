@@ -43,7 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (22% more SVDs, on larger bonds): QFT 16 1.44 s -> 0.87 s (Aer 0.86 s),
   QFT 24 32.4 s -> 15.3 s, random 12 22.2 s -> 15.6 s, 200 shots. Pauli and
   unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
-  draws. The distribution is unchanged; seeded runs draw differently.
+  draws. The distribution is unchanged; seeded runs draw differently. This
+  needs the pinned Aer: before it, a Kraus operation on qubits apart in the
+  chain left the tensors between them stale, and expectation values on
+  those qubits wrong.
 - Noisy `estimate` requests run their realizations on realization workers, as
   Python's estimate does. They are summed in realization order, each as soon
   as the earlier ones are in, so the sums do not depend on the scheduling and
@@ -64,10 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are faster there. With gate fusion, which hands the density matrix fused
   two-qubit blocks, run times do not change; with `gate_fusion` off they
   were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 1a13914. It fixes the MPS
-  SVD (`csvd`) looping forever on a zero matrix (a0c18fd); noisy MPS runs
-  could reach one while renormalizing the chain, and then hung. It inlines
-  the statevector index helpers, which the compiler had left out of line in
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer b4fddaa, and the wheel
+  builds and `build.sh` check out that revision too, where they cloned Aer's
+  default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
+  matrix; noisy MPS runs could reach one while renormalizing the chain, and
+  then hung. It renormalizes the chain from where the qubits are after a
+  Kraus operation on qubits that were apart: before, a six-qubit GHZ state
+  with a two-qubit Kraus on qubits 0 and 5 gave `<Z>` = 0 on the qubits in
+  between, where its probabilities give 0.34. The MPS settings (threads,
+  sample-measure algorithm, swap direction, LAPACK and others) belong to
+  each simulator instead of being shared by the process, so simulators on
+  different threads no longer write them concurrently. It inlines the
+  statevector index helpers, which the compiler had left out of line in
   Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
   gates on up to five qubits on the scalar kernels, which beat the AVX2 one
   there (3.7x on one qubit). Maestro -> Aer statevector trajectories, 200
@@ -75,9 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relaxation 2.27 s -> 1.54 s (Aer 2.38 s), GHZ 20 9.19 s -> 7.85 s (Aer
   8.53 s). It also merges upstream qiskit-aer main through 5cb4a838,
   including rx, ry, rzz, rxx, ryy and rzx at Clifford angles on the
-  extended stabilizer, and per-simulator MPS settings instead of shared
-  global ones. The wheel builds and `build.sh` check out the pinned
-  revision too, where they cloned Aer's default branch.
+  extended stabilizer.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive
