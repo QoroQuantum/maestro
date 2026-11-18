@@ -26,6 +26,7 @@
 #include "Configuration.h"
 #include <algorithm>
 #include <condition_variable>
+#include <exception>
 #include <functional>
 #ifdef _OPENMP
 #include <omp.h>
@@ -52,6 +53,27 @@ template <typename Time = Types::time_type> class ExecuteJob
     {
         if (curCnt == 0)
             return;
+
+        // If this job fails, the jobs of the execution that wait for a clone
+        // turn are released: the pool runs no job it takes after a failure, so
+        // the turns of those jobs never come.
+        struct CancelCloneTurns
+        {
+            std::shared_ptr<CloneOrder> order;
+            int exceptions = std::uncaught_exceptions();
+
+            ~CancelCloneTurns()
+            {
+                if (!order || std::uncaught_exceptions() <= exceptions)
+                    return;
+                {
+                    const std::lock_guard lock(order->mutex);
+                    order->cancelled = true;
+                }
+                order->turn.notify_all();
+            }
+        } cancelCloneTurns{cloneOrder};
+
         ScopedInternalThreads threadBudget(internalThreads);
         if (cloneSource)
         {
@@ -68,7 +90,11 @@ template <typename Time = Types::time_type> class ExecuteJob
                 // seeded source. The pool hands jobs out in order, so the
                 // earlier jobs are already running and cloning.
                 std::unique_lock lock(cloneOrder->mutex);
-                cloneOrder->turn.wait(lock, [&] { return cloneOrder->next == cloneIndex; });
+                cloneOrder->turn.wait(lock, [&] { return cloneOrder->cancelled || cloneOrder->next == cloneIndex; });
+                // Another job of the execution failed: its exception is what the
+                // caller gets, and this job's shots are not run.
+                if (cloneOrder->cancelled)
+                    return;
 
                 // The next job's turn comes also if the clone throws.
                 struct Advance
@@ -832,11 +858,12 @@ template <typename Time = Types::time_type> class ExecuteJob
     {
         std::mutex mutex;
         std::condition_variable turn;
-        size_t next = 0;
+        uint64_t next = 0;
+        bool cancelled = false; // a job failed: the turns of the jobs the pool then skips never come
     };
 
     std::shared_ptr<CloneOrder> cloneOrder;
-    size_t cloneIndex = 0;
+    uint64_t cloneIndex = 0;
     std::vector<bool> executedGates;
 
     // relevant only if the simulator is not passed or the simulator doesn't have
