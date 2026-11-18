@@ -81,13 +81,24 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
     };
     // The group's path below the root of a mount; false when the group is not
     // below it. Such a mount shows another part of the hierarchy (a sibling
-    // group's subtree, or one outside the process's cgroup namespace, whose
-    // root starts with "/.."), and its limits are not the process's.
+    // group's subtree), and its limits are not the process's. In a cgroup
+    // namespace a root made only of ".." ("/..", "/../..") is an ancestor of
+    // the namespace's root: its limit applies to the process, whose path below
+    // it the namespace hides, so the mount's own limit is read and nothing
+    // below it. A root that goes up and down again ("/../other") is a sibling.
     const auto below = [](const std::string &root, const std::string &group, std::string &relative) {
         if (root == "/" || root.empty())
         {
             relative = group;
             return true;
+        }
+        if (root.compare(0, 3, "/..") == 0)
+        {
+            size_t at = 0;
+            while (root.compare(at, 3, "/..") == 0 && (at + 3 == root.size() || root[at + 3] == '/'))
+                at += 3;
+            relative.clear();
+            return at == root.size();
         }
         if (group.compare(0, root.size(), root) != 0 || (group.size() != root.size() && group[root.size()] != '/'))
             return false;

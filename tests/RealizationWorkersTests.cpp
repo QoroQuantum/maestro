@@ -231,6 +231,17 @@ void BudgetsAndEmptyWork()
         Require(listed(files, "/sys/fs/cgroup/job/memory.max") && listed(files, "/sys/fs/cgroup/memory.max"), "the process's own cgroup mount was not read");
         Require(!listed(files, "/mnt/other/memory.max") && !listed(files, "/mnt/outside/memory.max"), "another group's cgroup mount was read");
         Require(files.size() == 2, "paths outside the process's cgroup mount were read");
+        // In a cgroup namespace a mount rooted at "/.." (or "/../..") shows an ancestor of the
+        // namespace's root: its own limit applies. "/../other" is a sibling of the root.
+        std::istringstream inherited("0::/\n"), inheritedMounts("30 25 0:26 /.. /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n"
+                                                                "31 25 0:27 /../.. /mnt/grandparent rw - cgroup2 cgroup2 rw\n"
+                                                                "32 25 0:28 /../other /mnt/sibling rw - cgroup2 cgroup2 rw\n"
+                                                                "33 25 0:29 /..other /mnt/named rw - cgroup2 cgroup2 rw\n");
+        const auto inheritedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(inherited, inheritedMounts);
+        Require(listed(inheritedFiles, "/sys/fs/cgroup/memory.max") && listed(inheritedFiles, "/mnt/grandparent/memory.max"),
+                "the limit of an ancestor of the cgroup namespace's root was not read");
+        Require(!listed(inheritedFiles, "/mnt/sibling/memory.max") && !listed(inheritedFiles, "/mnt/named/memory.max") && inheritedFiles.size() == 2,
+                "a sibling of the cgroup namespace's root was read");
         // mountinfo escapes a space in a path as \040 (and a backslash as \134).
         std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
         const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);
@@ -1172,6 +1183,11 @@ void AerShotWorkersFollowTheBudget()
          "Aer MPS shots without a budget or a bond limit were kept off the workers"},
         {Simulators::SimulationType::kMatrixProductState, 17, "1", "32", false, "a 1 MiB budget did not hold bounded Aer MPS shots to one worker"},
         {Simulators::SimulationType::kMatrixProductState, 17, "64", "4", true, "a 64 MiB budget kept small bounded Aer MPS shots off the workers"},
+        // A bond limit beyond what 17 qubits can reach (2^8) counts as 256: 105 MiB a state.
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", "2147483647", false,
+         "a 1 MiB budget did not hold Aer MPS shots with a huge bond limit to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "2048", "2147483647", true,
+         "a 2 GiB budget kept Aer MPS shots with a huge bond limit off the workers"},
     };
     for (const auto &c : cases)
     {

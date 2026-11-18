@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts a job instead of every queued job holding a clone (20 qubits, seven
   shots, 128 MiB: peak 473 MiB -> 297 MiB). An Aer MPS without a bond limit
   has no known size: under an explicit budget its shots keep one worker;
-  without one they are not limited. The budget counts two copies of the
+  without one they are not limited. A bond limit above what the register
+  can reach (2^(qubits/2)) counts as that. The budget counts two copies of the
   state per worker; a measurement of many qubits at once on the Aer
   statevector allocates up to two more for its duration.
 - On the Aer matrix product state, a channel with any part that reads the

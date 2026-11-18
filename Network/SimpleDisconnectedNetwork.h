@@ -3247,15 +3247,21 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // logical shot blocks, which only QCSim reaches: the trajectory memory
         // budget is applied to them here. A prepared simulator, which the
         // workers clone, and its saved copy are reserved out of the budget. A
-        // matrix product state without a bond limit has no known size: under
-        // an explicit budget it keeps one worker, as realization workers do;
-        // without one it is not limited.
+        // matrix product state without a bond limit has no known size, and one
+        // whose size estimate no size_t holds is as good as unbounded: under an
+        // explicit budget they keep one worker, as realization workers do;
+        // without one they are not limited.
         if (nrThreads > 1 && simType == Simulators::SimulatorType::kQiskitAer &&
             (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
         {
             size_t bond = 0;
             if (method == Simulators::SimulationType::kMatrixProductState && configuration.IsSet("matrix_product_state_max_bond_dimension"))
+            {
                 bond = std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"));
+                // No bond of the register can be larger than 2^(qubits / 2), whatever the limit says.
+                if (nrQubits / 2 < std::numeric_limits<size_t>::digits - 1)
+                    bond = std::min(bond, size_t{1} << (nrQubits / 2));
+            }
             const long double bytes = method == Simulators::SimulationType::kStatevector
                                           ? Utils::RealizationStateBytes(Utils::RealizationState::kStatevector, nrQubits)
                                       : bond ? Utils::RealizationStateBytes(Utils::RealizationState::kMatrixProductState, nrQubits, bond)
@@ -3263,7 +3269,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
                 nrThreads =
                     Utils::LimitRealizationWorkersByMemory(nrThreads, static_cast<size_t>(bytes), TrajectoryBudgetMB(simType, method), optSim ? 2 : 0, 2);
-            else if (!(bytes > 0) && configuration.IsSet("trajectory_max_memory_mb"))
+            else if (configuration.IsSet("trajectory_max_memory_mb"))
+                // No bond limit, or a size no size_t holds: unknown or beyond any budget.
                 nrThreads = 1;
         }
 #endif
