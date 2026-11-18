@@ -313,6 +313,69 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_bond_limit_does_not_truncate_marginal_
     }
 }
 
+// A channel on qubits apart in the chain, under a bond limit: bringing the qubits together truncates
+// the state. Aer has to weigh the Kraus operators on the state it then applies one to. Weighed on the
+// state before the move (qiskit-aer ba4c60a, the previous pin), an operator could be chosen that the
+// moved state gives no weight: the trajectory became a zero state and its renormalization crashed.
+BOOST_AUTO_TEST_CASE(matrix_product_state_channel_under_a_bond_limit_keeps_the_trajectory_normalized)
+{
+    using Channel = Simulators::QuantumChannel;
+    const Channel damping = Channel::OnQubit(Channel::AmplitudeDamping(0.3), 0).Then(Channel::AmplitudeDamping(0.3), {1});
+    for (const char *bond : {"2", "4"})
+        for (uint64_t seed = 1; seed <= 32; ++seed) // every branch of the channel is drawn among them
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+            sim->Configure("matrix_product_state_max_bond_dimension", bond);
+            sim->AllocateQubits(4);
+            sim->Initialize();
+            sim->SetSeed(seed);
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyH(2);
+            sim->ApplyCX(2, 3);
+            sim->ApplyQuantumChannel({0, 2}, damping);
+            double norm = 0.;
+            for (const double probability : sim->AllProbabilities())
+                norm += probability;
+            BOOST_TEST(std::abs(norm - 1.) < 1e-9, "bond limit " << bond << ", seed " << seed << ": the trajectory has norm " << norm);
+        }
+}
+
+// A gate on three qubits is applied on a small MPS that is written back into the state, within the
+// state's bond limit (qiskit-aer ba4c60a wrote it back without one). Under a limit of 1 the state
+// stays a product state whatever the gate: its probabilities are the product of its marginals.
+BOOST_AUTO_TEST_CASE(matrix_product_state_three_qubit_gate_respects_the_bond_limit)
+{
+    constexpr size_t qubits = 4;
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+    sim->Configure("matrix_product_state_max_bond_dimension", "1");
+    sim->AllocateQubits(qubits);
+    sim->Initialize();
+    sim->ApplyH(0);
+    sim->ApplyH(1);
+    sim->ApplyRy(3, 0.7);
+    sim->ApplyCCX(0, 1, 2); // entangles the three qubits, unless truncated
+    const auto probabilities = sim->AllProbabilities();
+    std::vector<double> one(qubits, 0.);
+    double norm = 0.;
+    for (size_t i = 0; i < probabilities.size(); ++i)
+    {
+        norm += probabilities[i];
+        for (size_t q = 0; q < qubits; ++q)
+            if ((i >> q) & 1)
+                one[q] += probabilities[i];
+    }
+    BOOST_TEST(std::abs(norm - 1.) < 1e-9);
+    for (size_t i = 0; i < probabilities.size(); ++i)
+    {
+        double product = 1.;
+        for (size_t q = 0; q < qubits; ++q)
+            product *= (i >> q) & 1 ? one[q] : 1. - one[q];
+        BOOST_TEST(std::abs(probabilities[i] - product) < 1e-9,
+                   "outcome " << i << ": probability " << probabilities[i] << " is not the product of the marginals, " << product);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();

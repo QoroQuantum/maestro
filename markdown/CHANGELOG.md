@@ -76,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are faster there. With gate fusion, which hands the density matrix fused
   two-qubit blocks, run times do not change; with `gate_fusion` off they
   were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer ba4c60a, and the wheel
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 23faa5b, and the wheel
   builds and `build.sh` check out that revision too, where they cloned Aer's
   default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
   matrix; noisy MPS runs could reach one while renormalizing the chain, and
@@ -88,7 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each simulator instead of being shared by the process, so simulators on
   different threads no longer write them concurrently; the temporary copy
   an MPS makes of itself to answer a query has no bond limit, so a
-  bond-limited state is not truncated by being queried. It inlines the
+  bond-limited state is not truncated by being queried. Under a bond limit,
+  a Kraus operation on qubits apart weighs and applies its operator on the
+  state after the qubits are moved together (it could pick an operator the
+  truncated state gave no weight, and crash), and a gate on three qubits
+  stays within the limit. It inlines the
   statevector index helpers, which the compiler had left out of line in
   Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
   gates on up to five qubits on the scalar kernels, which beat the AVX2 one
