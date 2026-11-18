@@ -486,6 +486,23 @@ class AerState : public ISimulator
             return;
         }
         const auto &factors = channel.GetFactors();
+        // The matrix product state renormalizes the chain after every Kraus
+        // operation, and how a channel is split into branches changes what its
+        // trajectories cost there: drawn as Pauli gates followed by each
+        // qubit's damping, QFT 16 took 1.7x Aer's time per shot, with 22% more
+        // SVDs on larger bonds. Aer applies a gate's whole error as one Kraus
+        // operation; so does this, with the channel's canonical Kraus set
+        // (largest branch first), when any part of it would read the state
+        // through Kraus operators anyway. A channel drawn without them (Pauli,
+        // unitary mixture, T2 <= T1 relaxation as nothing, a phase flip or a
+        // rare reset) keeps its cheaper draws below.
+        if (simulationType == SimulationType::kMatrixProductState &&
+            std::any_of(factors.begin(), factors.end(), [](const QuantumChannel::Factor &factor) { return AppliesAsKraus(factor); }))
+        {
+            state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            NotifyObservers(targets);
+            return;
+        }
         for (size_t index = 0; index < factors.size(); ++index)
         {
             const auto &factor = factors[index];
@@ -524,14 +541,13 @@ class AerState : public ISimulator
                 QuantumChannel::ThermalMixture mixture;
                 if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
                 {
-                    // Aer renormalizes after every Kraus operation: the statevector
-                    // with a pass over the state for each branch it weighs, the
-                    // matrix product state with an SVD of every entangled bond
-                    // along the chain. One-qubit factors on two qubits (the
-                    // relaxation of each qubit of a two-qubit gate) commute, so
-                    // they go to Aer as their tensor product: one renormalization
-                    // instead of two, as Aer's own noise sampling applies a gate's
-                    // error as one Kraus operation.
+                    // Aer's statevector renormalizes after every Kraus operation,
+                    // with a pass over the state for each branch it weighs (the
+                    // matrix product state took its whole channel above). One-qubit
+                    // factors on two qubits (the relaxation of each qubit of a
+                    // two-qubit gate) commute, so they go to Aer as their tensor
+                    // product: one renormalization instead of two, as Aer's own
+                    // noise sampling applies a gate's error as one Kraus operation.
                     if (index + 1 < factors.size() && MergesIntoTwoQubitKraus(factor, factors[index + 1]))
                     {
                         const auto &next = factors[index + 1];

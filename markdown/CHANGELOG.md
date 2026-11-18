@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   held 22 qubits to five workers, at twice Aer's time (GHZ 22: 22.5 s ->
   12.5 s, Aer 11.7 s; QAOA 22: 33.4 s -> 20.0 s, Aer 21.9 s). QCSim and an
   explicit budget are unchanged.
+- On the Aer matrix product state, a channel with any part that reads the
+  state through Kraus operators is applied as one Kraus operation, with its
+  canonical Kraus set, as Aer applies a gate's error. Drawn as Pauli gates
+  followed by each qubit's damping, the trajectories cost more to renormalize
+  (22% more SVDs, on larger bonds): QFT 16 1.44 s -> 0.87 s (Aer 0.86 s),
+  QFT 24 32.4 s -> 15.3 s, random 12 22.2 s -> 15.6 s, 200 shots. Pauli and
+  unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
+  draws. The distribution is unchanged; seeded runs draw differently.
 - Qiskit Aer is pinned to QoroQuantum/qiskit-aer a0c18fd, which fixes its
   MPS SVD (`csvd`) looping forever on a zero matrix. Noisy MPS runs could
   reach one while renormalizing the chain, and then hung.
