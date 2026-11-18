@@ -473,6 +473,100 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
             }
 }
 
+// A unitary mixture draws a branch and applies it as a gate. A drawn unitary that is the identity on
+// a target is not applied there: as a two-qubit gate, also the identity made the matrix product state
+// bring the two qubits together, and under a bond limit that truncated the state (P(q1 = 1) from 0.45
+// to 0 on two independent pairs, for a mixture of the 4x4 identity alone).
+BOOST_AUTO_TEST_CASE(unitary_mixture_branches_reach_only_the_targets_they_act_on)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Matrix = Eigen::MatrixXcd;
+    // U = second (x) first, with the first target as local matrix bit zero.
+    const auto onTargets = [](const Matrix &second, const Matrix &first) {
+        Matrix u(4, 4);
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                u(i, j) = second(i / 2, j / 2) * first(i % 2, j % 2);
+        return u;
+    };
+    const Matrix identity = Matrix::Identity(2, 2);
+    Matrix x = Matrix::Zero(2, 2), rotation(2, 2);
+    x(0, 1) = x(1, 0) = 1.;
+    const double angle = 0.7;
+    rotation << std::cos(angle / 2), -std::sin(angle / 2), std::sin(angle / 2), std::cos(angle / 2); // Ry(angle)
+
+    const auto prepare = [](Simulators::SimulationType method, const char *bond, uint64_t seed) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+        if (std::string(bond) != "")
+            sim->Configure("matrix_product_state_max_bond_dimension", bond);
+        sim->AllocateQubits(4);
+        sim->Initialize();
+        sim->SetSeed(seed);
+        // Independent pairs (0,1) and (2,3), with P(11) of 0.45 and 0.49.
+        sim->ApplyRy(0, 2. * std::asin(std::sqrt(0.45)));
+        sim->ApplyCX(0, 1);
+        sim->ApplyRy(2, 2. * std::asin(std::sqrt(0.49)));
+        sim->ApplyCX(2, 3);
+        return sim;
+    };
+    const auto marginal = [](const std::vector<double> &probabilities, size_t qubit) {
+        double one = 0.;
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            if ((i >> qubit) & 1)
+                one += probabilities[i];
+        return one;
+    };
+    const auto mps = Simulators::SimulationType::kMatrixProductState;
+
+    // Channels on qubits 0 and 2 that leave qubit 0 alone in every branch: the pair (0,1) keeps its
+    // marginals under any bond limit, and qubit 3 keeps its own (an X on qubit 2 does not change it).
+    const std::vector<Channel> idleOnFirst{Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}),
+                                           Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}).Then(Channel::BitFlip(0.2), {1}),
+                                           Channel::UnitaryMixture({0.7, 0.3}, {Matrix::Identity(4, 4), onTargets(x, identity)})};
+    for (const Channel &channel : idleOnFirst)
+        for (const char *bond : {"2", "4", ""})
+            for (uint64_t seed = 1; seed <= 8; ++seed)
+            {
+                auto sim = prepare(mps, bond, seed);
+                sim->ApplyQuantumChannel({0, 2}, channel);
+                const auto probabilities = sim->AllProbabilities();
+                BOOST_TEST(std::abs(marginal(probabilities, 1) - 0.45) < 1e-9,
+                           "bond limit '" << bond << "', seed " << seed << ": P(q1 = 1) = " << marginal(probabilities, 1));
+                BOOST_TEST(std::abs(marginal(probabilities, 0) - 0.45) < 1e-9);
+                BOOST_TEST(std::abs(marginal(probabilities, 3) - 0.49) < 1e-9);
+            }
+
+    // A branch that is a gate on one target is that gate there, on the statevector too: a rotation
+    // given as a two-qubit unitary on either target against the rotation applied directly.
+    for (const auto method : {mps, Simulators::SimulationType::kStatevector})
+        for (const bool onSecond : {false, true})
+            for (const char *bond : {"2", ""})
+            {
+                if (method != mps && std::string(bond) != "")
+                    continue;
+                auto sim = prepare(method, bond, 3), reference = prepare(method, bond, 3);
+                sim->ApplyQuantumChannel({0, 2}, Channel::UnitaryMixture({1.}, {onSecond ? onTargets(rotation, identity) : onTargets(identity, rotation)}));
+                reference->ApplyRy(onSecond ? 2 : 0, angle);
+                const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+                for (size_t i = 0; i < probabilities.size(); ++i)
+                    BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9, "a rotation on the " << (onSecond ? "second" : "first")
+                                                                                                     << " target, bond limit '" << bond << "', outcome " << i
+                                                                                                     << ": " << probabilities[i] << " for " << expected[i]);
+            }
+
+    // A unitary on both targets is still applied as one: a CX given as a mixture against the gate.
+    {
+        Matrix cx = Matrix::Zero(4, 4); // control: first target (bit zero), target: second
+        cx(0, 0) = cx(2, 2) = cx(3, 1) = cx(1, 3) = 1.;
+        auto sim = prepare(mps, "", 3), reference = prepare(mps, "", 3);
+        sim->ApplyQuantumChannel({0, 2}, Channel::UnitaryMixture({1.}, {cx}));
+        reference->ApplyCX(0, 2);
+        const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();

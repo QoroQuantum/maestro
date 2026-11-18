@@ -56,7 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bond limit the move truncated the state), also when it has a Pauli part,
   which is stored over both targets, or when the other target carries a
   part that changes nothing (a damping of strength zero, a relaxation of
-  zero duration). The distribution is unchanged;
+  zero duration). A drawn branch of a unitary mixture that is the identity
+  on a target is not applied there either: the identity, or a one-qubit
+  gate given as a two-qubit unitary, no longer moves the other qubit; the
+  same on QCSim's MPS, whose routing could truncate for it too. The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on

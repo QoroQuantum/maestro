@@ -828,4 +828,58 @@ BOOST_AUTO_TEST_CASE(TrimAndReCanonicalizeMatrixProductState)
     BOOST_CHECK_THROW(statevector->ReCanonicalize(), std::runtime_error);
 }
 
+// A drawn branch of a unitary mixture that is the identity on a target is not applied there. As a
+// two-qubit gate, the identity on sites apart was routed together, and under a bond limit of 2 that
+// changed this state (probabilities by up to 0.13), which the limit holds exactly.
+BOOST_AUTO_TEST_CASE(unitary_mixture_identity_branch_does_not_route_under_a_bond_limit)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Matrix = Eigen::MatrixXcd;
+    const auto prepare = [] {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        sim->Configure("matrix_product_state_max_bond_dimension", "2");
+        sim->AllocateQubits(6);
+        sim->Initialize();
+        sim->SetSeed(7);
+        sim->ApplyRy(3, 1.1);
+        sim->ApplyRy(4, 1.1);
+        sim->ApplyCX(3, 4);
+        sim->ApplyCX(0, 1);
+        sim->ApplyRy(2, 1.3);
+        sim->ApplyCX(2, 3);
+        sim->ApplyCX(4, 5);
+        sim->ApplyCX(0, 1);
+        return sim;
+    };
+    Matrix xOnSecond = Matrix::Zero(4, 4); // X on the second target, the first as local matrix bit zero
+    for (int first = 0; first < 2; ++first)
+        for (int second = 0; second < 2; ++second)
+            xOnSecond((1 - second) * 2 + first, second * 2 + first) = 1.;
+    Matrix xOnFirst = Matrix::Zero(4, 4);
+    for (int first = 0; first < 2; ++first)
+        for (int second = 0; second < 2; ++second)
+            xOnFirst(second * 2 + (1 - first), second * 2 + first) = 1.;
+
+    struct Case
+    {
+        Channel channel;
+        int flipped; // the qubit the drawn branch flips, or -1
+    };
+
+    const std::vector<Case> cases{{Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}), -1},
+                                  {Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}).Then(Channel::BitFlip(1.), {1}), 4},
+                                  {Channel::UnitaryMixture({1.}, {xOnSecond}), 4},
+                                  {Channel::UnitaryMixture({1.}, {xOnFirst}), 0}};
+    for (const Case &c : cases)
+    {
+        auto sim = prepare(), reference = prepare();
+        sim->ApplyQuantumChannel({0, 4}, c.channel);
+        if (c.flipped >= 0)
+            reference->ApplyX(static_cast<Types::qubit_t>(c.flipped));
+        const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9, "outcome " << i << ": " << probabilities[i] << " for " << expected[i]);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -289,11 +289,33 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 }
                 else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
                 {
+                    // The branch is drawn whatever it is. A drawn unitary that is the identity on a
+                    // target is not applied there: a two-qubit gate on sites apart routes them
+                    // together, which can truncate under a bond limit, also for the identity.
                     const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
                     if (factor.qubits.size() == 1)
-                        ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    {
+                        if (!QuantumChannel::IsMultipleOfIdentity(unitary))
+                            ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    }
                     else
-                        ApplyGenericTwoQubitGate(first, targets[factor.qubits[1]], Eigen::Matrix4cd(unitary));
+                    {
+                        Eigen::Matrix2cd local;
+                        switch (QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local))
+                        {
+                        case QuantumChannel::LocalPart::kNone:
+                            break;
+                        case QuantumChannel::LocalPart::kFirst:
+                            ApplyGenericOneQubitGate(first, local);
+                            break;
+                        case QuantumChannel::LocalPart::kSecond:
+                            ApplyGenericOneQubitGate(targets[factor.qubits[1]], local);
+                            break;
+                        case QuantumChannel::LocalPart::kBoth:
+                            ApplyGenericTwoQubitGate(first, targets[factor.qubits[1]], Eigen::Matrix4cd(unitary));
+                            break;
+                        }
+                    }
                 }
                 else
                 {

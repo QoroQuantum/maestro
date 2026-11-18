@@ -545,11 +545,35 @@ class AerState : public ISimulator
             }
             else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
             {
+                // The branch is drawn whatever it is, so the draws that follow do not
+                // depend on it. A drawn unitary that is the identity on a target is
+                // not applied there: a two-qubit gate makes the matrix product state
+                // bring its qubits together, which truncates under a bond limit, also
+                // for the identity.
                 const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
                 if (qubits.size() == 1)
-                    ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                {
+                    if (!QuantumChannel::IsMultipleOfIdentity(unitary))
+                        ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                }
                 else
-                    ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                {
+                    Eigen::Matrix2cd local;
+                    switch (QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local))
+                    {
+                    case QuantumChannel::LocalPart::kNone:
+                        break;
+                    case QuantumChannel::LocalPart::kFirst:
+                        ApplyGenericOneQubitGate(qubits[0], local);
+                        break;
+                    case QuantumChannel::LocalPart::kSecond:
+                        ApplyGenericOneQubitGate(qubits[1], local);
+                        break;
+                    case QuantumChannel::LocalPart::kBoth:
+                        ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                        break;
+                    }
+                }
             }
             else
             {

@@ -436,6 +436,55 @@ class QuantumChannel
         return data_->reduced.front();
     }
 
+    // Whether a matrix is a multiple of the identity, compared exactly: as a gate it changes nothing but a global phase.
+    static bool IsMultipleOfIdentity(const Matrix &matrix)
+    {
+        return matrix.rows() > 0 && (matrix - matrix(0, 0) * Matrix::Identity(matrix.rows(), matrix.cols())).isZero(0.0);
+    }
+
+    // The targets a two-qubit unitary acts on, found exactly, for a simulator
+    // that applies a drawn branch of a unitary mixture as a gate: a two-qubit
+    // gate makes a matrix product state bring its qubits together, which can
+    // truncate under a bond limit, also when the gate is the identity or acts
+    // on one of them only. With the first
+    // target as local matrix bit zero, U = V1 (x) V0 has entries
+    // U(2 i1 + i0, 2 j1 + j0) = V1(i1, j1) V0(i0, j0). When U is the identity
+    // on one target, `local` is what it does on the other.
+    enum class LocalPart
+    {
+        kNone,   // the identity (up to a phase): nothing to apply
+        kFirst,  // `local` on the first target
+        kSecond, // `local` on the second target
+        kBoth    // a gate on both
+    };
+
+    static LocalPart LocalPartOfTwoQubitUnitary(const Matrix &unitary, Eigen::Matrix2cd &local)
+    {
+        if (unitary.rows() != 4 || unitary.cols() != 4)
+            return LocalPart::kBoth;
+        if (IsMultipleOfIdentity(unitary))
+            return LocalPart::kNone;
+        // Identity on the second target: two equal diagonal blocks, V0, and nothing off them.
+        if (unitary.block(0, 2, 2, 2).isZero(0.0) && unitary.block(2, 0, 2, 2).isZero(0.0) && unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
+        {
+            local = unitary.block(0, 0, 2, 2);
+            return LocalPart::kFirst;
+        }
+        // Identity on the first target: entries only where its bit is kept, the same for both of its values.
+        bool second = true;
+        for (int i1 = 0; i1 < 2 && second; ++i1)
+            for (int j1 = 0; j1 < 2 && second; ++j1)
+                second = unitary(2 * i1, 2 * j1) == unitary(2 * i1 + 1, 2 * j1 + 1) && unitary(2 * i1, 2 * j1 + 1) == 0. && unitary(2 * i1 + 1, 2 * j1) == 0.;
+        if (second)
+        {
+            for (int i1 = 0; i1 < 2; ++i1)
+                for (int j1 = 0; j1 < 2; ++j1)
+                    local(i1, j1) = unitary(2 * i1, 2 * j1);
+            return LocalPart::kSecond;
+        }
+        return LocalPart::kBoth;
+    }
+
     /** A one-qubit channel on one target of a two-qubit channel that leaves the other target alone. */
     static QuantumChannel OnQubit(const QuantumChannel &channel, size_t localQubit, size_t numQubits = 2)
     {
