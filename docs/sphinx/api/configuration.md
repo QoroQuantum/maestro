@@ -121,13 +121,16 @@ operation does not act on, and the ones entangled with them, change too.
 Maestro sends a channel only to the targets it acts on, so a channel given on
 two targets that leaves one alone does not move that one.
 
-Neither applies without a limit, or with one the circuit does not reach (no
-bond of an n-qubit register exceeds 2^(n/2)): the Aer MPS then agrees with the
-statevector to about 1e-10 in the table above. QCSim's MPS records when a
-truncation has left the canonical form approximate and then computes what a
-read needs from the tensors, so its expectation values agree with its
-probabilities under any limit; they are still approximations of the exact
-state.
+Neither applies as long as nothing is discarded: no bond limit, or one the
+circuit does not reach (no bond of an n-qubit register exceeds 2^(n/2)), and a
+truncation threshold that drops no weight that matters. The Aer MPS then
+agrees with the statevector to about 1e-10 in the table above. Both settings
+count: the small case above under a bond limit of 64 but a truncation
+threshold of 0.25 again gives 0 as an expectation value and +1/3 from the
+probabilities. QCSim's MPS records when a truncation has left the canonical
+form approximate and then computes what a read needs from the tensors, so its
+expectation values agree with its probabilities under any limit or threshold;
+they are still approximations of the exact state.
 
 ## Reference
 
