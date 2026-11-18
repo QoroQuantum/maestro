@@ -1802,7 +1802,19 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         const size_t workers = realizations > 1 ? SamplingWorkers(config, realizations, qubits) : 1;
         const bool cached = noise.enabled && noise.mode != "analytical";
         std::vector<EstimationCache> caches(workers);
-        std::vector<EstimationResult> results(realizations);
+
+        // What the sums need of each realization, kept in realization order;
+        // its plan (rebuilt circuits included) is released as it completes.
+        // Only the last realization's result is kept whole, for the metadata.
+        struct Realization
+        {
+            std::vector<double> values, bounds;
+            size_t after = 0, groups = 0, cluster_qubits = 0, bounded = 0;
+            double reduction_time = 0;
+            bool reduced = false;
+        };
+
+        std::vector<Realization> results(realizations);
         const auto realize = [&](size_t r) {
             const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
             draws.See(noisy);
@@ -1813,7 +1825,19 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
             if (cached)
                 execution_config.auto_reduce = false;
-            results[r] = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+            auto result = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+            auto &record = results[r];
+            record.values = std::move(result.values);
+            record.bounds = std::move(result.plan.error_bounds);
+            record.after = result.plan.qubits_after;
+            record.groups = result.plan.groups.size();
+            record.cluster_qubits = result.plan.total_cluster_qubits;
+            record.bounded = result.plan.bounded_observables;
+            record.reduction_time = result.plan.reduction_time;
+            record.reduced = result.plan.auto_reduced;
+            // Each realization writes its own record; only the last one writes `last`.
+            if (r + 1 == realizations)
+                last = std::move(result);
         };
         size_t first = 0, warm_hits = 0;
         if (workers > 1)
@@ -1832,21 +1856,20 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         cache.hits = warm_hits;
         for (const auto &worker_cache : caches)
             cache.hits += worker_cache.hits;
-        for (size_t r = 0; r < realizations; ++r)
+        for (const auto &record : results)
         {
-            last = std::move(results[r]);
-            largest = std::max(largest, last.plan.qubits_after);
-            clusters = std::max(clusters, last.plan.groups.size());
-            total_qubits += last.plan.total_cluster_qubits;
-            total_clusters += last.plan.groups.size();
-            reduction_time += last.plan.reduction_time;
-            reduced = reduced || last.plan.auto_reduced;
-            bounded = std::max(bounded, last.plan.bounded_observables);
-            Require(last.values.size() == sums.size() && last.plan.error_bounds.size() == sums.size(), "Estimation returned an invalid expectation vector");
+            largest = std::max(largest, record.after);
+            clusters = std::max(clusters, record.groups);
+            total_qubits += record.cluster_qubits;
+            total_clusters += record.groups;
+            reduction_time += record.reduction_time;
+            reduced = reduced || record.reduced;
+            bounded = std::max(bounded, record.bounded);
+            Require(record.values.size() == sums.size() && record.bounds.size() == sums.size(), "Estimation returned an invalid expectation vector");
             for (size_t i = 0; i < sums.size(); ++i)
             {
-                bounds[i] += last.plan.error_bounds[i] / realizations;
-                const double value = last.values[i] * (noise.mode == "analytical" ? noise.model.compute_damping(observables[i]) : 1);
+                bounds[i] += record.bounds[i] / realizations;
+                const double value = record.values[i] * (noise.mode == "analytical" ? noise.model.compute_damping(observables[i]) : 1);
                 sums[i] += value;
                 squares[i] += value * value;
             }
