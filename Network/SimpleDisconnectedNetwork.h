@@ -3232,6 +3232,26 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (simType == Simulators::SimulatorType::kQuestSim || fullTerminalBatch)
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
+#ifndef NO_QISKIT_AER
+        // The CPU Aer statevector and matrix product state run their shots on
+        // these workers, one state each with its saved copy, and not on the
+        // logical shot blocks, which only QCSim reaches: the trajectory memory
+        // budget is applied to them here. A matrix product state without a
+        // bond limit has no known size and is not limited.
+        if (nrThreads > 1 && simType == Simulators::SimulatorType::kQiskitAer &&
+            (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
+        {
+            size_t bond = 0;
+            if (method == Simulators::SimulationType::kMatrixProductState && configuration.IsSet("matrix_product_state_max_bond_dimension"))
+                bond = std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"));
+            const long double bytes = method == Simulators::SimulationType::kStatevector
+                                          ? Utils::RealizationStateBytes(Utils::RealizationState::kStatevector, nrQubits)
+                                      : bond ? Utils::RealizationStateBytes(Utils::RealizationState::kMatrixProductState, nrQubits, bond)
+                                             : 0.L;
+            if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
+                nrThreads = Utils::LimitRealizationWorkersByMemory(nrThreads, static_cast<size_t>(bytes), TrajectoryBudgetMB(simType, method), 0, 2);
+        }
+#endif
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)
         {
             if (!optSim)
@@ -3290,6 +3310,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // trajectory_max_memory_mb, or its default: 1 GiB, and on the CPU Aer
     // statevector and MPS half the machine's memory, as Aer itself runs as many
     // shots at once as its memory holds (Utils::MachineTrajectoryBudgetMB).
+    // QCSim's shot blocks (ExecuteLogicalShotBlocks) and Aer's shot workers
+    // (ExecutionThreads) both read it.
     size_t TrajectoryBudgetMB(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
         if (configuration.IsSet("trajectory_max_memory_mb"))

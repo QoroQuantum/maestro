@@ -7,7 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <istream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
@@ -22,6 +25,111 @@
 
 namespace Utils
 {
+
+namespace SystemMemoryDetail
+{
+
+/** The files that hold a memory limit for the process: that of its cgroup and
+ * of every group above it, as far as the cgroup filesystem is mounted (a job's
+ * limit is often set on a parent group, with memory.max = max on the process's
+ * own). `cgroups` is the text of /proc/self/cgroup, `mountinfo` that of
+ * /proc/self/mountinfo.
+ *
+ * A group's directory is its path relative to the root of the mount, under the
+ * mount point: with /tenant mounted at /sys/fs/cgroup, the group /tenant/job is
+ * /sys/fs/cgroup/job, not /sys/fs/cgroup/tenant/job. Without mount information
+ * the conventional mount points are assumed. The conventional root files are
+ * always listed: the tightest limit wins, so a file that does not apply can only
+ * be absent, never loosen it. */
+inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::istream &mountinfo)
+{
+    std::vector<std::string> files;
+    // The process's group in the unified hierarchy (v2, "0::/path") and in the
+    // v1 hierarchy that has the memory controller ("N:...,memory,...:/path").
+    std::string unified, memory;
+    bool hasUnified = false, hasMemory = false;
+    for (std::string line; std::getline(cgroups, line);)
+    {
+        const auto first = line.find(':'), second = line.find(':', first == std::string::npos ? first : first + 1);
+        if (first == std::string::npos || second == std::string::npos)
+            continue;
+        const std::string controllers = line.substr(first + 1, second - first - 1), path = line.substr(second + 1);
+        if (line.compare(0, first, "0") == 0 && controllers.empty())
+        {
+            unified = path;
+            hasUnified = true;
+        }
+        else if (("," + controllers + ",").find(",memory,") != std::string::npos)
+        {
+            memory = path;
+            hasMemory = true;
+        }
+    }
+    // Each group from `relative` (below the directory `mount`) up to the mount itself.
+    const auto addHierarchy = [&files](const std::string &mount, std::string relative, const char *file) {
+        while (!relative.empty() && relative.front() == '/')
+            relative.erase(relative.begin());
+        while (!relative.empty() && relative.back() == '/')
+            relative.pop_back();
+        while (true)
+        {
+            files.push_back(mount + (relative.empty() ? "" : "/" + relative) + "/" + file);
+            if (relative.empty())
+                break;
+            const auto slash = relative.find_last_of('/');
+            relative = slash == std::string::npos ? std::string() : relative.substr(0, slash);
+        }
+    };
+    // The group's path below the root of a mount, or nothing when the group is
+    // not below it (a cgroup namespace): then only the mount itself is read.
+    const auto below = [](const std::string &root, const std::string &group) -> std::string {
+        if (root == "/" || root.empty())
+            return group;
+        if (group.compare(0, root.size(), root) == 0 && (group.size() == root.size() || group[root.size()] == '/'))
+            return group.substr(root.size());
+        return {};
+    };
+    bool mounted = false;
+    // "ID parent major:minor root mount-point options... - fstype source super-options"
+    for (std::string line; std::getline(mountinfo, line);)
+    {
+        const auto separator = line.find(" - ");
+        if (separator == std::string::npos)
+            continue;
+        std::istringstream head(line.substr(0, separator)), tail(line.substr(separator + 3));
+        std::string id, parent, device, root, mount, type, source, options;
+        if (!(head >> id >> parent >> device >> root >> mount) || !(tail >> type))
+            continue;
+        tail >> source >> options;
+        if (type == "cgroup2")
+        {
+            addHierarchy(mount, hasUnified ? below(root, unified) : std::string(), "memory.max");
+            mounted = true;
+        }
+        else if (type == "cgroup" && ("," + options + ",").find(",memory,") != std::string::npos)
+        {
+            addHierarchy(mount, hasMemory ? below(root, memory) : std::string(), "memory.limit_in_bytes");
+            mounted = true;
+        }
+    }
+    if (!mounted)
+    {
+        if (hasUnified)
+            addHierarchy("/sys/fs/cgroup", unified, "memory.max");
+        if (hasMemory)
+        {
+            // The v1 memory controller is mounted at /sys/fs/cgroup/memory, or on some systems at /sys/fs/cgroup itself.
+            addHierarchy("/sys/fs/cgroup/memory", memory, "memory.limit_in_bytes");
+            addHierarchy("/sys/fs/cgroup", memory, "memory.limit_in_bytes");
+        }
+    }
+    files.push_back("/sys/fs/cgroup/memory.max");                   // cgroup v2
+    files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
+    files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
+    return files;
+}
+
+} // namespace SystemMemoryDetail
 
 /** Physical memory available to the process in bytes, or 0 if unknown. On
  * Linux a cgroup memory limit (v1 or v2) lowers it. */
@@ -58,55 +166,12 @@ inline double PhysicalMemoryBytes()
         return 0.;
     };
 
-    // The tightest memory limit of the process's cgroup and of every group
-    // above it: a job's limit is often set on a parent group, with
-    // memory.max = max on the process's own.
+    // The tightest memory limit of the process's cgroup and of every group above it.
     double limit = 0.;
-    const auto apply = [&limit](double l) {
-        if (l > 0.)
+    std::ifstream cgroups("/proc/self/cgroup"), mountinfo("/proc/self/mountinfo");
+    for (const auto &file : SystemMemoryDetail::CgroupLimitFiles(cgroups, mountinfo))
+        if (const double l = readLimit(file); l > 0.)
             limit = limit > 0. ? std::min(limit, l) : l;
-    };
-    // Each group from `path` (relative to `root`) up to the root, inclusive.
-    const auto applyHierarchy = [&](const std::string &root, std::string path, const char *file) {
-        while (!path.empty() && path.front() == '/')
-            path.erase(path.begin());
-        while (true)
-        {
-            apply(readLimit(root + (path.empty() ? "" : "/" + path) + "/" + file));
-            if (path.empty())
-                break;
-            const auto slash = path.find_last_of('/');
-            path = slash == std::string::npos ? std::string() : path.substr(0, slash);
-        }
-    };
-    std::ifstream cgroups("/proc/self/cgroup");
-    if (cgroups.is_open())
-    {
-        std::string line;
-        while (std::getline(cgroups, line))
-        {
-            // cgroup v2: "0::/path"; cgroup v1: "N:<controllers>:/path" with "memory" among them.
-            const auto first = line.find(':'), second = line.find(':', first == std::string::npos ? first : first + 1);
-            if (first == std::string::npos || second == std::string::npos)
-                continue;
-            const std::string controllers = line.substr(first + 1, second - first - 1), path = line.substr(second + 1);
-            if (line.compare(0, first, "0") == 0 && controllers.empty())
-                applyHierarchy("/sys/fs/cgroup", path, "memory.max");
-            else if (("," + controllers + ",").find(",memory,") != std::string::npos)
-            {
-                // The v1 memory controller is mounted at /sys/fs/cgroup/memory,
-                // or on some systems at /sys/fs/cgroup itself.
-                applyHierarchy("/sys/fs/cgroup/memory", path, "memory.limit_in_bytes");
-                applyHierarchy("/sys/fs/cgroup", path, "memory.limit_in_bytes");
-            }
-        }
-    }
-    // The roots of every layout, whatever /proc/self/cgroup listed (a cgroup
-    // namespace shows the process's group as the root). The tightest limit wins,
-    // so a file that does not apply can only be absent, never loosen it.
-    apply(readLimit("/sys/fs/cgroup/memory.max"));                   // cgroup v2
-    apply(readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes")); // cgroup v1
-    apply(readLimit("/sys/fs/cgroup/memory.limit_in_bytes"));        // cgroup v1 mounted at the root
 
     if (limit > 0.)
         mem = (mem > 0.) ? std::min(mem, limit) : limit;

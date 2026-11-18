@@ -323,6 +323,24 @@ void TestSeededSharedRealizationWorkers()
                   serial.at("realization_standard_errors") == parallel.at("realization_standard_errors"),
               "A noisy estimate depended on the number of its realization workers");
     }
+#ifndef NO_QISKIT_AER
+    // The trajectory memory budget applies to the CPU Aer statevector and matrix product state,
+    // so a request may set it there; Aer's density matrix runs no trajectories and rejects it.
+    for (const char *method : {"statevector", "matrix_product_state", "density_matrix"})
+    {
+        auto request = Request("execute", 3, "h q[0]; cx q[0],q[1]; cx q[1],q[2]; measure q->c;", method);
+        request["execution"].as_object()["shots"] = 8;
+        request["execution"].as_object()["seed"] = 3;
+        request["simulator"].as_object()["backend"] = "aer";
+        request["simulator"].as_object()["selection"] = "fixed";
+        request["simulator"].as_object()["options"] = j::object{{"trajectory_max_memory_mb", 64}};
+        // Call throws unless the request succeeds or fails as stated.
+        const auto response = Call(request, std::string(method) != "density_matrix");
+        if (std::string(method) == "density_matrix")
+            Check(response.at("error").at("code").as_string() == "unsupported_capability",
+                  "trajectory_max_memory_mb on Aer's density matrix failed for another reason");
+    }
+#endif
 
     // Shot rows whose realizations ran on realization workers report them too, within max_simulators.
     auto rows = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q->c;");

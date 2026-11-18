@@ -428,7 +428,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `enable_sampling_reduction` | `` | boolean | all (default false) |
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
-| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO |
+| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO; Qiskit Aer statevector and MPS |
 | `counts_policy` | `` | `auto` (default), `legacy`, `frame_v1` or `multinomial_v1` | all (specialized samplers run on QCSim) |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
@@ -879,9 +879,9 @@ the reported backend and method are `qcsim` and `stabilizer`,
 seed section above). Shot rows (below) always report `sampling_strategy`;
 counts from the ordinary executor omit it.
 
-Noisy CPU QCSim `execute` requests can run their
-realizations on several networks at once, within `max_simulators` and
-`trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
+Noisy CPU `execute` requests on QCSim, and on the Qiskit Aer statevector and
+MPS, can run their realizations on several networks at once, within
+`max_simulators` and `trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
 counts replay for the same request configuration. Multi-shot realizations keep
 their shared noise and execute as complete batches; outer workers use one inner
 simulator each. `execution_metadata.realization_workers` reports the actual

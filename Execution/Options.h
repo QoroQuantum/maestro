@@ -154,10 +154,18 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     // Methods whose concurrent trajectory shots or noise realizations are
     // budgeted: dense shot workers, stabilizer and bounded MPS/MPO shot
     // workers under an explicit trajectory policy, parallel native and
-    // Python realizations, and extended-stabilizer frame batches.
+    // Python realizations, and extended-stabilizer frame batches. On Aer, the
+    // CPU statevector and matrix product state: their realization workers and
+    // the network's shot workers read the budget too.
     if (family == "cpu_realization")
+    {
+#ifndef NO_QISKIT_AER
+        if (backend == Backend::kQiskitAer)
+            return method == Method::kStatevector || mps;
+#endif
         return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer ||
                                               method == Method::kExtendedStabilizer || mps || mpo);
+    }
     if (family == "device")
         return gpu || distributed;
     if (family == "precision")

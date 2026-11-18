@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -195,6 +196,30 @@ void BudgetsAndEmptyWork()
     Require(MaestroExecution::RealizationBudgetMB(budget) == 300, "a native trajectory budget lost to Aer's default");
     budget.trajectory_max_memory_mb = 200;
     Require(MaestroExecution::RealizationBudgetMB(budget) == 200, "a typed trajectory budget lost to Aer's default");
+    // A group's limit file is found below the mount's root: with /tenant mounted at /sys/fs/cgroup, the
+    // group /tenant/job is /sys/fs/cgroup/job. Its parents up to the mount are read too.
+    {
+        std::istringstream cgroups("0::/tenant/job/step\n"), mounts("30 25 0:26 /tenant /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n");
+        const auto files = Utils::SystemMemoryDetail::CgroupLimitFiles(cgroups, mounts);
+        const auto has = [&](const char *file) { return std::find(files.begin(), files.end(), file) != files.end(); };
+        Require(has("/sys/fs/cgroup/job/step/memory.max") && has("/sys/fs/cgroup/job/memory.max") && has("/sys/fs/cgroup/memory.max"),
+                "a cgroup below the mount's root was not resolved against it");
+        Require(!has("/sys/fs/cgroup/tenant/job/step/memory.max"), "a cgroup path was appended to the mount point unchanged");
+        // cgroup v1: the hierarchy with the memory controller, wherever it is mounted.
+        std::istringstream v1("5:cpu,cpuacct:/a\n9:memory:/docker/abc\n"),
+            v1Mounts("40 30 0:35 / /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n41 30 0:36 / /sys/fs/cgroup/cpu rw - cgroup cgroup rw,cpu,cpuacct\n");
+        const auto v1Files = Utils::SystemMemoryDetail::CgroupLimitFiles(v1, v1Mounts);
+        const auto v1Has = [&](const char *file) { return std::find(v1Files.begin(), v1Files.end(), file) != v1Files.end(); };
+        Require(v1Has("/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes") && v1Has("/sys/fs/cgroup/memory/docker/memory.limit_in_bytes") &&
+                    v1Has("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+                "the cgroup v1 memory hierarchy was not walked");
+        Require(!v1Has("/sys/fs/cgroup/cpu/a/memory.limit_in_bytes"), "a cgroup v1 hierarchy without the memory controller was read");
+        // Without mount information the conventional mount points are assumed.
+        std::istringstream plain("0::/user.slice/job\n"), none("");
+        const auto plainFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(plain, none);
+        Require(std::find(plainFiles.begin(), plainFiles.end(), "/sys/fs/cgroup/user.slice/job/memory.max") != plainFiles.end(),
+                "the conventional cgroup mount point was not assumed without mount information");
+    }
     // 22 qubits on Aer: 1 GiB held them to five workers; with 16 GiB the CPUs decide.
     budget.trajectory_max_memory_mb.reset();
     budget.native_options.clear();
