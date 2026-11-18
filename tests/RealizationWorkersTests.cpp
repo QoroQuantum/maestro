@@ -242,6 +242,20 @@ void BudgetsAndEmptyWork()
                 "the limit of an ancestor of the cgroup namespace's root was not read");
         Require(!listed(inheritedFiles, "/mnt/sibling/memory.max") && !listed(inheritedFiles, "/mnt/named/memory.max") && inheritedFiles.size() == 2,
                 "a sibling of the cgroup namespace's root was read");
+        // Paths are matched by whole components first, whatever they are called: a process outside its
+        // namespace's root under a mount of that group, and a group whose name starts with "..".
+        for (const auto &[group, root] : std::vector<std::pair<std::string, std::string>>{{"/../other/job", "/../other"}, {"/..tenant/job", "/..tenant"}})
+        {
+            std::istringstream outside("0::" + group + "\n"), outsideMounts("30 25 0:26 " + root + " /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n");
+            const auto outsideFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(outside, outsideMounts);
+            Require(outsideFiles.size() == 2 && listed(outsideFiles, "/sys/fs/cgroup/job/memory.max") && listed(outsideFiles, "/sys/fs/cgroup/memory.max"),
+                    "a cgroup below a mount root starting with /.. was not matched by components");
+        }
+        // A sibling subtree reached through the parent: the process's path below the mount is known.
+        std::istringstream through("0::/../other/job\n"), throughMounts("30 25 0:26 /.. /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n");
+        const auto throughFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(through, throughMounts);
+        Require(throughFiles.size() == 3 && listed(throughFiles, "/sys/fs/cgroup/other/job/memory.max") && listed(throughFiles, "/sys/fs/cgroup/memory.max"),
+                "a cgroup below the parent of the namespace's root was not walked");
         // mountinfo escapes a space in a path as \040 (and a backslash as \134).
         std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
         const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);
