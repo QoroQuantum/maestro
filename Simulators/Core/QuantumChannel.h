@@ -343,40 +343,83 @@ class QuantumChannel
      * channel leaves its other targets alone (OnQubit, Placed): a simulator
      * that has to bring the targets of an operation together, as a matrix
      * product state does, should not move those.
+     *
+     * A Pauli part acts on a target when a term of non-zero probability has a
+     * Pauli other than the identity there. Its list of targets does not tell:
+     * placed on one target of a two-qubit channel, or merged with another
+     * Pauli part, it is kept as a mixture over all the targets.
      */
-    std::vector<size_t> ActiveQubits() const
+    const std::vector<size_t> &ActiveQubits() const
     {
-        std::vector<bool> used(GetNumberOfQubits(), false);
-        for (const Factor &factor : GetFactors())
-            for (const size_t q : factor.qubits)
-                used[q] = true;
-        std::vector<size_t> active;
-        for (size_t q = 0; q < used.size(); ++q)
-            if (used[q])
-                active.push_back(q);
-        return active;
+        std::call_once(data_->activeOnce, [this]() {
+            std::vector<bool> used(GetNumberOfQubits(), false);
+            for (const Factor &factor : GetFactors())
+                for (size_t k = 0; k < factor.qubits.size(); ++k)
+                    if (FactorActsOn(factor, k))
+                        used[factor.qubits[k]] = true;
+            for (size_t q = 0; q < used.size(); ++q)
+                if (used[q])
+                    data_->active.push_back(q);
+        });
+        return data_->active;
     }
 
     /**
      * This channel as a channel on its active targets only: target k of the
      * result is target ActiveQubits()[k] of this one. The channel itself when
-     * it acts on all its targets; it must act on at least one.
+     * it acts on all its targets; it must act on at least one. A Pauli part
+     * is reduced to the targets it acts on, and dropped if it acts on none.
+     * The result is built on first use and kept: every call returns the same
+     * channel, with what that one has cached (its canonical Kraus operators).
      */
     QuantumChannel OnActiveQubits() const
     {
-        const std::vector<size_t> active = ActiveQubits();
+        const std::vector<size_t> &active = ActiveQubits();
         if (active.size() == GetNumberOfQubits())
             return *this;
         if (active.empty())
             throw std::invalid_argument("A channel that acts on none of its targets has no active part");
-        std::vector<size_t> position(GetNumberOfQubits(), 0);
-        for (size_t k = 0; k < active.size(); ++k)
-            position[active[k]] = k;
-        std::vector<Factor> factors = GetFactors();
-        for (Factor &factor : factors)
-            for (size_t &q : factor.qubits)
-                q = position[q];
-        return FromFactors(std::move(factors), active.size());
+        // Built once and kept with this channel: the copies of a channel share it, and its caches.
+        std::call_once(data_->reducedOnce, [this, &active]() {
+            std::vector<size_t> position(GetNumberOfQubits(), 0);
+            for (size_t k = 0; k < active.size(); ++k)
+                position[active[k]] = k;
+            std::vector<Factor> factors;
+            for (const Factor &original : GetFactors())
+            {
+                Factor factor = original;
+                if (factor.kind == FactorKind::kPauli)
+                {
+                    // The places of the mixture it acts on; the others hold the identity in every term that counts.
+                    std::vector<size_t> kept;
+                    for (size_t k = 0; k < original.qubits.size(); ++k)
+                        if (FactorActsOn(original, k))
+                            kept.push_back(k);
+                    if (kept.empty())
+                        continue;
+                    if (kept.size() != original.qubits.size())
+                    {
+                        std::vector<double> reduced(size_t{1} << (2 * kept.size()), 0.0);
+                        for (size_t index = 0; index < original.probabilities.size(); ++index)
+                        {
+                            size_t target = 0;
+                            for (size_t j = 0; j < kept.size(); ++j)
+                                target |= ((index >> (2 * kept[j])) & 3) << (2 * j);
+                            reduced[target] += original.probabilities[index];
+                        }
+                        factor.probabilities = std::move(reduced);
+                        factor.qubits.clear();
+                        for (const size_t k : kept)
+                            factor.qubits.push_back(original.qubits[k]);
+                    }
+                }
+                for (size_t &q : factor.qubits)
+                    q = position[q];
+                factors.push_back(std::move(factor));
+            }
+            data_->reduced.push_back(FromFactors(std::move(factors), active.size()));
+        });
+        return data_->reduced.front();
     }
 
     /** A one-qubit channel on one target of a two-qubit channel that leaves the other target alone. */
@@ -834,6 +877,13 @@ class QuantumChannel
         mutable std::once_flag firstOnce;
         // Whether the channel has one branch only (IsDeterministic): -1 until asked.
         mutable std::atomic<signed char> deterministic{-1};
+        // The targets the channel acts on, and the channel on those alone when they are not all of them, found on
+        // first use (ActiveQubits, OnActiveQubits). The reduced channel is kept so that what it caches in turn (its
+        // canonical Kraus operators, an eigendecomposition) is computed once, not at every application.
+        mutable std::vector<size_t> active;
+        mutable std::once_flag activeOnce;
+        mutable std::vector<QuantumChannel> reduced;
+        mutable std::once_flag reducedOnce;
     };
 
     explicit QuantumChannel(std::shared_ptr<Data> data) : data_(std::move(data))
@@ -1132,6 +1182,18 @@ class QuantumChannel
     }
 
     // Probabilities over a factor's targets as probabilities over all targets, identity elsewhere.
+    // Whether a factor acts on the k-th of its qubits. A Pauli mixture does when a term of non-zero probability has
+    // a Pauli other than the identity there; any other factor is taken to act on all its qubits.
+    static bool FactorActsOn(const Factor &factor, size_t k)
+    {
+        if (factor.kind != FactorKind::kPauli)
+            return true;
+        for (size_t index = 0; index < factor.probabilities.size(); ++index)
+            if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
+                return true;
+        return false;
+    }
+
     static std::vector<double> ExpandPauli(const Factor &factor, size_t numQubits)
     {
         const size_t terms = size_t{1} << (2 * numQubits);

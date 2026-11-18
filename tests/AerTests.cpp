@@ -388,46 +388,67 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
     BOOST_TEST((Channel::OnQubit(damping, 0).Then(damping, {1}).ActiveQubits() == std::vector<size_t>{0, 1}));
     BOOST_TEST(Channel::OnQubit(damping, 1).OnActiveQubits().GetNumberOfQubits() == 1u);
 
+    // A Pauli part placed on one target is kept as a mixture over both; it still acts on that one only.
+    const Channel flip = Channel::BitFlip(0.2), strong = Channel::AmplitudeDamping(0.9);
+    BOOST_TEST((Channel::OnQubit(flip, 1).ActiveQubits() == std::vector<size_t>{1}));
+    BOOST_TEST((Channel::OnQubit(flip, 1).Then(strong, {1}).ActiveQubits() == std::vector<size_t>{1}));
+    BOOST_TEST((Channel::OnQubit(flip, 0).Then(strong, {1}).ActiveQubits() == std::vector<size_t>{0, 1}));
+    BOOST_TEST(Channel::OnQubit(flip, 1).Then(strong, {1}).OnActiveQubits().GetNumberOfQubits() == 1u);
+    BOOST_TEST(Channel::OnQubit(Channel::BitFlip(0.), 1).ActiveQubits().empty());
+    // The reduced channel is built once and kept with the channel and its copies: applying the channel
+    // again does not derive its Kraus operators again.
+    {
+        const Channel placed = Channel::OnQubit(damping, 1), copy = placed;
+        BOOST_TEST(&placed.OnActiveQubits().GetKrausOperators() == &placed.OnActiveQubits().GetKrausOperators());
+        BOOST_TEST(&placed.OnActiveQubits().GetKrausOperators() == &copy.OnActiveQubits().GetKrausOperators());
+    }
+
     struct Form
     {
         Types::qubits_vector targets;
         Channel channel;
     };
 
-    const std::vector<Form> forms{{{2}, damping}, {{0, 2}, Channel::OnQubit(damping, 1)}, {{2, 0}, Channel::OnQubit(damping, 0)}};
-    for (const char *bond : {"2", "4", ""})
-        for (uint64_t seed = 1; seed <= 6; ++seed)
-        {
-            std::vector<std::vector<double>> distributions;
-            for (const Form &form : forms)
+    // The same operation on qubit 2, given several ways: a damping, and a bit flip followed by a damping.
+    const std::vector<std::vector<Form>> operations{{{{2}, damping}, {{0, 2}, Channel::OnQubit(damping, 1)}, {{2, 0}, Channel::OnQubit(damping, 0)}},
+                                                    {{{2}, flip.Then(strong)},
+                                                     {{0, 2}, Channel::OnQubit(flip, 1).Then(strong, {1})},
+                                                     {{2, 0}, Channel::OnQubit(flip, 0).Then(strong, {0})},
+                                                     {{0, 2}, Channel::OnQubit(flip.Then(strong), 1)}}};
+    for (const auto &forms : operations)
+        for (const char *bond : {"2", "4", ""})
+            for (uint64_t seed = 1; seed <= 6; ++seed)
             {
-                auto sim =
-                    Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
-                if (std::string(bond) != "")
-                    sim->Configure("matrix_product_state_max_bond_dimension", bond);
-                sim->AllocateQubits(4);
-                sim->Initialize();
-                sim->SetSeed(seed);
-                // Independent pairs (0,1) and (2,3), with P(11) of 0.45 and 0.49.
-                sim->ApplyRy(0, 2. * std::asin(std::sqrt(0.45)));
-                sim->ApplyCX(0, 1);
-                sim->ApplyRy(2, 2. * std::asin(std::sqrt(0.49)));
-                sim->ApplyCX(2, 3);
-                sim->ApplyQuantumChannel(form.targets, form.channel);
-                distributions.push_back(sim->AllProbabilities());
-                double q1 = 0.;
-                for (size_t i = 0; i < distributions.back().size(); ++i)
-                    if ((i >> 1) & 1)
-                        q1 += distributions.back()[i];
-                BOOST_TEST(std::abs(q1 - 0.45) < 1e-9, "bond limit '" << bond << "', seed " << seed << ", channel on " << form.targets.size()
-                                                                      << " targets: damping qubit 2 left P(q1 = 1) = " << q1);
+                std::vector<std::vector<double>> distributions;
+                for (const Form &form : forms)
+                {
+                    auto sim =
+                        Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+                    if (std::string(bond) != "")
+                        sim->Configure("matrix_product_state_max_bond_dimension", bond);
+                    sim->AllocateQubits(4);
+                    sim->Initialize();
+                    sim->SetSeed(seed);
+                    // Independent pairs (0,1) and (2,3), with P(11) of 0.45 and 0.49.
+                    sim->ApplyRy(0, 2. * std::asin(std::sqrt(0.45)));
+                    sim->ApplyCX(0, 1);
+                    sim->ApplyRy(2, 2. * std::asin(std::sqrt(0.49)));
+                    sim->ApplyCX(2, 3);
+                    sim->ApplyQuantumChannel(form.targets, form.channel);
+                    distributions.push_back(sim->AllProbabilities());
+                    double q1 = 0.;
+                    for (size_t i = 0; i < distributions.back().size(); ++i)
+                        if ((i >> 1) & 1)
+                            q1 += distributions.back()[i];
+                    BOOST_TEST(std::abs(q1 - 0.45) < 1e-9, "bond limit '" << bond << "', seed " << seed << ", channel on " << form.targets.size()
+                                                                          << " targets: damping qubit 2 left P(q1 = 1) = " << q1);
+                }
+                // The same operation however it is given: the same trajectory.
+                for (size_t form = 1; form < distributions.size(); ++form)
+                    for (size_t i = 0; i < distributions[0].size(); ++i)
+                        BOOST_TEST(std::abs(distributions[form][i] - distributions[0][i]) < 1e-9,
+                                   "bond limit '" << bond << "', seed " << seed << ": form " << form << " differs from the one-qubit channel at outcome " << i);
             }
-            // The same operation however it is given: the same trajectory.
-            for (size_t form = 1; form < distributions.size(); ++form)
-                for (size_t i = 0; i < distributions[0].size(); ++i)
-                    BOOST_TEST(std::abs(distributions[form][i] - distributions[0][i]) < 1e-9,
-                               "bond limit '" << bond << "', seed " << seed << ": form " << form << " differs from the one-qubit channel at outcome " << i);
-        }
 }
 
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)

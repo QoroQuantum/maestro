@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
   draws. Only the targets the channel acts on are sent: a channel given on
   two targets that leaves one alone does not make Aer move that one (under a
-  bond limit the move truncated the state). The distribution is unchanged;
+  bond limit the move truncated the state), also when it has a Pauli part,
+  which is stored over both targets. The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on
