@@ -18,6 +18,7 @@ namespace bdata = boost::unit_test::data;
 
 #include <algorithm>
 #include <chrono>
+#include <complex>
 #include <numeric>
 #include <random>
 #define _USE_MATH_DEFINES
@@ -870,6 +871,29 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_identity_branch_does_not_route_under_a_bond
                                   {Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}).Then(Channel::BitFlip(1.), {1}), 4},
                                   {Channel::UnitaryMixture({1.}, {xOnSecond}), 4},
                                   {Channel::UnitaryMixture({1.}, {xOnFirst}), 0}};
+    // A phase times the identity keeps its phase in the amplitudes, as on the statevector, and routes nothing.
+    {
+        const std::complex<double> phase(0., 1.);
+        for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kStatevector})
+            for (const bool two : {false, true})
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                sim->AllocateQubits(2);
+                sim->Initialize();
+                sim->SetSeed(1);
+                if (two)
+                    sim->ApplyQuantumChannel({0, 1}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+                else
+                    sim->ApplyQuantumChannel({0}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(2, 2))}));
+                BOOST_TEST(std::abs(sim->Amplitude(0) - phase) < 1e-12);
+            }
+        auto sim = prepare(), reference = prepare();
+        sim->ApplyQuantumChannel({0, 4}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+        const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
+    }
+
     for (const Case &c : cases)
     {
         auto sim = prepare(), reference = prepare();

@@ -398,21 +398,20 @@ class QuantumChannel
             std::vector<Factor> factors;
             for (const Factor &original : GetFactors())
             {
-                // A factor that changes nothing is no part of the channel on its active targets.
-                if (original.kind != FactorKind::kPauli && FactorIsIdentity(original))
+                // The places of the factor it acts on. One that acts on none changes nothing and is no part of the
+                // channel on its active targets.
+                std::vector<size_t> kept;
+                for (size_t k = 0; k < original.qubits.size(); ++k)
+                    if (FactorActsOn(original, k))
+                        kept.push_back(k);
+                if (kept.empty())
                     continue;
                 Factor factor = original;
-                if (factor.kind == FactorKind::kPauli)
+                if (kept.size() != original.qubits.size())
                 {
-                    // The places of the mixture it acts on; the others hold the identity in every term that counts.
-                    std::vector<size_t> kept;
-                    for (size_t k = 0; k < original.qubits.size(); ++k)
-                        if (FactorActsOn(original, k))
-                            kept.push_back(k);
-                    if (kept.empty())
-                        continue;
-                    if (kept.size() != original.qubits.size())
+                    if (factor.kind == FactorKind::kPauli)
                     {
+                        // The other places hold the identity in every term that counts.
                         std::vector<double> reduced(size_t{1} << (2 * kept.size()), 0.0);
                         for (size_t index = 0; index < original.probabilities.size(); ++index)
                         {
@@ -422,10 +421,25 @@ class QuantumChannel
                             reduced[target] += original.probabilities[index];
                         }
                         factor.probabilities = std::move(reduced);
-                        factor.qubits.clear();
-                        for (const size_t k : kept)
-                            factor.qubits.push_back(original.qubits[k]);
                     }
+                    else
+                    {
+                        // Operators on two qubits, each the identity on the other one: what they do on this one. An
+                        // operator of zero probability keeps its place, with whatever it holds there.
+                        for (Matrix &op : factor.operators)
+                        {
+                            Eigen::Matrix2cd local;
+                            const LocalPart part = LocalPartOfTwoQubitUnitary(op, local);
+                            if (part == LocalPart::kNone)
+                                local = op(0, 0) * Eigen::Matrix2cd::Identity();
+                            else if (part != (kept[0] == 0 ? LocalPart::kFirst : LocalPart::kSecond))
+                                local.setIdentity(); // never applied
+                            op = local;
+                        }
+                    }
+                    factor.qubits.clear();
+                    for (const size_t k : kept)
+                        factor.qubits.push_back(original.qubits[k]);
                 }
                 for (size_t &q : factor.qubits)
                     q = position[q];
@@ -452,7 +466,7 @@ class QuantumChannel
     // on one target, `local` is what it does on the other.
     enum class LocalPart
     {
-        kNone,   // the identity (up to a phase): nothing to apply
+        kNone,   // a multiple of the identity: at most a phase, U(0, 0), which needs no second qubit
         kFirst,  // `local` on the first target
         kSecond, // `local` on the second target
         kBoth    // a gate on both
@@ -1259,7 +1273,7 @@ class QuantumChannel
         }
         for (size_t index = 0; index < factor.operators.size(); ++index)
         {
-            if (factor.kind == FactorKind::kUnitaryMixture && index < factor.probabilities.size() && factor.probabilities[index] == 0.0)
+            if (!OperatorCounts(factor, index))
                 continue;
             const Matrix &op = factor.operators[index];
             if (op.rows() == 0 || !(op - op(0, 0) * Matrix::Identity(op.rows(), op.cols())).isZero(0.0))
@@ -1269,15 +1283,38 @@ class QuantumChannel
     }
 
     // Whether a factor acts on the k-th of its qubits. A Pauli mixture does when a term of non-zero probability has
-    // a Pauli other than the identity there; any other factor acts on all its qubits unless it is the identity.
+    // a Pauli other than the identity there. A factor of operators on two qubits does when one of its operators
+    // that count is not the identity there (LocalPartOfTwoQubitUnitary): a bit flip written as a mixture of 4x4
+    // unitaries acts on one qubit only. Any other factor acts on its qubit unless it is the identity.
     static bool FactorActsOn(const Factor &factor, size_t k)
     {
-        if (factor.kind != FactorKind::kPauli)
-            return !FactorIsIdentity(factor);
-        for (size_t index = 0; index < factor.probabilities.size(); ++index)
-            if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
+        if (factor.kind == FactorKind::kPauli)
+        {
+            for (size_t index = 0; index < factor.probabilities.size(); ++index)
+                if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
+                    return true;
+            return false;
+        }
+        if (FactorIsIdentity(factor))
+            return false;
+        if (factor.qubits.size() != 2)
+            return true;
+        for (size_t index = 0; index < factor.operators.size(); ++index)
+        {
+            if (!OperatorCounts(factor, index))
+                continue;
+            Eigen::Matrix2cd local;
+            const LocalPart part = LocalPartOfTwoQubitUnitary(factor.operators[index], local);
+            if (part == LocalPart::kBoth || (part == LocalPart::kFirst && k == 0) || (part == LocalPart::kSecond && k == 1))
                 return true;
+        }
         return false;
+    }
+
+    // Whether an operator of a factor is ever applied: of non-zero probability in a mixture.
+    static bool OperatorCounts(const Factor &factor, size_t index)
+    {
+        return factor.kind != FactorKind::kUnitaryMixture || index >= factor.probabilities.size() || factor.probabilities[index] != 0.0;
     }
 
     static std::vector<double> ExpandPauli(const Factor &factor, size_t numQubits)

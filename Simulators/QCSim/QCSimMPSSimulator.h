@@ -295,7 +295,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                     const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
                     if (factor.qubits.size() == 1)
                     {
-                        if (!QuantumChannel::IsMultipleOfIdentity(unitary))
+                        // The literal identity is not applied; a phase is kept, as the amplitudes show it.
+                        if (!QuantumChannel::IsMultipleOfIdentity(unitary) || unitary(0, 0) != 1.)
                             ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
                     }
                     else
@@ -304,6 +305,9 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                         switch (QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local))
                         {
                         case QuantumChannel::LocalPart::kNone:
+                            // A phase other than one is applied, on one qubit: it shows in the amplitudes and needs no routing.
+                            if (unitary(0, 0) != 1.)
+                                ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary(0, 0) * Eigen::Matrix2cd::Identity()));
                             break;
                         case QuantumChannel::LocalPart::kFirst:
                             ApplyGenericOneQubitGate(first, local);

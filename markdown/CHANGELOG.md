@@ -58,8 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   part that changes nothing (a damping of strength zero, a relaxation of
   zero duration). A drawn branch of a unitary mixture that is the identity
   on a target is not applied there either: the identity, or a one-qubit
-  gate given as a two-qubit unitary, no longer moves the other qubit; the
-  same on QCSim's MPS, whose routing could truncate for it too. The distribution is unchanged;
+  gate given as a two-qubit unitary, no longer moves the other qubit, also
+  when it is combined with a Kraus part; the same on QCSim's MPS, whose
+  routing could truncate for it too. A branch that is a phase times the
+  identity keeps its phase in the amplitudes. The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on

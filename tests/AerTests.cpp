@@ -16,6 +16,7 @@ namespace utf = boost::unit_test;
 #include <framework/avx2_detect.hpp>
 
 #include <cmath>
+#include <complex>
 #include <type_traits>
 #include <vector>
 
@@ -412,6 +413,29 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
         const auto &kept = Channel::OnQubit(flip, 1).ActiveQubits(); // extends the copy's lifetime
         BOOST_TEST((kept == std::vector<size_t>{1}));
     }
+    // Operators on two targets that are the identity on one of them act on the other only: a bit flip
+    // written as a mixture of 4x4 unitaries, a damping written as 4x4 Kraus operators.
+    const auto onTargets = [](const Eigen::MatrixXcd &second, const Eigen::MatrixXcd &first) {
+        Eigen::MatrixXcd u(4, 4); // second (x) first, with the first target as local matrix bit zero
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                u(i, j) = second(i / 2, j / 2) * first(i % 2, j % 2);
+        return u;
+    };
+    const Eigen::MatrixXcd one = Eigen::MatrixXcd::Identity(2, 2);
+    Eigen::MatrixXcd pauliX = Eigen::MatrixXcd::Zero(2, 2);
+    pauliX(0, 1) = pauliX(1, 0) = 1.;
+    const Channel wideFlip = Channel::UnitaryMixture({0.8, 0.2}, {Eigen::MatrixXcd::Identity(4, 4), onTargets(pauliX, one)});
+    Channel::KrausOperators wideDampingOperators;
+    for (const auto &op : strong.GetKrausOperators())
+        wideDampingOperators.push_back(onTargets(op, one));
+    const Channel wideDamping(wideDampingOperators);
+    BOOST_TEST((wideFlip.ActiveQubits() == std::vector<size_t>{1}));
+    BOOST_TEST((wideFlip.Then(strong, {1}).ActiveQubits() == std::vector<size_t>{1}));
+    BOOST_TEST(wideFlip.Then(strong, {1}).OnActiveQubits().GetNumberOfQubits() == 1u);
+    BOOST_TEST((Channel::UnitaryMixture({0.5, 0.5}, {onTargets(pauliX, one), onTargets(one, pauliX)}).ActiveQubits() == std::vector<size_t>{0, 1}));
+    BOOST_TEST((Channel::UnitaryMixture({1.}, {onTargets(one, pauliX)}).ActiveQubits() == std::vector<size_t>{0}));
+    BOOST_TEST((wideFlip.Then(wideDamping).ActiveQubits() == std::vector<size_t>{1}));
     // The reduced channel is built once and kept with the channel and its copies: applying the channel
     // again does not derive its Kraus operators again.
     {
@@ -436,7 +460,9 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
                                                     {{{2}, flip.Then(strong)},
                                                      {{0, 2}, Channel::OnQubit(flip, 1).Then(strong, {1})},
                                                      {{2, 0}, Channel::OnQubit(flip, 0).Then(strong, {0})},
-                                                     {{0, 2}, Channel::OnQubit(flip.Then(strong), 1)}}};
+                                                     {{0, 2}, Channel::OnQubit(flip.Then(strong), 1)},
+                                                     {{0, 2}, wideFlip.Then(strong, {1})},
+                                                     {{0, 2}, wideFlip.Then(wideDamping)}}};
     for (const auto &forms : operations)
         for (const char *bond : {"2", "4", ""})
             for (uint64_t seed = 1; seed <= 6; ++seed)
@@ -553,6 +579,32 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_branches_reach_only_the_targets_they_act_on
                                                                                                      << " target, bond limit '" << bond << "', outcome " << i
                                                                                                      << ": " << probabilities[i] << " for " << expected[i]);
             }
+
+    // A branch that is a phase times the identity keeps its phase, which the amplitudes show, and
+    // still moves nothing: it is applied on one qubit.
+    {
+        const std::complex<double> phase(0., 1.);
+        for (const auto method : {mps, Simulators::SimulationType::kStatevector})
+            for (const bool two : {false, true})
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+                sim->AllocateQubits(2);
+                sim->Initialize();
+                sim->SetSeed(1);
+                if (two)
+                    sim->ApplyQuantumChannel({0, 1}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+                else
+                    sim->ApplyQuantumChannel({0}, Channel::UnitaryMixture({1.}, {Matrix(phase * identity)}));
+                BOOST_TEST(std::abs(sim->Amplitude(0) - phase) < 1e-12,
+                           "a deterministic i I branch on " << (two ? "two targets" : "one target") << " left the amplitude " << sim->Amplitude(0));
+            }
+        for (uint64_t seed = 1; seed <= 4; ++seed)
+        {
+            auto sim = prepare(mps, "2", seed);
+            sim->ApplyQuantumChannel({0, 2}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+            BOOST_TEST(std::abs(marginal(sim->AllProbabilities(), 1) - 0.45) < 1e-9);
+        }
+    }
 
     // A unitary on both targets is still applied as one: a CX given as a mixture against the gate.
     {
