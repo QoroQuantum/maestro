@@ -185,7 +185,7 @@ void BudgetsAndEmptyWork()
 #ifndef NO_QISKIT_AER
     budget.simulator_type = Simulators::SimulatorType::kQiskitAer;
     const size_t machine = Utils::MachineTrajectoryBudgetMB();
-    Require(machine >= 1024 && MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's statevector did not take the machine-sized budget");
+    Require(machine >= 1 && MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's statevector did not take the machine-sized budget");
     budget.simulation_type = Simulators::SimulationType::kMatrixProductState;
     Require(MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's MPS did not take the machine-sized budget");
     budget.simulation_type = Simulators::SimulationType::kDensityMatrix;

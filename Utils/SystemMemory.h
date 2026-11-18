@@ -58,31 +58,55 @@ inline double PhysicalMemoryBytes()
         return 0.;
     };
 
-    double limit = readLimit("/sys/fs/cgroup/memory.max"); // cgroup v2
-    if (limit <= 0.)
-        limit = readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
-    if (limit <= 0.)
-        limit = readLimit("/sys/fs/cgroup/memory.limit_in_bytes");
-
+    // The tightest memory limit of the process's cgroup and of every group
+    // above it: a job's limit is often set on a parent group, with
+    // memory.max = max on the process's own.
+    double limit = 0.;
+    const auto apply = [&limit](double l) {
+        if (l > 0.)
+            limit = limit > 0. ? std::min(limit, l) : l;
+    };
+    // Each group from `path` (relative to `root`) up to the root, inclusive.
+    const auto applyHierarchy = [&](const std::string &root, std::string path, const char *file) {
+        while (!path.empty() && path.front() == '/')
+            path.erase(path.begin());
+        while (true)
+        {
+            apply(readLimit(root + (path.empty() ? "" : "/" + path) + "/" + file));
+            if (path.empty())
+                break;
+            const auto slash = path.find_last_of('/');
+            path = slash == std::string::npos ? std::string() : path.substr(0, slash);
+        }
+    };
+    bool found = false;
     std::ifstream cgroups("/proc/self/cgroup");
     if (cgroups.is_open())
     {
         std::string line;
         while (std::getline(cgroups, line))
         {
-            if (line.rfind("0::", 0) == 0)
+            // cgroup v2: "0::/path"; cgroup v1: "N:<controllers>:/path" with "memory" among them.
+            const auto first = line.find(':'), second = line.find(':', first == std::string::npos ? first : first + 1);
+            if (first == std::string::npos || second == std::string::npos)
+                continue;
+            const std::string controllers = line.substr(first + 1, second - first - 1), path = line.substr(second + 1);
+            if (line.compare(0, first, "0") == 0 && controllers.empty())
             {
-                std::string sub = line.substr(3);
-                while (!sub.empty() && sub.front() == '/')
-                    sub.erase(sub.begin());
-                if (!sub.empty())
-                {
-                    double l = readLimit("/sys/fs/cgroup/" + sub + "/memory.max");
-                    if (l > 0.)
-                        limit = (limit > 0.) ? std::min(limit, l) : l;
-                }
+                applyHierarchy("/sys/fs/cgroup", path, "memory.max");
+                found = true;
+            }
+            else if (("," + controllers + ",").find(",memory,") != std::string::npos)
+            {
+                applyHierarchy("/sys/fs/cgroup/memory", path, "memory.limit_in_bytes");
+                found = true;
             }
         }
+    }
+    if (!found)
+    {
+        apply(readLimit("/sys/fs/cgroup/memory.max"));                   // cgroup v2
+        apply(readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes")); // cgroup v1
     }
 
     if (limit > 0.)
@@ -102,13 +126,13 @@ inline double PhysicalMemoryBytes()
  * own parallel shots by the machine's memory, as Qiskit Aer does (its
  * max_memory_mb defaults to all of it, one state per shot). Maestro counts two
  * or three copies of a state per realization worker, so it takes half the
- * memory. Never below `floorMB`, the budget used when the size is unknown. */
-inline size_t MachineTrajectoryBudgetMB(size_t floorMB = 1024)
+ * memory, at least 1 MiB. `unknownMB` is the budget when the size is unknown. */
+inline size_t MachineTrajectoryBudgetMB(size_t unknownMB = 1024)
 {
     const double bytes = PhysicalMemoryBytes();
     if (!(bytes > 0.))
-        return floorMB;
-    return std::max(floorMB, static_cast<size_t>(bytes / 2. / (1024. * 1024.)));
+        return unknownMB;
+    return std::max<size_t>(1, static_cast<size_t>(bytes / 2. / (1024. * 1024.)));
 }
 
 } // namespace Utils
