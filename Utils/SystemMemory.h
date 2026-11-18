@@ -37,10 +37,9 @@ namespace SystemMemoryDetail
  *
  * A group's directory is its path relative to the root of the mount, under the
  * mount point: with /tenant mounted at /sys/fs/cgroup, the group /tenant/job is
- * /sys/fs/cgroup/job, not /sys/fs/cgroup/tenant/job. Without mount information
- * the conventional mount points are assumed. The conventional root files are
- * always listed: the tightest limit wins, so a file that does not apply can only
- * be absent, never loosen it. */
+ * /sys/fs/cgroup/job, not /sys/fs/cgroup/tenant/job. A mount whose root does
+ * not hold the process's group is another group's and is skipped. Without mount
+ * information the conventional mount points and their roots are assumed. */
 inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::istream &mountinfo)
 {
     std::vector<std::string> files;
@@ -80,15 +79,38 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
             relative = slash == std::string::npos ? std::string() : relative.substr(0, slash);
         }
     };
-    // The group's path below the root of a mount, or nothing when the group is
-    // not below it (a cgroup namespace): then only the mount itself is read.
-    const auto below = [](const std::string &root, const std::string &group) -> std::string {
+    // The group's path below the root of a mount; false when the group is not
+    // below it. Such a mount shows another part of the hierarchy (a sibling
+    // group's subtree, or one outside the process's cgroup namespace, whose
+    // root starts with "/.."), and its limits are not the process's.
+    const auto below = [](const std::string &root, const std::string &group, std::string &relative) {
         if (root == "/" || root.empty())
-            return group;
-        if (group.compare(0, root.size(), root) == 0 && (group.size() == root.size() || group[root.size()] == '/'))
-            return group.substr(root.size());
-        return {};
+        {
+            relative = group;
+            return true;
+        }
+        if (group.compare(0, root.size(), root) != 0 || (group.size() != root.size() && group[root.size()] != '/'))
+            return false;
+        relative = group.substr(root.size());
+        return true;
     };
+    // mountinfo writes a space, tab, newline and backslash in a path as \040, \011, \012 and \134.
+    const auto unescape = [](const std::string &path) {
+        std::string out;
+        const auto octal = [](char c) { return c >= '0' && c <= '7'; };
+        for (size_t i = 0; i < path.size(); ++i)
+            if (path[i] == '\\' && i + 3 < path.size() && octal(path[i + 1]) && octal(path[i + 2]) && octal(path[i + 3]))
+            {
+                out.push_back(static_cast<char>((path[i + 1] - '0') * 64 + (path[i + 2] - '0') * 8 + (path[i + 3] - '0')));
+                i += 3;
+            }
+            else
+                out.push_back(path[i]);
+        return out;
+    };
+    // Whether the mount information lists the cgroup filesystem at all. If it
+    // does, only its mounts that hold the process's group are read, and the
+    // conventional paths, which may then be another group's, are not.
     bool mounted = false;
     // "ID parent major:minor root mount-point options... - fstype source super-options"
     for (std::string line; std::getline(mountinfo, line);)
@@ -97,23 +119,31 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
         if (separator == std::string::npos)
             continue;
         std::istringstream head(line.substr(0, separator)), tail(line.substr(separator + 3));
-        std::string id, parent, device, root, mount, type, source, options;
+        std::string id, parent, device, root, mount, type, source, options, relative;
         if (!(head >> id >> parent >> device >> root >> mount) || !(tail >> type))
             continue;
         tail >> source >> options;
+        root = unescape(root);
+        mount = unescape(mount);
         if (type == "cgroup2")
         {
-            addHierarchy(mount, hasUnified ? below(root, unified) : std::string(), "memory.max");
             mounted = true;
+            if (hasUnified && below(root, unified, relative))
+                addHierarchy(mount, relative, "memory.max");
         }
         else if (type == "cgroup" && ("," + options + ",").find(",memory,") != std::string::npos)
         {
-            addHierarchy(mount, hasMemory ? below(root, memory) : std::string(), "memory.limit_in_bytes");
             mounted = true;
+            if (hasMemory && below(root, memory, relative))
+                addHierarchy(mount, relative, "memory.limit_in_bytes");
         }
     }
     if (!mounted)
     {
+        // No mount information: the conventional mount points, and their roots
+        // whatever /proc/self/cgroup listed (a cgroup namespace shows the
+        // process's group as the root). The tightest limit wins, so a file that
+        // does not apply can only be absent, never loosen it.
         if (hasUnified)
             addHierarchy("/sys/fs/cgroup", unified, "memory.max");
         if (hasMemory)
@@ -122,10 +152,10 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
             addHierarchy("/sys/fs/cgroup/memory", memory, "memory.limit_in_bytes");
             addHierarchy("/sys/fs/cgroup", memory, "memory.limit_in_bytes");
         }
+        files.push_back("/sys/fs/cgroup/memory.max");                   // cgroup v2
+        files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
+        files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
     }
-    files.push_back("/sys/fs/cgroup/memory.max");                   // cgroup v2
-    files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
-    files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
     return files;
 }
 

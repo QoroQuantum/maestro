@@ -220,6 +220,26 @@ void BudgetsAndEmptyWork()
         Require(std::find(plainFiles.begin(), plainFiles.end(), "/sys/fs/cgroup/user.slice/job/memory.max") != plainFiles.end(),
                 "the conventional cgroup mount point was not assumed without mount information");
     }
+    {
+        const auto listed = [](const std::vector<std::string> &files, const char *file) { return std::find(files.begin(), files.end(), file) != files.end(); };
+        // A mount whose root does not hold the process's group shows another group's limits: it is
+        // skipped, and so are the conventional paths once the mounts are known.
+        std::istringstream cgroups("0::/a/job\n"), mounts("30 25 0:26 /a /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n"
+                                                          "31 25 0:27 /b /mnt/other rw - cgroup2 cgroup2 rw\n"
+                                                          "32 25 0:28 /../outside /mnt/outside rw - cgroup2 cgroup2 rw\n");
+        const auto files = Utils::SystemMemoryDetail::CgroupLimitFiles(cgroups, mounts);
+        Require(listed(files, "/sys/fs/cgroup/job/memory.max") && listed(files, "/sys/fs/cgroup/memory.max"), "the process's own cgroup mount was not read");
+        Require(!listed(files, "/mnt/other/memory.max") && !listed(files, "/mnt/outside/memory.max"), "another group's cgroup mount was read");
+        Require(files.size() == 2, "paths outside the process's cgroup mount were read");
+        // mountinfo escapes a space in a path as \040 (and a backslash as \134).
+        std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
+        const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);
+        Require(listed(spacedFiles, "/mnt/my cgroup\\x/job/memory.max"), "an escaped mount point was not decoded");
+        // A cgroup namespace: the process's group is the root of its mount.
+        std::istringstream rooted("0::/\n"), rootedMounts("30 25 0:26 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n");
+        const auto rootedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(rooted, rootedMounts);
+        Require(rootedFiles.size() == 1 && rootedFiles[0] == "/sys/fs/cgroup/memory.max", "a namespaced cgroup root was not read");
+    }
     // 22 qubits on Aer: 1 GiB held them to five workers; with 16 GiB the CPUs decide.
     budget.trajectory_max_memory_mb.reset();
     budget.native_options.clear();
