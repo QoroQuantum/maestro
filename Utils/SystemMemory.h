@@ -79,7 +79,6 @@ inline double PhysicalMemoryBytes()
             path = slash == std::string::npos ? std::string() : path.substr(0, slash);
         }
     };
-    bool found = false;
     std::ifstream cgroups("/proc/self/cgroup");
     if (cgroups.is_open())
     {
@@ -92,22 +91,22 @@ inline double PhysicalMemoryBytes()
                 continue;
             const std::string controllers = line.substr(first + 1, second - first - 1), path = line.substr(second + 1);
             if (line.compare(0, first, "0") == 0 && controllers.empty())
-            {
                 applyHierarchy("/sys/fs/cgroup", path, "memory.max");
-                found = true;
-            }
             else if (("," + controllers + ",").find(",memory,") != std::string::npos)
             {
+                // The v1 memory controller is mounted at /sys/fs/cgroup/memory,
+                // or on some systems at /sys/fs/cgroup itself.
                 applyHierarchy("/sys/fs/cgroup/memory", path, "memory.limit_in_bytes");
-                found = true;
+                applyHierarchy("/sys/fs/cgroup", path, "memory.limit_in_bytes");
             }
         }
     }
-    if (!found)
-    {
-        apply(readLimit("/sys/fs/cgroup/memory.max"));                   // cgroup v2
-        apply(readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes")); // cgroup v1
-    }
+    // The roots of every layout, whatever /proc/self/cgroup listed (a cgroup
+    // namespace shows the process's group as the root). The tightest limit wins,
+    // so a file that does not apply can only be absent, never loosen it.
+    apply(readLimit("/sys/fs/cgroup/memory.max"));                   // cgroup v2
+    apply(readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes")); // cgroup v1
+    apply(readLimit("/sys/fs/cgroup/memory.limit_in_bytes"));        // cgroup v1 mounted at the root
 
     if (limit > 0.)
         mem = (mem > 0.) ? std::min(mem, limit) : limit;
