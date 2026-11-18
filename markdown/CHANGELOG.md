@@ -63,8 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values differed from four workers' by 7e-17. Aer statevector GHZ 20 with 64
   realizations: 7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
   `realization_workers`, there and in Python's estimate, is the number of
-  realizations that ran at once: the first one warms the estimation cache
-  alone, so two realizations report 1. A noisy fidelity still runs its
+  workers available after the first realization, which warms the estimation
+  cache alone: an upper bound on what overlaps, so two realizations report
+  1. A noisy fidelity still runs its
   realizations one after another and reports 1.
 - QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in

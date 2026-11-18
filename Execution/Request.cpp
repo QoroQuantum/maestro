@@ -1803,7 +1803,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         for (const auto &observable : observables)
             qubits = std::max(qubits, observable.size());
         const size_t workers = realizations > 1 ? SamplingWorkers(config, realizations, qubits) : 1;
-        // The warm-up realization runs alone, so the others decide how many run at once.
+        // The warm-up realization runs alone: the workers available to the others.
         const size_t concurrency = workers > 1 ? std::max<size_t>(1, std::min(workers, realizations - 1)) : 1;
         const bool cached = noise.enabled && noise.mode != "analytical";
         std::vector<EstimationCache> caches(workers);
@@ -1928,7 +1928,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         metadata["stochastic_execution"] = stochastic_estimation;
         metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
         metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
-        // The realizations that ran at once, which the warm-up one does not count towards.
+        // The workers available after the warm-up realization: an upper bound on what overlapped.
         if (noise.enabled && noise.mode != "analytical")
             metadata["realization_workers"] = concurrency;
         json::object result{{"schema_version", SchemaVersion},

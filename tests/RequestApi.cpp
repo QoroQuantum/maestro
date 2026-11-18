@@ -324,7 +324,7 @@ void TestSeededSharedRealizationWorkers()
               "A noisy estimate depended on the number of its realization workers");
     }
     // Two realizations run one after the other whatever the workers: the first warms the
-    // estimation cache alone, and one is left. The estimate reports what ran at once.
+    // estimation cache alone, and one is left. The estimate reports the workers available to it.
     {
         auto estimate = Request("estimate", 2, "h q[0]; cx q[0],q[1];");
         estimate["execution"].as_object()["seed"] = 3;
@@ -334,7 +334,7 @@ void TestSeededSharedRealizationWorkers()
         estimate["simulator"].as_object()["selection"] = "fixed";
         estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 4}};
         Check(Call(estimate).at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
-              "A two-realization estimate reported workers that never ran at once");
+              "A two-realization estimate reported more workers than its one remaining realization could use");
     }
 #ifndef NO_QISKIT_AER
     // The trajectory memory budget applies to the CPU Aer statevector and matrix product state,
