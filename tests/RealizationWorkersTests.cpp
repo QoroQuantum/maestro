@@ -256,6 +256,19 @@ void BudgetsAndEmptyWork()
         const auto throughFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(through, throughMounts);
         Require(throughFiles.size() == 3 && listed(throughFiles, "/sys/fs/cgroup/other/job/memory.max") && listed(throughFiles, "/sys/fs/cgroup/memory.max"),
                 "a cgroup below the parent of the namespace's root was not walked");
+        // A process moved above a mount's root is not below it, though its path starts with the root:
+        // /../../other/job under a mount rooted at /.. (and under the namespace's own root). Only the
+        // mount that holds it is read, for cgroup v2 and v1.
+        for (const bool v2 : {true, false})
+        {
+            const std::string type = v2 ? "cgroup2 cgroup2 rw" : "cgroup cgroup rw,memory", file = v2 ? "memory.max" : "memory.limit_in_bytes";
+            std::istringstream moved(std::string(v2 ? "0::" : "9:memory:") + "/../../other/job\n"),
+                movedMounts("30 25 0:26 /.. /mnt/parent rw - " + type + "\n31 25 0:27 / /mnt/root rw - " + type + "\n32 25 0:28 /../../other /mnt/job rw - " +
+                            type + "\n");
+            const auto movedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(moved, movedMounts);
+            Require(movedFiles.size() == 2 && listed(movedFiles, ("/mnt/job/job/" + file).c_str()) && listed(movedFiles, ("/mnt/job/" + file).c_str()),
+                    "a mount the process has moved out of was read for its memory limit");
+        }
         // mountinfo escapes a space in a path as \040 (and a backslash as \134).
         std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
         const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);

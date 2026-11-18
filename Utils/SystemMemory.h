@@ -91,15 +91,20 @@ inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::ist
     // nothing below it. A root that goes up and down again ("/../other") without
     // holding the group is a sibling.
     const auto below = [](const std::string &root, const std::string &group, std::string &relative) {
+        // A path that starts by going up leaves the subtree it is taken in.
+        const auto leaves = [](const std::string &path) { return path.compare(0, 3, "/..") == 0 && (path.size() == 3 || path[3] == '/'); };
         if (root == "/" || root.empty())
         {
+            // The root of the process's namespace: a group outside it is not below it.
             relative = group;
-            return true;
+            return !leaves(relative);
         }
         if (group.compare(0, root.size(), root) == 0 && (group.size() == root.size() || group[root.size()] == '/'))
         {
+            // What is left of the group's path must stay below the root: a process moved to
+            // /../../other/job is not below a mount rooted at /.., though its path starts with it.
             relative = group.substr(root.size());
-            return true;
+            return !leaves(relative);
         }
         size_t at = 0;
         while (root.compare(at, 3, "/..") == 0 && (at + 3 == root.size() || root[at + 3] == '/'))
