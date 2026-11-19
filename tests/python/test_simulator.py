@@ -238,6 +238,10 @@ def test_empty_marginal_is_the_total_probability(backend_name):
 
 
 def test_marginal_too_wide_to_list_raises_value_error():
+    # QCSim is always compiled in (the simulator fixture above relies on it); skipped as the
+    # parametrized tests are, should that change.
+    if not hasattr(maestro.SimulatorType, "QCSim"):
+        pytest.skip("QCSim is not compiled in")
     owner = maestro.Maestro()
     handle = owner.create_simulator(maestro.SimulatorType.QCSim, maestro.SimulationType.MatrixProductState)
     sim = owner.get_simulator(handle)

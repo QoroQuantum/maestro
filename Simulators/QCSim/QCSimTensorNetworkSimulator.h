@@ -150,11 +150,11 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
                                  "tensor network simulator.");
     }
 
-    // Both weights of qubit 0, each one contraction at any width (the default would contract once per basis state).
+    // Two contractions per independent group of qubits, at any width (the default would contract once per basis state).
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
-        return tensorNetwork->Probability(0, true) + tensorNetwork->Probability(0, false);
+        return tensorNetwork->TotalProbability();
     }
 
     std::vector<double> AllProbabilities() override

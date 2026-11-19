@@ -1235,24 +1235,24 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
         return sum;
     };
 
-    struct Kept
+    // The backends that take the matrix: the total and every one-qubit marginal agree with the whole
+    // distribution after a projection on qubit 0, on a qubit entangled with it, on a qubit apart
+    // from it (the tensor network contracted qubit 0's group only), and after a two-qubit matrix.
+    // (Aer's MPS reads a qubit from its canonical form, which such a matrix leaves stale: [0.5, 0.5]
+    // for a qubit of a projected Bell pair; it reads the whole distribution once one reached it.)
+    for (const auto &[type, method] : std::vector<std::pair<Type, Method>>{{Type::kQiskitAer, Method::kStatevector},
+                                                                           {Type::kQiskitAer, Method::kMatrixProductState},
+                                                                           {Type::kQiskitAer, Method::kDensityMatrix},
+                                                                           {Type::kQCSim, Method::kStatevector},
+                                                                           {Type::kQCSim, Method::kMatrixProductState},
+                                                                           {Type::kQCSim, Method::kDensityMatrix},
+                                                                           {Type::kQCSim, Method::kTensorNetwork},
+                                                                           {Type::kCompositeQCSim, Method::kStatevector},
+                                                                           {Type::kCompositeQiskitAer, Method::kStatevector}})
     {
-        Type type;
-        Method method;
-        bool marginalsHold; // Aer's MPS reads one qubit from a canonical form such a matrix leaves stale (reported)
-    };
-
-    // The backends that take the matrix: the total agrees with the whole distribution after a
-    // projection on the qubit read first, on another one, and after a two-qubit matrix.
-    for (const Kept &backend : {Kept{Type::kQiskitAer, Method::kStatevector, true}, Kept{Type::kQiskitAer, Method::kMatrixProductState, false},
-                                Kept{Type::kQiskitAer, Method::kDensityMatrix, true}, Kept{Type::kQCSim, Method::kStatevector, true},
-                                Kept{Type::kQCSim, Method::kMatrixProductState, true}, Kept{Type::kQCSim, Method::kDensityMatrix, true},
-                                Kept{Type::kQCSim, Method::kTensorNetwork, true}, Kept{Type::kCompositeQCSim, Method::kStatevector, true},
-                                Kept{Type::kCompositeQiskitAer, Method::kStatevector, true}})
-    {
-        for (int operation = 0; operation < 3; ++operation)
+        for (int operation = 0; operation < 4; ++operation)
         {
-            auto sim = Simulators::SimulatorsFactory::CreateSimulator(backend.type, backend.method);
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, method);
             sim->AllocateQubits(3);
             sim->Initialize();
             sim->ApplyH(2);
@@ -1261,18 +1261,30 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
                 sim->ApplyGenericOneQubitGate(0, projector);
             else if (operation == 1)
                 sim->ApplyGenericOneQubitGate(2, projector);
+            else if (operation == 2)
+            {
+                sim->ApplyH(1); // qubit 1 is apart from qubits 0 and 2
+                sim->ApplyGenericOneQubitGate(1, projector);
+            }
             else
                 sim->ApplyGenericTwoQubitGate(1, 2, Eigen::Matrix4cd::Identity() * .5);
-            const double whole = sumOf(Simulators::BasisProbabilities(*sim));
+            const std::vector<double> all = Simulators::BasisProbabilities(*sim);
+            const double whole = sumOf(all);
             const auto total = sim->MarginalProbabilities({});
             BOOST_REQUIRE_EQUAL(total.size(), 1u);
             BOOST_TEST(std::abs(total[0] - whole) < 1e-9, "operation " << operation);
             BOOST_TEST(std::abs(sim->TotalProbability() - whole) < 1e-9, "operation " << operation);
-            if (operation < 2)
+            if (operation < 3)
                 BOOST_TEST(std::abs(whole - .5) < 1e-9, "operation " << operation);
-            if (backend.marginalsHold)
-                for (const size_t qubit : {0, 1, 2})
-                    BOOST_TEST(std::abs(sumOf(sim->MarginalProbabilities({qubit})) - whole) < 1e-9, "operation " << operation << ", qubit " << qubit);
+            for (const size_t qubit : {0, 1, 2})
+            {
+                const auto marginal = sim->MarginalProbabilities({qubit});
+                double zero = 0., one = 0.;
+                for (size_t index = 0; index < all.size(); ++index)
+                    ((index >> qubit) & 1 ? one : zero) += all[index];
+                BOOST_TEST(std::abs(marginal[0] - zero) < 1e-9, "operation " << operation << ", qubit " << qubit);
+                BOOST_TEST(std::abs(marginal[1] - one) < 1e-9, "operation " << operation << ", qubit " << qubit);
+            }
         }
     }
 
@@ -1288,13 +1300,53 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
     for (const Wide &wide : {Wide{Type::kQCSim, Method::kTensorNetwork, 70}, Wide{Type::kCompositeQCSim, Method::kStatevector, 65},
                              Wide{Type::kCompositeQiskitAer, Method::kStatevector, 65}})
     {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
-        sim->AllocateQubits(wide.qubits);
+        for (const bool apart : {false, true}) // the projected qubit entangled with qubit 0, or apart from it
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
+            sim->AllocateQubits(wide.qubits);
+            sim->Initialize();
+            sim->ApplyH(wide.qubits - 1);
+            if (!apart)
+                sim->ApplyCX(wide.qubits - 1, 0);
+            sim->ApplyGenericOneQubitGate(wide.qubits - 1, projector);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .5) < 1e-9, wide.qubits << " qubits, apart " << apart);
+        }
+    }
+    // The path integral drops the paths below its threshold and keeps the rest as they are.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kPathIntegral);
+        sim->Configure("path_integral_threshold", "0.3");
+        sim->AllocateQubits(1);
         sim->Initialize();
-        sim->ApplyH(wide.qubits - 1);
-        sim->ApplyCX(wide.qubits - 1, 0);
-        sim->ApplyGenericOneQubitGate(wide.qubits - 1, projector);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .5) < 1e-9, wide.qubits << " qubits");
+        sim->ApplyRy(0, M_PI / 3.);
+        const double whole = sim->Probability(0) + sim->Probability(1);
+        BOOST_TEST(std::abs(whole - .75) < 1e-9);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - whole) < 1e-12);
+    }
+    // A matrix product operator normalizes its probabilities by its trace, which ApplyOperator
+    // without normalize leaves where it falls: they total 1, and where the trace cannot normalize
+    // them the empty marginal throws as they do.
+    for (const bool zeroTrace : {false, true})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductOperator);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        Eigen::MatrixXcd onto = Eigen::MatrixXcd::Zero(2, 2);
+        if (zeroTrace)
+            onto(1, 1) = 1.; // |0> onto |1>: trace 0
+        else
+        {
+            sim->ApplyH(0);
+            onto(0, 0) = 1.; // trace 0.5
+        }
+        sim->ApplyOperator({0}, onto, false);
+        if (zeroTrace)
+        {
+            BOOST_CHECK_THROW(sim->Probability(0), std::runtime_error);
+            BOOST_CHECK_THROW(sim->MarginalProbabilities({}), std::runtime_error);
+        }
+        else
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
     }
     // A matrix product state is 1 while every matrix keeps the norm, at any width (a generic
     // Hadamard too); after one that may not, only the whole distribution shows the total, which a
@@ -1315,6 +1367,68 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
         BOOST_CHECK_THROW(sim->MarginalProbabilities({}), std::length_error);
         sim->RestoreState(); // the state from before the projection, and its mark
         BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, wide.qubits << " qubits, restored");
+    }
+    // A restore with nothing saved leaves the state as it is, and its mark with it.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductState);
+        sim->AllocateQubits(3);
+        sim->Initialize();
+        sim->ApplyH(2);
+        sim->ApplyCX(2, 0);
+        sim->ApplyGenericOneQubitGate(2, projector);
+        sim->RestoreState();
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .5) < 1e-9);
+    }
+    // Matrices each close to unitary move the norm by their sum: 1024 of them, each 8e-11 short,
+    // left 0.99999991808, which the mark must see.
+    for (const Type type : {Type::kQCSim, Type::kQiskitAer})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        const Eigen::Matrix2cd almost = Eigen::Matrix2cd::Identity() * std::sqrt(1. - 8e-11);
+        for (int gate = 0; gate < 1024; ++gate)
+            sim->ApplyGenericOneQubitGate(gate % 2, almost);
+        const double whole = sumOf(sim->AllProbabilities());
+        BOOST_TEST(whole < 1. - 1e-8);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - whole) < 1e-12);
+    }
+    // Matrices unitary to rounding count as unitary, however many: gate fusion hands over products
+    // of gates (here of 40 each, about 3e-15 from unitary), and a long circuit of them must not turn
+    // a wide register's total into an error (120000 of them add up to more than the tolerance).
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductState);
+        sim->AllocateQubits(40);
+        sim->Initialize();
+        std::mt19937 generator(9);
+        std::uniform_real_distribution<double> angle(0., 2. * M_PI);
+        for (int gate = 0; gate < 120000; ++gate)
+        {
+            Eigen::Matrix2cd product = Eigen::Matrix2cd::Identity();
+            for (int factor = 0; factor < 40; ++factor)
+            {
+                const double theta = angle(generator), phi = angle(generator), lambda = angle(generator);
+                Eigen::Matrix2cd unitary;
+                unitary << std::cos(theta / 2.), -std::polar(1., lambda) * std::sin(theta / 2.), std::polar(1., phi) * std::sin(theta / 2.),
+                    std::polar(1., phi + lambda) * std::cos(theta / 2.);
+                product = unitary * product;
+            }
+            sim->ApplyGenericOneQubitGate(gate % 40, product);
+        }
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12);
+    }
+    // Aer's save sorts the qubits of the chain with swaps, two-qubit updates that renormalize it, as
+    // any two-qubit gate on the site would: the total reports the state as it then is.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kMatrixProductState);
+        sim->AllocateQubits(3);
+        sim->Initialize();
+        sim->ApplyH(2);
+        sim->ApplyCX(2, 0);
+        sim->ApplyGenericOneQubitGate(2, projector);
+        sim->SaveState();
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
     }
     // The mark goes with a clone. (QCSim copies the chain as it is; Aer copies it through a save and
     // a restore, which renormalize it, the original's too.)
@@ -1339,6 +1453,23 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
         sim->Initialize();
         BOOST_TEST(std::abs(sim->ApplyLocalMapNorm({0}, Eigen::MatrixXcd::Identity(2, 2) * .5) - .25) < 1e-12);
         BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .25) < 1e-12);
+    }
+}
+
+// A statevector given to Aer must hold the amplitudes of the register: a shorter one was read past
+// its end (and 1 << n sized it, undefined from 64 qubits).
+BOOST_AUTO_TEST_CASE(aer_initial_statevector_length_is_checked)
+{
+    for (const auto method :
+         {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kDensityMatrix})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+        std::vector<std::complex<double>> shortVector(4, std::complex<double>(.5, 0.));
+        BOOST_CHECK_THROW(sim->InitializeState(3, shortVector), std::invalid_argument);
+        std::vector<std::complex<double>> state(8, 0.);
+        state[5] = 1.;
+        sim->InitializeState(3, state);
+        BOOST_TEST(std::abs(sim->Probability(5) - 1.) < 1e-12);
     }
 }
 

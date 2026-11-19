@@ -582,11 +582,13 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                                  "product operator simulator.");
     }
 
-    // The state cannot be left unnormalized here (QCSim renormalizes the operator after a gate that does not keep its trace), so its total probability is 1 at
-    // any width.
+    // The operator reports its probabilities normalized by its trace (ApplyOperator without normalize leaves the
+    // trace where it falls), so they total 1 wherever they are defined. Where the trace cannot normalize them they
+    // all throw, and so does this: it asks the probability of |0...0>, one contraction at any width.
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
+        (void)Probability(0);
         return 1.;
     }
 

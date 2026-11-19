@@ -23,7 +23,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Initialize() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         RefreshRoutingSettings();
         InvalidateDummyHistory();
         if (nrQubits)
@@ -95,7 +96,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Reset() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
         if (mps)
         {
             mps->Reset();
@@ -282,7 +283,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Clear() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         mps = nullptr;
         nrQubits = 0;
         ClearDummySimulator();
@@ -431,7 +433,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
-        if (!normMayDiffer)
+        if (normDeviation <= kNormDeviationTolerance)
             return 1.;
         return IState::TotalProbability();
     }
@@ -583,7 +585,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->SaveState())
             throw std::runtime_error("GPU MPS state save failed");
         SaveDummyState();
-        savedNormMayDiffer = normMayDiffer;
+        savedNormDeviation = normDeviation;
+        normSaved = true;
     }
 
     void RestoreState() override
@@ -591,12 +594,13 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->RestoreState())
             throw std::runtime_error("GPU MPS state restore failed");
         RestoreDummyState();
-        normMayDiffer = savedNormMayDiffer;
+        if (normSaved) // a restore with nothing saved leaves the state as it is
+            normDeviation = savedNormDeviation;
     }
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
-        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
+        normDeviation += NormDeviation(gate);
         const Eigen::Matrix2cd inputFirst = gate.transpose();
         if (!mps->ApplyOneQubitMatrix(static_cast<unsigned int>(qubit), reinterpret_cast<const double *>(inputFirst.data())))
             throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the "
@@ -607,7 +611,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
-        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
+        normDeviation += NormDeviation(gate);
         const Eigen::Matrix4cd inputFirst = gate.transpose();
         if (!mps->ApplyTwoQubitMatrix(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1),
                                       reinterpret_cast<const double *>(inputFirst.data())))
@@ -867,8 +871,9 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     {
         auto cloned = std::make_unique<GpuMPSSimulator>();
         cloned->swapGatesRelabelQubits = swapGatesRelabelQubits;
-        cloned->normMayDiffer = normMayDiffer;
-        cloned->savedNormMayDiffer = savedNormMayDiffer;
+        cloned->normDeviation = normDeviation;
+        cloned->savedNormDeviation = savedNormDeviation;
+        cloned->normSaved = normSaved;
         cloned->nrQubits = nrQubits;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
@@ -920,8 +925,9 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     }
 
     std::unique_ptr<GpuLibMPSSim> mps;
-    bool normMayDiffer = false;      // a generic gate whose matrix may not keep the norm reached the chain
-    bool savedNormMayDiffer = false; // its value at SaveState
+    double normDeviation = 0.;      // how far the generic gates that reached the chain may have moved its norm
+    double savedNormDeviation = 0.; // its value at SaveState
+    bool normSaved = false;         // whether the chain holds a save
 };
 } // namespace Simulators::Private
 #endif

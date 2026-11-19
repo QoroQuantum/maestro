@@ -185,6 +185,21 @@ class TensorNetwork
         return result;
     }
 
+    // The weight of the whole state. Its independent groups of qubits are factors of it, each weighing what both
+    // values of one of its qubits weigh: the probability of one qubit contracts the group of that qubit only, so
+    // qubit 0's alone missed what a matrix did to a group apart from it.
+    double TotalProbability()
+    {
+        std::vector<Types::qubit_t> representatives;
+        representatives.reserve(qubitsGroups.size());
+        for (const auto &group : qubitsGroups)
+            representatives.push_back(*group.second.begin());
+        double total = 1.;
+        for (const Types::qubit_t qubit : representatives)
+            total *= Probability(qubit, true) + Probability(qubit, false);
+        return total;
+    }
+
     double getBasisStateProbability(Types::qubit_t outcome)
     {
         // Temporary projectors must not overwrite the caller's SaveState() checkpoint.

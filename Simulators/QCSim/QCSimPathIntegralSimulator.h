@@ -166,11 +166,12 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         return pathIntegralSimulator->AmplitudeForOutcome(outcome);
     }
 
-    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    // The basis states its paths reach, summed: the threshold (path_integral_threshold) drops some, so it can be less
+    // than 1, as its probabilities are.
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
-        return 1.;
+        return pathIntegralSimulator->TotalProbability();
     }
 
     std::vector<double> AllProbabilities() override

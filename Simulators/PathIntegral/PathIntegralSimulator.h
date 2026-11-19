@@ -267,6 +267,15 @@ class PathIntegralSimulator
         return 0.0;
     }
 
+    // The probabilities of the basis states kept: the threshold drops paths, and nothing renormalizes the rest.
+    double TotalProbability()
+    {
+        double total = 0.;
+        for (const auto &entry : simulator.GetAmplitudes())
+            total += std::norm(entry.second);
+        return total;
+    }
+
     double Probability(Types::qubit_t outcome)
     {
         return std::norm(AmplitudeForOutcome(outcome));

@@ -38,10 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before QCSim throws its own error), so a marginal no longer sums it to
   zero; an empty marginal is the total probability of the state, which a
   generic gate with a non-unitary matrix can leave below 1, read at any
-  width where the backend has it (Aer's dense methods, the tensor network,
-  the composite as the product of its components, and 1 where the state
-  cannot be left unnormalized; a matrix product state is 1 until such a
-  matrix reaches it, and the sum of its whole distribution after);
+  width where the backend has it (Aer's dense methods, the tensor network
+  over each of its independent groups of qubits, the path integral over the
+  paths its threshold keeps, the composite as the product of its
+  components; 1 on the MPOs, which normalize by the trace and throw where it
+  cannot, and where the state cannot be left unnormalized; a matrix product
+  state is 1 until the matrices that reach it may have moved its norm by
+  more than 1e-10 together, and the sum of its whole distribution after);
+  Aer's MPS reads its marginals from the whole distribution once such a
+  matrix reached it (its canonical form then gave a qubit of a projected
+  Bell pair [0.5, 0.5]); a statevector given to Aer must hold the register's
+  amplitudes (a shorter one was read past its end);
   `Probabilities`
   with no outcomes throws on a register without qubits too; an index on 65
   qubits or more no longer reads qubit 64 as qubit 0 (Aer MPS, through the

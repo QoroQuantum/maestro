@@ -23,7 +23,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Initialize() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
@@ -69,7 +70,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Reset() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
         if (mpsSimulator)
         {
             mpsSimulator->Clear();
@@ -165,7 +166,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Clear() override
     {
-        normMayDiffer = false;
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         automaticRoutingDepth = false;
         InvalidateBoundedRouting(true);
         mpsSimulator = nullptr;
@@ -462,7 +464,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
-        if (!normMayDiffer)
+        if (normDeviation <= kNormDeviationTolerance)
             return 1.;
         return IState::TotalProbability();
     }
@@ -744,14 +746,16 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         mpsSimulator->SaveState();
         SaveDummyState();
-        savedNormMayDiffer = normMayDiffer;
+        savedNormDeviation = normDeviation;
+        normSaved = true;
     }
 
     void RestoreState() override
     {
         mpsSimulator->RestoreState();
         RestoreDummyState();
-        normMayDiffer = savedNormMayDiffer;
+        if (normSaved) // a restore with nothing saved leaves the state as it is
+            normDeviation = savedNormDeviation;
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -793,7 +797,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
-        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
+        normDeviation += NormDeviation(gate);
         const QC::Gates::AppliedGate<> agate(gate, qubit);
         mpsSimulator->ApplyGate(agate);
         NotifyObservers({qubit});
@@ -803,7 +807,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         if (IsExactSwapMatrix(gate))
             return ApplySwap(qubit0, qubit1);
-        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
+        normDeviation += NormDeviation(gate);
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         mpsSimulator->ApplyGate(agate);
         RecordExecutedTwoQubitGate(qubit0, qubit1, false, EffectiveSchmidtRank(gate));
@@ -1076,8 +1080,9 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         auto cloned = std::make_unique<QCSimMPSSimulator>();
         cloned->nrQubits = nrQubits;
-        cloned->normMayDiffer = normMayDiffer;
-        cloned->savedNormMayDiffer = savedNormMayDiffer;
+        cloned->normDeviation = normDeviation;
+        cloned->savedNormDeviation = savedNormDeviation;
+        cloned->normSaved = normSaved;
         cloned->enableMultithreading = enableMultithreading;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->automaticRoutingDepth = automaticRoutingDepth;
@@ -1164,8 +1169,9 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     }
 
     std::unique_ptr<QC::TensorNetworks::MPSSimulator> mpsSimulator;
-    bool normMayDiffer = false;      // a generic gate whose matrix may not keep the norm reached the chain
-    bool savedNormMayDiffer = false; // its value at SaveState
+    double normDeviation = 0.;      // how far the generic gates that reached the chain may have moved its norm
+    double savedNormDeviation = 0.; // its value at SaveState
+    bool normSaved = false;         // whether the chain holds a save
 };
 } // namespace Simulators::Private
 #endif
