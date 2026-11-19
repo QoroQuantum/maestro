@@ -63,7 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routing could truncate for it too. A branch that is a phase times the
   identity keeps its phase in the amplitudes. Kraus operators given on two
   targets that are the identity on one are applied on the other alone, as
-  given and in their order, on both backends. The distribution is unchanged;
+  given and in their order, on both backends; a set of Kraus operators
+  placed on other targets (`Placed`, `OnQubit`) keeps its operators too,
+  where it was replaced by the canonical operators of the same channel. The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on

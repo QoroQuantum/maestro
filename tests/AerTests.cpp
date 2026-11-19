@@ -460,13 +460,32 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
             Channel channel;
         };
 
-        const std::vector<Given> given{{{0}, Channel(Channel::KrausOperators{plus, minus})},
-                                       {{0, 1}, Channel(Channel::KrausOperators{onTargets(one, plus), onTargets(one, minus)})},
-                                       {{1, 0}, Channel(Channel::KrausOperators{onTargets(plus, one), onTargets(minus, one)})}};
+        const Channel narrow(Channel::KrausOperators{plus, minus}), wide(Channel::KrausOperators{onTargets(one, plus), onTargets(one, minus)});
+        // The same operation on qubit 0 every time: given on it, on two targets in either order, with
+        // the targets of the instruction and of the channel both reversed, and placed on a target.
+        const std::vector<Given> given{{{0}, narrow},
+                                       {{0, 1}, wide},
+                                       {{1, 0}, Channel(Channel::KrausOperators{onTargets(plus, one), onTargets(minus, one)})},
+                                       {{1, 0}, Channel::Placed(wide, {1, 0})},
+                                       {{1, 0}, Channel::OnQubit(narrow, 1)},
+                                       {{0, 1}, Channel::OnQubit(narrow, 0)}};
+        // A set of Kraus operators on all the targets of a channel stays that set when the channel is
+        // placed on other targets: here with the two targets exchanged.
+        {
+            // Operators on both targets: (K0, K1) on the first, (plus, minus) on the second.
+            const Channel::KrausOperators given{onTargets(plus, k0), onTargets(minus, k0), onTargets(plus, k1), onTargets(minus, k1)};
+            const Channel exchanged = Channel::Placed(Channel(given), {1, 0});
+            BOOST_REQUIRE_EQUAL(exchanged.GetKrausOperators().size(), 4u);
+            BOOST_TEST((exchanged.GetKrausOperators()[0] - onTargets(k0, plus)).isZero(1e-15));
+            BOOST_TEST((exchanged.GetKrausOperators()[1] - onTargets(k0, minus)).isZero(1e-15));
+            BOOST_TEST((exchanged.GetKrausOperators()[3] - onTargets(k1, minus)).isZero(1e-15));
+        }
         BOOST_TEST(&given[1].channel.OnActiveQubits().GetKrausOperators() == &given[1].channel.OnActiveQubits().GetKrausOperators());
         BOOST_TEST(given[1].channel.OnActiveQubits().GetKrausOperators().size() == 2u);
         BOOST_TEST((given[1].channel.OnActiveQubits().GetKrausOperators()[0] - plus).isZero(1e-15));
         BOOST_TEST((given[2].channel.OnActiveQubits().GetKrausOperators()[1] - minus).isZero(1e-15));
+        BOOST_TEST((given[3].channel.OnActiveQubits().GetKrausOperators()[0] - plus).isZero(1e-15));
+        BOOST_TEST((given[4].channel.OnActiveQubits().GetKrausOperators()[1] - minus).isZero(1e-15));
         for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kStatevector})
             for (const Given &g : given)
                 for (uint64_t seed = 1; seed <= 6; ++seed)
@@ -643,6 +662,42 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_branches_reach_only_the_targets_they_act_on
             auto sim = prepare(mps, "2", seed);
             sim->ApplyQuantumChannel({0, 2}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
             BOOST_TEST(std::abs(marginal(sim->AllProbabilities(), 1) - 0.45) < 1e-9);
+        }
+    }
+
+    // Reducing a channel to the target it acts on keeps each part as it is: a mixture stays a mixture
+    // of the same unitaries with the same probabilities, so its trajectories and its phases stay.
+    {
+        const std::complex<double> phase(0., 1.);
+        const double c = std::cos(std::acos(-1.) / 4), s = std::sin(std::acos(-1.) / 4);
+        Matrix up(2, 2), down(2, 2);
+        up << c, -s, s, c;   // Ry(pi/2)
+        down << c, s, -s, c; // Ry(-pi/2)
+        const Channel phased = Channel::UnitaryMixture({1.}, {Matrix(phase * onTargets(identity, x))}).OnActiveQubits(),
+                      rotations = Channel::UnitaryMixture({0.5, 0.5}, {onTargets(identity, up), onTargets(identity, down)}).OnActiveQubits();
+        BOOST_REQUIRE_EQUAL(phased.GetFactors().size(), 1u);
+        BOOST_TEST((phased.GetFactors()[0].kind == Channel::FactorKind::kUnitaryMixture));
+        BOOST_TEST((phased.GetFactors()[0].operators[0] - Matrix(phase * x)).isZero(0.));
+        BOOST_REQUIRE_EQUAL(rotations.GetFactors().size(), 1u);
+        BOOST_TEST((rotations.GetFactors()[0].kind == Channel::FactorKind::kUnitaryMixture));
+        BOOST_TEST((rotations.GetFactors()[0].probabilities == std::vector<double>{0.5, 0.5}));
+        for (const auto method : {mps, Simulators::SimulationType::kStatevector})
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            sim->SetSeed(1);
+            sim->ApplyQuantumChannel({0}, phased);
+            BOOST_TEST(std::abs(sim->Amplitude(1) - phase) < 1e-12, "a reduced i X branch left the amplitude " << sim->Amplitude(1));
+            for (uint64_t seed = 1; seed <= 6; ++seed)
+            {
+                auto rotated = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+                rotated->AllocateQubits(2);
+                rotated->Initialize();
+                rotated->SetSeed(seed);
+                rotated->ApplyQuantumChannel({0}, rotations);
+                BOOST_TEST(std::abs(marginal(rotated->AllProbabilities(), 0) - 0.5) < 1e-9);
+            }
         }
     }
 

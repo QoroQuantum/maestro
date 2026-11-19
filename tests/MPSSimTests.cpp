@@ -894,6 +894,41 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_identity_branch_does_not_route_under_a_bond
             BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
     }
 
+    // A channel reduced to the target it acts on keeps its parts as they are: a mixture of unitaries
+    // keeps its unitaries, with their phases, and its probabilities.
+    {
+        const std::complex<double> phase(0., 1.);
+        const auto second = [](const Matrix &first) { // identity on the second target
+            Matrix u = Matrix::Zero(4, 4);
+            u.block(0, 0, 2, 2) = first;
+            u.block(2, 2, 2, 2) = first;
+            return u;
+        };
+        Matrix x = Matrix::Zero(2, 2), up(2, 2), down(2, 2);
+        x(0, 1) = x(1, 0) = 1.;
+        const double c = std::cos(std::acos(-1.) / 4), s = std::sin(std::acos(-1.) / 4);
+        up << c, -s, s, c;
+        down << c, s, -s, c;
+        const Channel phased = Channel::UnitaryMixture({1.}, {Matrix(phase * second(x))}).OnActiveQubits(),
+                      rotations = Channel::UnitaryMixture({0.5, 0.5}, {second(up), second(down)}).OnActiveQubits();
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        sim->SetSeed(1);
+        sim->ApplyQuantumChannel({0}, phased);
+        BOOST_TEST(std::abs(sim->Amplitude(1) - phase) < 1e-12);
+        for (uint64_t seed = 1; seed <= 6; ++seed)
+        {
+            auto rotated = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+            rotated->AllocateQubits(2);
+            rotated->Initialize();
+            rotated->SetSeed(seed);
+            rotated->ApplyQuantumChannel({0}, rotations);
+            const auto probabilities = rotated->AllProbabilities();
+            BOOST_TEST(std::abs(probabilities[1] + probabilities[3] - 0.5) < 1e-9);
+        }
+    }
+
     // Kraus operators on two sites that are the identity on one of them are applied on the other alone:
     // a damping of qubit 0 given on qubits 0 and 4 is the damping given on qubit 0, with the same draw.
     // Routed together, P(q5 = 1) went from 0.397125 to 0.438238.

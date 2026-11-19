@@ -213,13 +213,44 @@ class QuantumChannel
 
     /**
      * Kraus operators of the channel. A channel built from Kraus operators
-     * returns them as given. A composed channel returns its canonical set: at
-     * most 4^n operators, largest weight first.
+     * returns them as given, and so does one that is a single set of Kraus
+     * operators on all its targets (such a channel placed on other targets,
+     * or reduced to the ones it acts on), in the channel's target order. Any
+     * other composed channel returns its canonical set: at most 4^n operators,
+     * largest weight first.
      */
     const KrausOperators &GetKrausOperators() const
     {
         if (data_->composed)
-            std::call_once(data_->krausOnce, [this]() { data_->kraus = CanonicalKraus(Superoperator(), Dimension()); });
+            std::call_once(data_->krausOnce, [this]() {
+                // A channel that is one set of Kraus operators on all its targets keeps that set, in its order:
+                // placing a channel on other targets, or reducing it to the ones it acts on, must not replace
+                // the trajectories it was given with those of its canonical operators, which are another
+                // unraveling of the same channel.
+                const std::vector<Factor> &factors = data_->factors;
+                if (factors.size() == 1 && (factors.front().kind == FactorKind::kKraus || factors.front().kind == FactorKind::kThermal) &&
+                    factors.front().qubits.size() == data_->numQubits && !factors.front().operators.empty())
+                {
+                    const Factor &factor = factors.front();
+                    if (data_->numQubits == 2 && factor.qubits[0] == 1)
+                    {
+                        // The factor's first qubit is the channel's second: the two bits of each index trade places.
+                        const auto swapped = [](Eigen::Index index) { return ((index & 1) << 1) | (index >> 1); };
+                        for (const Matrix &op : factor.operators)
+                        {
+                            Matrix reordered(4, 4);
+                            for (Eigen::Index row = 0; row < 4; ++row)
+                                for (Eigen::Index column = 0; column < 4; ++column)
+                                    reordered(row, column) = op(swapped(row), swapped(column));
+                            data_->kraus.push_back(std::move(reordered));
+                        }
+                    }
+                    else
+                        data_->kraus = factor.operators;
+                    return;
+                }
+                data_->kraus = CanonicalKraus(Superoperator(), Dimension());
+            });
         return data_->kraus;
     }
 
@@ -382,8 +413,9 @@ class QuantumChannel
      * is reduced to the targets it acts on, and dropped if it acts on none.
      * The result is built on first use and kept: every call returns the same
      * channel, with what that one has cached (its canonical Kraus operators).
-     * A channel given by its Kraus operators is reduced to those operators on
-     * the target they act on, in the order given.
+     * Every part keeps its kind, its operators reduced to the target they act
+     * on, their order and their probabilities: the reduced channel has the
+     * same trajectories, not only the same ensemble.
      */
     QuantumChannel OnActiveQubits() const
     {
@@ -394,20 +426,6 @@ class QuantumChannel
             throw std::invalid_argument("A channel that acts on none of its targets has no active part");
         // Built once and kept with this channel: the copies of a channel share it, and its caches.
         std::call_once(data_->reducedOnce, [this, &active]() {
-            // A channel given by its Kraus operators keeps them, and their order, on the target they act on. They
-            // are the trajectories the caller chose: the canonical operators of the same channel are another
-            // unraveling of it, with other branches (a damping given as (K0 + K1) / sqrt(2), (K0 - K1) / sqrt(2)
-            // keeps P(1) = 0.7 in both of its branches; its canonical operators give 0 or 1).
-            if (!data_->composed && GetNumberOfQubits() == 2 && active.size() == 1)
-            {
-                KrausOperators local;
-                size_t position = 0;
-                if (LocalOperators(data_->kraus, position, local) && position == active[0])
-                {
-                    data_->reduced.push_back(QuantumChannel(std::move(local)));
-                    return;
-                }
-            }
             std::vector<size_t> position(GetNumberOfQubits(), 0);
             for (size_t k = 0; k < active.size(); ++k)
                 position[active[k]] = k;
