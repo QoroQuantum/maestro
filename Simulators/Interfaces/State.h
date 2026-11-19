@@ -171,14 +171,16 @@ inline std::vector<double> BasisProbabilities(IState &state);
 
 /**
  * The number of basis states of a register, 2^qubits, where a vector of that
- * many probabilities can exist; otherwise std::length_error. Every reader of
- * the whole distribution checks it before listing: 1 << 64 is undefined (it
- * listed one basis state, which passed for the distribution), and a count
- * past what a vector holds cannot be listed, only appended to without end.
+ * many values (probabilities, or amplitudes with Value = std::complex<double>)
+ * can exist; otherwise std::length_error. Every reader of the whole
+ * distribution or statevector checks it before listing: 1 << 64 is undefined
+ * (it listed one basis state, which passed for the distribution), a count past
+ * what a vector holds cannot be listed, only appended to without end, and an
+ * allocator that sizes it in bytes wraps.
  */
-inline size_t ListableBasisStateCount(size_t qubits)
+template <class Value = double> inline size_t ListableBasisStateCount(size_t qubits)
 {
-    if (qubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits) || (size_t{1} << qubits) > std::vector<double>().max_size())
+    if (qubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits) || (size_t{1} << qubits) > std::vector<Value>().max_size())
         throw std::length_error("The basis states of a register of " + std::to_string(qubits) + " qubits cannot all be listed");
     return size_t{1} << qubits;
 }
@@ -1013,8 +1015,8 @@ class IState
      * @param outcome The outcome to obtain the amplitude for, a basis-state
      * index below 2^GetNumberOfQubits(); otherwise std::out_of_range is thrown.
      * A method without amplitudes (density matrix, matrix product operator,
-     * stabilizer, Pauli propagator, tensor network) throws std::runtime_error
-     * first, whatever the index.
+     * stabilizer, Pauli propagator, and QCSim's extended stabilizer and
+     * tensor network) throws std::runtime_error first, whatever the index.
      * @return The amplitude of the specified outcome.
      */
     virtual std::complex<double> Amplitude(Types::qubit_t outcome) = 0;
@@ -1101,10 +1103,9 @@ class IState
      * significant bit of the index (as the packed outcomes of SampleCounts).
      * The qubits must be distinct and below GetNumberOfQubits(); otherwise
      * std::invalid_argument, or std::out_of_range for a qubit past the
-     * register, is thrown. No qubits is one value, 1: tracing out every qubit
-     * of the normalized state every backend holds leaves its whole
-     * probability, and no state is read, so it holds at any width. A register
-     * without qubits throws std::runtime_error.
+     * register, is thrown. No qubits is one value, the total probability of
+     * the state (TotalProbability). A register without qubits throws
+     * std::runtime_error.
      *
      * The default sums the whole distribution (BasisProbabilities: also on a
      * tensor network, whose AllProbabilities is not defined, from one
@@ -1121,7 +1122,7 @@ class IState
     {
         RequireMarginalQubits(qubits);
         if (qubits.empty())
-            return {1.0};
+            return {TotalProbability()};
         // A reader that cannot list every basis state must not pass for a distribution with no weight.
         const size_t count = GetNumberOfQubits();
         const size_t states = ListableBasisStateCount(count);
@@ -1138,6 +1139,33 @@ class IState
             result[outcome] += all[index];
         }
         return result;
+    }
+
+    /**
+     * @brief Returns the total probability of the state.
+     *
+     * The sum of the probabilities of every basis state, as the other
+     * probability queries report them: 1 for a normalized state, and what an
+     * operation that does not keep the norm leaves (a generic gate with a
+     * non-unitary matrix, ApplyLocalMapNorm), since nothing renormalizes the
+     * state after it. It is the one value of MarginalProbabilities({}). A
+     * register without qubits throws std::runtime_error.
+     *
+     * The default sums the marginal of qubit 0, which on most backends needs
+     * the whole distribution (so it throws std::length_error where that cannot
+     * be listed). Overrides: Aer's dense methods read their own marginal of
+     * qubit 0, and the tensor network contracts both weights of qubit 0, at any
+     * width; the composite multiplies its components'; a backend whose state
+     * cannot be left unnormalized is 1; and a matrix product state is 1 until
+     * a generic gate whose matrix may not keep the norm reaches it (KeepsNorm),
+     * and the sum of its whole distribution after, since its reads of one
+     * qubit then do not hold.
+     */
+    virtual double TotalProbability()
+    {
+        RequireQubits(GetNumberOfQubits());
+        const std::vector<double> first = MarginalProbabilities({0});
+        return first.at(0) + first.at(1);
     }
 
     /**
@@ -1459,6 +1487,18 @@ class IState
     {
         if (qubits == 0)
             throw std::runtime_error("The register has no qubits: there is no state to query");
+    }
+
+    /**
+     * Whether a generic gate's matrix keeps the norm of every state: M^dagger M
+     * is the identity, to the 1e-10 that QCSim's MPS uses for its own gates. It
+     * rejects nothing. A matrix product state notes the matrices that do not:
+     * its total probability is 1 until one reaches it, and only the whole
+     * distribution shows it after.
+     */
+    template <class Matrix> static bool KeepsNorm(const Matrix &matrix)
+    {
+        return (matrix.adjoint() * matrix).isIdentity(1e-10);
     }
 
     /** Shared by SetSeed and backend Configure("seed") implementations. */

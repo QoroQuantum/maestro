@@ -185,7 +185,7 @@ class TensorNetwork
         return result;
     }
 
-    double getBasisStateProbability(size_t outcome)
+    double getBasisStateProbability(Types::qubit_t outcome)
     {
         // Temporary projectors must not overwrite the caller's SaveState() checkpoint.
         const auto tensorCount = tensors.size();
@@ -201,7 +201,7 @@ class TensorNetwork
         double prob;
         try
         {
-            size_t mask = 1ULL;
+            Types::qubit_t mask = 1; // past bit 63 it is 0: qubits from 64 on are 0 in any index
             for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
             {
                 const bool expected = (outcome & mask) == 0;

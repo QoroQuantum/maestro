@@ -34,15 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wide to list throws `std::length_error` before it is listed (QCSim MPS at
   32 qubits returned nothing; the path integral, Pauli propagator, composite
   and Aer stabilizer one value at 64; the composite at 63 grew its list
-  without end), so a marginal no longer sums it to zero; an empty marginal
-  is `1.0` and reads no state, so it holds at any width; `Probabilities`
+  without end; QCSim's MPS past 31 and stabilizer past 32 qubits refuse
+  before QCSim throws its own error), so a marginal no longer sums it to
+  zero; an empty marginal is the total probability of the state, which a
+  generic gate with a non-unitary matrix can leave below 1, read at any
+  width where the backend has it (Aer's dense methods, the tensor network,
+  the composite as the product of its components, and 1 where the state
+  cannot be left unnormalized; a matrix product state is 1 until such a
+  matrix reaches it, and the sum of its whole distribution after);
+  `Probabilities`
   with no outcomes throws on a register without qubits too; an index on 65
   qubits or more no longer reads qubit 64 as qubit 0 (Aer MPS, through the
   pin, and the path integral read basis state 1 as 0); QuEST refuses an
   index past its signed 64-bit range; `Amplitude` on a method without
   amplitudes throws
   `std::runtime_error` before the index is checked, on every backend; and the
-  QCSim MPS reads an index through its bits, never cutting it to `size_t`.
+  QCSim MPS reads an index through its bits, never cutting it to `size_t`;
+  the Aer extended stabilizer's `Amplitude` refuses a statevector too large
+  to allocate, where from 60 qubits Aer's byte count wrapped and it wrote
+  past its buffer.
   `AllProbabilities` on a register without qubits throws too, on every
   backend, and `AllocateQubits(0)` on Aer no longer reads past an empty list
   of qubit ids.

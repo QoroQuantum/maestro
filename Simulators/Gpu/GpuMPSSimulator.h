@@ -23,6 +23,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Initialize() override
     {
+        normMayDiffer = false;
         RefreshRoutingSettings();
         InvalidateDummyHistory();
         if (nrQubits)
@@ -94,6 +95,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Reset() override
     {
+        normMayDiffer = false;
         if (mps)
         {
             mps->Reset();
@@ -280,6 +282,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Clear() override
     {
+        normMayDiffer = false;
         mps = nullptr;
         nrQubits = 0;
         ClearDummySimulator();
@@ -420,6 +423,17 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     std::complex<double> ProjectOnZero() override
     {
         return mps->ProjectOnZero();
+    }
+
+    // Unitary gates, measurements, channels and truncation keep the chain normalized, so its total probability is 1
+    // at any width. After a generic gate whose matrix may not keep the norm only the whole distribution shows it:
+    // the GPU library's reads of one qubit hold only at the centre of the chain.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        if (!normMayDiffer)
+            return 1.;
+        return IState::TotalProbability();
     }
 
     std::vector<double> AllProbabilities() override
@@ -569,6 +583,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->SaveState())
             throw std::runtime_error("GPU MPS state save failed");
         SaveDummyState();
+        savedNormMayDiffer = normMayDiffer;
     }
 
     void RestoreState() override
@@ -576,10 +591,12 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->RestoreState())
             throw std::runtime_error("GPU MPS state restore failed");
         RestoreDummyState();
+        normMayDiffer = savedNormMayDiffer;
     }
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         const Eigen::Matrix2cd inputFirst = gate.transpose();
         if (!mps->ApplyOneQubitMatrix(static_cast<unsigned int>(qubit), reinterpret_cast<const double *>(inputFirst.data())))
             throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the "
@@ -590,6 +607,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         const Eigen::Matrix4cd inputFirst = gate.transpose();
         if (!mps->ApplyTwoQubitMatrix(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1),
                                       reinterpret_cast<const double *>(inputFirst.data())))
@@ -849,6 +867,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     {
         auto cloned = std::make_unique<GpuMPSSimulator>();
         cloned->swapGatesRelabelQubits = swapGatesRelabelQubits;
+        cloned->normMayDiffer = normMayDiffer;
+        cloned->savedNormMayDiffer = savedNormMayDiffer;
         cloned->nrQubits = nrQubits;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
@@ -900,6 +920,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     }
 
     std::unique_ptr<GpuLibMPSSim> mps;
+    bool normMayDiffer = false;      // a generic gate whose matrix may not keep the norm reached the chain
+    bool savedNormMayDiffer = false; // its value at SaveState
 };
 } // namespace Simulators::Private
 #endif

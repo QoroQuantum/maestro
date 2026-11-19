@@ -166,6 +166,13 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         return pathIntegralSimulator->AmplitudeForOutcome(outcome);
     }
 
+    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits());                                        // a register without qubits has no state to list

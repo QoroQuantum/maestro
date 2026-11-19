@@ -516,6 +516,16 @@ class ImmediateCompositeSimulator : public ISimulator
      *
      * @return A vector with the probabilities of all possible outcomes.
      */
+    // The components hold independent factors of the state: its weight is the product of theirs, at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        double total = 1.;
+        for (auto &[id, simulator] : simulators)
+            total *= simulator->TotalProbability();
+        return total;
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list

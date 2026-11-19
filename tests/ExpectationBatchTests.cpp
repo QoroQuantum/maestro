@@ -195,7 +195,7 @@ struct QueryNetwork : Net
 };
 
 // The C API's state queries: Probabilities takes basis-state indices (nullptr past the register),
-// MarginalProbabilities qubits, including none, whose one value is 1, the whole probability.
+// MarginalProbabilities qubits, including none, whose one value is the total probability.
 void ProbabilityQueriesInC()
 {
     auto sim = Make(Method::kStatevector, 3);

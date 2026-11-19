@@ -677,6 +677,13 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
                                  "product operators.");
     }
 
+    // The state cannot be left unnormalized here (the GPU library refuses a matrix that does not keep the norm), so its total probability is 1 at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list

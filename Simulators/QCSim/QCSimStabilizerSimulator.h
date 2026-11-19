@@ -157,9 +157,20 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
         }
     }
 
+    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // QCSim lists the distribution up to 32 qubits and throws its own error above: refused here first, as every
+        // reader too wide to list (std::length_error).
+        if (GetNumberOfQubits() > 32)
+            throw std::length_error("QCSim lists the distribution of a stabilizer state of at most 32 qubits, not " + std::to_string(GetNumberOfQubits()));
         return cliffordSimulator->AllProbabilities();
     }
 

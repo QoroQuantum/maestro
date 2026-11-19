@@ -66,6 +66,7 @@ class AerSimulator : public AerState
         gate_matrix(1, 0) = gate(1, 0);
         gate_matrix(1, 1) = gate(1, 1);
 
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         state->apply_unitary(qubits, gate_matrix);
         NotifyObservers(qubits);
     }
@@ -85,6 +86,7 @@ class AerSimulator : public AerState
             for (size_t j = 0; j < 4; ++j)
                 gate_matrix(i, j) = gate(i, j);
 
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         state->apply_unitary(qubits, gate_matrix);
         NotifyObservers(qubits);
     }
@@ -1051,6 +1053,7 @@ class AerSimulator : public AerState
 
         sim->SetMultithreading(enableMultithreading); /**< The multithreading flag. */
 
+        const bool localSavedNormMayDiffer = savedNormMayDiffer;
         AER::Vector<complex_t> localSavedAmplitudes = savedAmplitudes; /**< The amplitudes, saved. */
         AER::Data localSavedState = savedState;                        /**< The saved data - here there will be the saved state of
                                                                           the simulator */
@@ -1101,6 +1104,10 @@ class AerSimulator : public AerState
         if (configuration.IsSet("seed"))
             sim->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
 
+        // The mark of the state, and the one saved with it (SaveState above wrote this simulator's).
+        sim->normMayDiffer = normMayDiffer;
+        sim->savedNormMayDiffer = localSavedNormMayDiffer;
+        savedNormMayDiffer = localSavedNormMayDiffer;
         return sim;
     }
 };

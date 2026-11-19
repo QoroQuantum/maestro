@@ -150,6 +150,13 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
                                  "tensor network simulator.");
     }
 
+    // Both weights of qubit 0, each one contraction at any width (the default would contract once per basis state).
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return tensorNetwork->Probability(0, true) + tensorNetwork->Probability(0, false);
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list

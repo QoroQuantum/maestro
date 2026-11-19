@@ -1920,7 +1920,7 @@ extern "C"
     {
         try
         {
-            // No qubits is a selection too: its one value is 1, the whole probability of the state.
+            // No qubits is a selection too: its one value is the total probability of the state.
             if (!sim || (!qubits && nrQubits != 0))
                 return nullptr;
             auto simulator = static_cast<Simulators::ISimulator *>(sim);

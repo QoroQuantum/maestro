@@ -217,6 +217,41 @@ def test_probabilities_take_basis_states_on_every_backend(backend_name, method_n
 
 
 @pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_empty_marginal_is_the_total_probability(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    maestro.SimulationType.Statevector)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(2)
+        sim.InitializeSimulator()
+        sim.ApplyH(0)
+        # A projection onto |0> leaves half the weight, and nothing renormalizes the state.
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sum(sim.AllProbabilities()) == pytest.approx(0.5)
+        assert sim.MarginalProbabilities([]) == pytest.approx([0.5])
+        assert sum(sim.MarginalProbabilities([1])) == pytest.approx(0.5)
+    finally:
+        owner.destroy_simulator(handle)
+
+
+def test_marginal_too_wide_to_list_raises_value_error():
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(maestro.SimulatorType.QCSim, maestro.SimulationType.MatrixProductState)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(40)
+        sim.InitializeSimulator()
+        with pytest.raises(ValueError):
+            sim.MarginalProbabilities([0])
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
 def test_amplitude_on_a_method_without_amplitudes(backend_name):
     if not hasattr(maestro.SimulatorType, backend_name):
         pytest.skip(f"{backend_name} is not compiled in")

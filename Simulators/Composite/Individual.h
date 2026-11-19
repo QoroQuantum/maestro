@@ -804,6 +804,12 @@ class IndividualSimulator : public ISimulator
      *
      * @return A vector with the probabilities of all possible outcomes.
      */
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return simulator->TotalProbability();
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list

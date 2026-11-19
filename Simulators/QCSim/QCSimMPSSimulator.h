@@ -23,6 +23,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Initialize() override
     {
+        normMayDiffer = false;
         InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
@@ -68,6 +69,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Reset() override
     {
+        normMayDiffer = false;
         if (mpsSimulator)
         {
             mpsSimulator->Clear();
@@ -163,6 +165,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Clear() override
     {
+        normMayDiffer = false;
         automaticRoutingDepth = false;
         InvalidateBoundedRouting(true);
         mpsSimulator = nullptr;
@@ -453,10 +456,25 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         return mpsSimulator->ProjectOnZero();
     }
 
+    // Unitary gates, measurements, channels and truncation keep the chain normalized, so its total probability is 1
+    // at any width. After a generic gate whose matrix may not keep the norm only the whole distribution shows it:
+    // QCSim's reads of one qubit renormalize the chain, and a one-qubit matrix leaves its form stale.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        if (!normMayDiffer)
+            return 1.;
+        return IState::TotalProbability();
+    }
+
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
-        // QCSim lists the statevector up to 31 qubits and returns nothing at 32: that is not a distribution.
+        // QCSim lists the statevector up to 31 qubits, returns nothing at 32 and throws its own error above: refused
+        // here first, as every reader too wide to list (std::length_error).
+        if (nrQubits >= sizeof(size_t) * 4)
+            throw std::length_error("QCSim lists a matrix product state of at most " + std::to_string(sizeof(size_t) * 4 - 1) + " qubits, not " +
+                                    std::to_string(nrQubits));
         const Eigen::VectorXcd probs = mpsSimulator->getRegisterStorage().cwiseAbs2();
         if (static_cast<size_t>(probs.size()) != ListableBasisStateCount(nrQubits))
             throw std::length_error("The basis states of a matrix product state of " + std::to_string(nrQubits) + " qubits cannot all be listed");
@@ -726,12 +744,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         mpsSimulator->SaveState();
         SaveDummyState();
+        savedNormMayDiffer = normMayDiffer;
     }
 
     void RestoreState() override
     {
         mpsSimulator->RestoreState();
         RestoreDummyState();
+        normMayDiffer = savedNormMayDiffer;
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -773,6 +793,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         const QC::Gates::AppliedGate<> agate(gate, qubit);
         mpsSimulator->ApplyGate(agate);
         NotifyObservers({qubit});
@@ -782,6 +803,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         if (IsExactSwapMatrix(gate))
             return ApplySwap(qubit0, qubit1);
+        normMayDiffer = normMayDiffer || !KeepsNorm(gate);
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         mpsSimulator->ApplyGate(agate);
         RecordExecutedTwoQubitGate(qubit0, qubit1, false, EffectiveSchmidtRank(gate));
@@ -1054,6 +1076,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         auto cloned = std::make_unique<QCSimMPSSimulator>();
         cloned->nrQubits = nrQubits;
+        cloned->normMayDiffer = normMayDiffer;
+        cloned->savedNormMayDiffer = savedNormMayDiffer;
         cloned->enableMultithreading = enableMultithreading;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->automaticRoutingDepth = automaticRoutingDepth;
@@ -1140,6 +1164,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     }
 
     std::unique_ptr<QC::TensorNetworks::MPSSimulator> mpsSimulator;
+    bool normMayDiffer = false;      // a generic gate whose matrix may not keep the norm reached the chain
+    bool savedNormMayDiffer = false; // its value at SaveState
 };
 } // namespace Simulators::Private
 #endif

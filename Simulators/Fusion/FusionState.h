@@ -538,6 +538,12 @@ class FusionState : public ISimulator
         return immediate_->MarginalProbabilities(qs);
     }
 
+    double TotalProbability() override
+    {
+        Synchronize();
+        return immediate_->TotalProbability();
+    }
+
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qs, size_t shots = 1000) override
     {
         Synchronize();

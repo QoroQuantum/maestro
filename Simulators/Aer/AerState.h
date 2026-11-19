@@ -78,6 +78,7 @@ class AerState : public ISimulator
      */
     void Initialize() override
     {
+        normMayDiffer = false;
         SetMultithreading(enableMultithreading);
         if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
             Configure("mps_sample_measure_algorithm", "mps_probabilities");
@@ -362,6 +363,7 @@ class AerState : public ISimulator
      */
     void Clear() override
     {
+        normMayDiffer = false;
         state->clear();
         SetMultithreading(enableMultithreading);
 
@@ -711,6 +713,10 @@ class AerState : public ISimulator
 
         if (simulationType == SimulationType::kExtendedStabilizer)
         {
+            // Aer has no single amplitude there, only the statevector of the decomposition. Its size is checked first:
+            // Aer sizes it in bytes, which wraps from 2^60 amplitudes (60 to 63 qubits initialize), and it wrote past
+            // the allocation.
+            ListableBasisStateCount<std::complex<double>>(GetNumberOfQubits());
             const auto amplitudes = state->statevector();
             return outcome < amplitudes.size() ? amplitudes[outcome] : complex_t{};
         }
@@ -761,6 +767,7 @@ class AerState : public ISimulator
 
         if (simulationType == SimulationType::kExtendedStabilizer)
         {
+            ListableBasisStateCount<std::complex<double>>(GetNumberOfQubits()); // the statevector, as in Amplitude
             const auto amplitudes = state->statevector();
             std::vector<double> probabilities(amplitudes.size());
             for (size_t outcome = 0; outcome < amplitudes.size(); ++outcome)
@@ -796,6 +803,34 @@ class AerState : public ISimulator
     }
 
     /**
+     * @brief The total probability of the state, from Aer's own marginal of qubit 0, at any width.
+     *
+     * The stabilizers take no generic gate (Aer rejects the matrix), so their
+     * state stays normalized and its total is 1; it also could not be summed
+     * from the extended stabilizer's statevector past a few dozen qubits. The
+     * matrix product state is 1 until a matrix that may not keep the norm
+     * reaches it, and the sum of its whole distribution after.
+     */
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        if (simulationType == SimulationType::kStabilizer || simulationType == SimulationType::kExtendedStabilizer)
+            return 1.;
+        if (simulationType == SimulationType::kMatrixProductState)
+        {
+            // Unitary gates, measurements, channels and truncation keep the chain normalized: 1 at any width. After a
+            // generic gate whose matrix may not keep the norm only the whole distribution shows it: Aer reads one qubit
+            // of the chain from its canonical form, which such a matrix leaves stale.
+            if (!normMayDiffer)
+                return 1.;
+            const std::vector<double> all = AllProbabilities();
+            return std::accumulate(all.begin(), all.end(), 0.);
+        }
+        const std::vector<double> first = state->probabilities(AER::reg_t{0});
+        return first.at(0) + first.at(1);
+    }
+
+    /**
      * @brief Returns the probability distribution of some of the qubits.
      *
      * Aer computes it directly (save_probs on the qubits) on the statevector,
@@ -807,7 +842,7 @@ class AerState : public ISimulator
     std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits) override
     {
         RequireMarginalQubits(qubits);
-        // No qubits is 1, read from no state (IState::MarginalProbabilities), at any width.
+        // No qubits: the total probability (TotalProbability below, through IState::MarginalProbabilities).
         if (qubits.empty() || simulationType == SimulationType::kExtendedStabilizer)
             return IState::MarginalProbabilities(qubits);
         return state->probabilities(AER::reg_t(qubits.begin(), qubits.end()));
@@ -1021,6 +1056,7 @@ class AerState : public ISimulator
     {
         if (!state)
             return;
+        savedNormMayDiffer = normMayDiffer;
 
         const auto numQubits = GetNumberOfQubits();
 
@@ -1096,6 +1132,13 @@ class AerState : public ISimulator
      * this.
      */
     void RestoreState() override
+    {
+        // Restoring may reinitialize the state, which clears the mark: it is set from the saved one after.
+        RestoreSavedStateOfMethod();
+        normMayDiffer = savedNormMayDiffer;
+    }
+
+    void RestoreSavedStateOfMethod()
     {
         auto numQubits = GetNumberOfQubits();
 
@@ -1361,9 +1404,15 @@ class AerState : public ISimulator
   protected:
     void InitializeStatevectorBuffer(size_t numQubits, std::complex<double> *amplitudes)
     {
+        // The amplitudes given need not be normalized, and the matrix product state keeps what they hold.
+        double normSquared = 0.;
+        for (size_t i = 0; i < (size_t{1} << numQubits); ++i)
+            normSquared += std::norm(amplitudes[i]);
+        const bool normDiffers = !(std::abs(normSquared - 1.) <= 1e-10);
         if (GetConfiguration("precision") == "double")
         {
             state->initialize_statevector(numQubits, amplitudes, true);
+            normMayDiffer = normDiffers;
             return;
         }
         AllocateQubits(numQubits);
@@ -1376,6 +1425,7 @@ class AerState : public ISimulator
             op.qubits.push_back(q);
         state->buffer_op(std::move(op));
         Flush();
+        normMayDiffer = normDiffers;
     }
 
     void InitializeDensityMatrixBuffer(size_t numQubits, std::complex<double> *values)
@@ -1413,7 +1463,9 @@ class AerState : public ISimulator
     SimulationType simulationType = SimulationType::kStatevector;               /**< The simulation type. */
     std::unique_ptr<QiskitAerState> state = std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
     AER::Vector<complex_t> savedAmplitudes;                                     /**< The amplitudes, saved. */
-    AER::cmatrix_t savedDensityMatrix;                                          /**< The density matrix, saved. */
+    bool normMayDiffer = false;        /**< A generic gate whose matrix may not keep the norm, or amplitudes not normalized, reached the state. */
+    bool savedNormMayDiffer = false;   /**< Its value at SaveState. */
+    AER::cmatrix_t savedDensityMatrix; /**< The density matrix, saved. */
     std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
 
     bool enableMultithreading = true; /**< The multithreading flag. */
