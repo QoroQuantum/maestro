@@ -170,6 +170,20 @@ class IState;
 inline std::vector<double> BasisProbabilities(IState &state);
 
 /**
+ * The number of basis states of a register, 2^qubits, where a vector of that
+ * many probabilities can exist; otherwise std::length_error. Every reader of
+ * the whole distribution checks it before listing: 1 << 64 is undefined (it
+ * listed one basis state, which passed for the distribution), and a count
+ * past what a vector holds cannot be listed, only appended to without end.
+ */
+inline size_t ListableBasisStateCount(size_t qubits)
+{
+    if (qubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits) || (size_t{1} << qubits) > std::vector<double>().max_size())
+        throw std::length_error("The basis states of a register of " + std::to_string(qubits) + " qubits cannot all be listed");
+    return size_t{1} << qubits;
+}
+
+/**
  * @class IState
  * @brief Interface class for a quantum computing simulator state.
  *
@@ -1071,6 +1085,7 @@ class IState
      */
     virtual std::vector<double> Probabilities(const Types::qubits_vector &outcomes)
     {
+        RequireQubits(GetNumberOfQubits()); // also for no outcomes: a register without qubits has no state to query
         std::vector<double> result;
         result.reserve(outcomes.size());
         for (const Types::qubit_t outcome : outcomes)
@@ -1086,9 +1101,10 @@ class IState
      * significant bit of the index (as the packed outcomes of SampleCounts).
      * The qubits must be distinct and below GetNumberOfQubits(); otherwise
      * std::invalid_argument, or std::out_of_range for a qubit past the
-     * register, is thrown. No qubits is one value, the total probability,
-     * found as the sum of the marginal of qubit 0. A register without qubits
-     * throws std::runtime_error.
+     * register, is thrown. No qubits is one value, 1: tracing out every qubit
+     * of the normalized state every backend holds leaves its whole
+     * probability, and no state is read, so it holds at any width. A register
+     * without qubits throws std::runtime_error.
      *
      * The default sums the whole distribution (BasisProbabilities: also on a
      * tensor network, whose AllProbabilities is not defined, from one
@@ -1105,13 +1121,12 @@ class IState
     {
         RequireMarginalQubits(qubits);
         if (qubits.empty())
-            return TotalProbability();
+            return {1.0};
         // A reader that cannot list every basis state must not pass for a distribution with no weight.
         const size_t count = GetNumberOfQubits();
-        if (count >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
-            throw std::length_error("The basis states of a register of " + std::to_string(count) + " qubits cannot all be listed");
+        const size_t states = ListableBasisStateCount(count);
         const std::vector<double> all = BasisProbabilities(*this);
-        if (all.size() != (size_t{1} << count))
+        if (all.size() != states)
             throw std::length_error("The basis states of a register of " + std::to_string(count) + " qubits cannot all be listed");
         std::vector<double> result(size_t{1} << qubits.size(), 0.0);
         for (size_t index = 0; index < all.size(); ++index)
@@ -1446,17 +1461,6 @@ class IState
             throw std::runtime_error("The register has no qubits: there is no state to query");
     }
 
-    /**
-     * The one value of an empty marginal: the total probability, as the sum of
-     * the marginal of qubit 0, which every backend computes without more than
-     * the distribution it already reads for one qubit (Aer: directly).
-     */
-    std::vector<double> TotalProbability()
-    {
-        const std::vector<double> first = MarginalProbabilities({0});
-        return {first.at(0) + first.at(1)};
-    }
-
     /** Shared by SetSeed and backend Configure("seed") implementations. */
     void SeedAuxiliaryRng(uint64_t seed)
     {
@@ -1539,10 +1543,7 @@ inline std::vector<double> BasisProbabilities(IState &state)
 {
     if (state.GetSimulationType() != SimulationType::kTensorNetwork)
         return state.AllProbabilities();
-    const size_t qubits = state.GetNumberOfQubits();
-    if (qubits >= std::numeric_limits<size_t>::digits)
-        throw std::length_error("The basis states of this register cannot be enumerated");
-    std::vector<double> values(size_t{1} << qubits);
+    std::vector<double> values(ListableBasisStateCount(state.GetNumberOfQubits()));
     for (size_t index = 0; index < values.size(); ++index)
         values[index] = state.Probability(index);
     return values;

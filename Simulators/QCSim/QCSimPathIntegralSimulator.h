@@ -168,11 +168,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     std::vector<double> AllProbabilities() override
     {
-        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
-        // 1 << n is undefined from 64 qubits: it listed one basis state, which passed for the distribution.
-        if (GetNumberOfQubits() >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
-            throw std::length_error("The basis states of a register of " + std::to_string(GetNumberOfQubits()) + " qubits cannot all be listed");
-        const size_t nrBasisStates = size_t{1} << GetNumberOfQubits();
+        RequireQubits(GetNumberOfQubits());                                        // a register without qubits has no state to list
+        const size_t nrBasisStates = ListableBasisStateCount(GetNumberOfQubits()); // 1 << 64 listed one value
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)
             result[i] = pathIntegralSimulator->Probability(i);

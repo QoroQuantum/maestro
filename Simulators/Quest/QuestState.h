@@ -315,6 +315,7 @@ class QuestState : public ISimulator
     double Probability(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
+        RequireSignedIndex(outcome);
         return questLib->GetOutcomeProbability(sim, static_cast<long long int>(outcome));
     }
 
@@ -331,6 +332,7 @@ class QuestState : public ISimulator
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
+        RequireSignedIndex(outcome);
         std::complex<double> amplitude;
         if (questLib->GetAmplitude(sim, static_cast<long long int>(outcome), amplitude))
         {
@@ -369,11 +371,8 @@ class QuestState : public ISimulator
      */
     std::vector<double> AllProbabilities() override
     {
-        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
-        // 1 << n is undefined from 64 qubits: it listed one basis state, which passed for the distribution.
-        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
-            throw std::length_error("The basis states of a register of " + std::to_string(nrQubits) + " qubits cannot all be listed");
-        const size_t numStates = size_t{1} << nrQubits;
+        RequireQubits(GetNumberOfQubits());                         // a register without qubits has no state to list
+        const size_t numStates = ListableBasisStateCount(nrQubits); // 1 << 64 listed one value
         std::vector<std::complex<double>> amplitudes(numStates);
         questLib->GetAmplitudes(sim, amplitudes);
 
@@ -763,6 +762,14 @@ class QuestState : public ISimulator
     }
 
   protected:
+    // QuEST takes a basis-state index as a signed 64-bit integer. An index past its range needs a register of 64
+    // qubits or more, which QuEST cannot hold (2^64 amplitudes), but a cast of one would be negative: refuse it.
+    static void RequireSignedIndex(Types::qubit_t outcome)
+    {
+        if (outcome > static_cast<Types::qubit_t>(std::numeric_limits<long long int>::max()))
+            throw std::out_of_range("Basis state " + std::to_string(outcome) + " is past the signed 64-bit indices of QuEST");
+    }
+
     std::shared_ptr<QuestLibSim> questLib; /**< The quest library. */
     unsigned long int simHandle = 0;       /**< The simulator handle. */
     void *sim = nullptr;                   /**< The simulator pointer. */

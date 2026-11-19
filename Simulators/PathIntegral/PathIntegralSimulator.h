@@ -12,6 +12,7 @@
 #ifndef _PATH_INTEGRAL_SIMULATOR_H_
 #define _PATH_INTEGRAL_SIMULATOR_H_
 
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -250,21 +251,23 @@ class PathIntegralSimulator
         return simulator.QubitProbability(qubit, value);
     }
 
-    std::complex<double> AmplitudeForOutcome(size_t outcome)
+    std::complex<double> AmplitudeForOutcome(Types::qubit_t outcome)
     {
         const auto &amplitudes = simulator.GetAmplitudes();
         if (amplitudes.empty())
             return 0.0;
 
+        // An index has no bit for a qubit past its width: shifting by 64 or more is undefined (on x86 it wrapped,
+        // and qubit 64 read as qubit 0, so basis state 1 of 65 qubits read as 0).
         QC::PathIntegral::FastVectorBool state(amplitudes.begin()->first.size());
-        for (size_t q = 0; q < state.size(); ++q)
+        for (size_t q = 0; q < state.size() && q < static_cast<size_t>(std::numeric_limits<Types::qubit_t>::digits); ++q)
             state.set(q, (outcome >> q) & 1);
         if (auto it = amplitudes.find(state); it != amplitudes.end())
             return it->second;
         return 0.0;
     }
 
-    double Probability(size_t outcome)
+    double Probability(Types::qubit_t outcome)
     {
         return std::norm(AmplitudeForOutcome(outcome));
     }

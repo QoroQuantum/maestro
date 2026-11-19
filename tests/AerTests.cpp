@@ -1082,9 +1082,51 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_at_the_edges_of_the_register)
         sim->Initialize();
         BOOST_CHECK_THROW(sim->Probability(0), std::runtime_error);
         BOOST_CHECK_THROW(sim->Probabilities({0}), std::runtime_error);
+        BOOST_CHECK_THROW(sim->Probabilities({}), std::runtime_error); // no outcomes: still no state
         BOOST_CHECK_THROW(sim->Amplitude(0), std::runtime_error);
         BOOST_CHECK_THROW(sim->MarginalProbabilities({}), std::runtime_error);
         BOOST_CHECK_THROW(sim->AllProbabilities(), std::runtime_error);
+
+        // Cleared, a register has no qubits either.
+        auto cleared = Simulators::SimulatorsFactory::CreateSimulator(type, method);
+        cleared->AllocateQubits(3);
+        cleared->Initialize();
+        cleared->Clear();
+        BOOST_CHECK_THROW(cleared->Probabilities({}), std::runtime_error);
+        BOOST_CHECK_THROW(cleared->Probability(0), std::runtime_error);
+        BOOST_CHECK_THROW(cleared->AllProbabilities(), std::runtime_error);
+    }
+
+    // Past 64 qubits an index has no bit for qubit 64 or above: basis state 1 is qubit 0 alone,
+    // and a state with qubit 64 set has no weight on any index. (Aer's MPS, before qiskit-aer
+    // 0acd866, and the path integral shifted by 64, which wrapped to qubit 0 on x86, and read basis
+    // state 1 as 0.)
+    struct Past64
+    {
+        Type type;
+        Method method;
+        bool amplitudes;
+    };
+
+    for (const Past64 &backend : {Past64{Type::kQiskitAer, Method::kMatrixProductState, true}, Past64{Type::kQiskitAer, Method::kStabilizer, false},
+                                  Past64{Type::kQCSim, Method::kMatrixProductState, true}, Past64{Type::kQCSim, Method::kMatrixProductOperator, false},
+                                  Past64{Type::kQCSim, Method::kStabilizer, false}, Past64{Type::kQCSim, Method::kPauliPropagator, false},
+                                  Past64{Type::kQCSim, Method::kPathIntegral, true}, Past64{Type::kQCSim, Method::kTensorNetwork, false},
+                                  Past64{Type::kCompositeQCSim, Method::kStatevector, true}, Past64{Type::kCompositeQiskitAer, Method::kStatevector, true}})
+    {
+        for (const size_t flipped : {size_t{0}, size_t{64}})
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(backend.type, backend.method);
+            sim->AllocateQubits(65);
+            sim->Initialize();
+            sim->ApplyX(flipped);
+            const double expected = flipped == 0 ? 1. : 0.;
+            BOOST_TEST(std::abs(sim->Probability(1) - expected) < 1e-9, "65 qubits, X on " << flipped);
+            BOOST_TEST(std::abs(sim->Probabilities({1})[0] - expected) < 1e-9, "65 qubits, X on " << flipped);
+            BOOST_TEST(sim->Probability(0) < 1e-9, "65 qubits, X on " << flipped);
+            if (backend.amplitudes)
+                BOOST_TEST(std::abs(std::norm(sim->Amplitude(1)) - expected) < 1e-9, "65 qubits, X on " << flipped);
+        }
     }
 
     // Too wide to list every basis state: the marginal throws rather than summing nothing.
@@ -1095,9 +1137,10 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_at_the_edges_of_the_register)
         size_t qubits;
     };
 
+    // The composite at 63 qubits: 2^63 values cannot be held, and the list grew without end.
     for (const Wide &wide : {Wide{Type::kQCSim, Method::kMatrixProductState, 32}, Wide{Type::kQCSim, Method::kMatrixProductOperator, 64},
                              Wide{Type::kQCSim, Method::kPathIntegral, 64}, Wide{Type::kQCSim, Method::kPauliPropagator, 64},
-                             Wide{Type::kCompositeQCSim, Method::kStatevector, 64}})
+                             Wide{Type::kCompositeQCSim, Method::kStatevector, 64}, Wide{Type::kCompositeQCSim, Method::kStatevector, 63}})
     {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
         sim->AllocateQubits(wide.qubits);
@@ -1118,19 +1161,34 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_at_the_edges_of_the_register)
         BOOST_TEST(std::abs(sim->Probability(Types::qubit_t{1} << 39) - 1.) < 1e-12);
     }
 
-    // An empty marginal is the total probability, not a read of the whole distribution: on a
-    // 65-qubit Aer stabilizer, past Aer's 64-qubit limit for the distribution.
+    // Aer's stabilizer takes 64 qubits for its distribution and sized it with 1 << 64, which listed
+    // one value: Maestro refuses before asking. Its marginal is direct, so a qubit's still works.
     {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kStabilizer);
-        sim->AllocateQubits(65);
+        sim->AllocateQubits(64);
         sim->Initialize();
-        sim->ApplyX(64);
-        const auto last = sim->MarginalProbabilities({64});
+        sim->ApplyX(63);
+        BOOST_CHECK_THROW(sim->AllProbabilities(), std::length_error);
+        const auto last = sim->MarginalProbabilities({63});
         BOOST_REQUIRE_EQUAL(last.size(), 2u);
         BOOST_TEST(std::abs(last[1] - 1.) < 1e-12);
+    }
+
+    // An empty marginal is 1 and reads no state, so it holds on registers too wide to list, where
+    // the marginal of one qubit cannot be summed (QCSim MPS at 32, path integral at 64, ...).
+    for (const Wide &wide :
+         {Wide{Type::kQCSim, Method::kMatrixProductState, 32}, Wide{Type::kQCSim, Method::kPathIntegral, 64}, Wide{Type::kQCSim, Method::kPauliPropagator, 64},
+          Wide{Type::kCompositeQCSim, Method::kStatevector, 64}, Wide{Type::kQCSim, Method::kStabilizer, 100}, Wide{Type::kQiskitAer, Method::kStabilizer, 65},
+          Wide{Type::kQiskitAer, Method::kMatrixProductState, 70}})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
+        sim->AllocateQubits(wide.qubits);
+        sim->Initialize();
+        sim->ApplyH(0);
+        sim->ApplyCX(0, wide.qubits - 1);
         const auto total = sim->MarginalProbabilities({});
         BOOST_REQUIRE_EQUAL(total.size(), 1u);
-        BOOST_TEST(std::abs(total[0] - 1.) < 1e-12);
+        BOOST_TEST(total[0] == 1., wide.qubits << " qubits");
     }
 
     // Indices past 32 bits on the QCSim MPS, read through the bits of the index.

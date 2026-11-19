@@ -458,7 +458,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         // QCSim lists the statevector up to 31 qubits and returns nothing at 32: that is not a distribution.
         const Eigen::VectorXcd probs = mpsSimulator->getRegisterStorage().cwiseAbs2();
-        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits) || static_cast<size_t>(probs.size()) != (size_t{1} << nrQubits))
+        if (static_cast<size_t>(probs.size()) != ListableBasisStateCount(nrQubits))
             throw std::length_error("The basis states of a matrix product state of " + std::to_string(nrQubits) + " qubits cannot all be listed");
         std::vector<double> result(static_cast<size_t>(probs.size()));
         for (Eigen::Index i = 0; i < probs.size(); ++i)

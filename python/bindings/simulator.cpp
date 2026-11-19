@@ -137,7 +137,7 @@ void bind_simulator(nb::module_ &m)
         .def("MarginalProbabilities", &Simulators::ISimulator::MarginalProbabilities, "qubits"_a,
              "Return the probability distribution of the given qubits, the others traced out: "
              "2**len(qubits) values, the first listed qubit the least significant bit; for no "
-             "qubits, one value, the total probability.")
+             "qubits, one value, 1.")
         .def("SampleCounts", &Simulators::ISimulator::SampleCounts, "qubits"_a, "shots"_a = 1000,
              "Sample without collapsing the state, returning {integer_outcome: "
              "count}; the first listed qubit is the least-significant result bit.")

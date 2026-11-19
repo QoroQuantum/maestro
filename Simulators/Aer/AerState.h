@@ -749,6 +749,9 @@ class AerState : public ISimulator
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // Before Aer sizes its output: its stabilizer takes 64 qubits and sizes it with 1 << 64, which is undefined
+        // (one value came back, which passed for the distribution).
+        ListableBasisStateCount(GetNumberOfQubits());
         if (simulationType == SimulationType::kDensityMatrix)
         {
             Types::qubits_vector qubits(GetNumberOfQubits());
@@ -786,6 +789,7 @@ class AerState : public ISimulator
         // stabilizer, which read the outcomes as qubits.) On the extended stabilizer Probability is Aer's estimate:
         // the exact amplitude of the decomposition over a sampled estimate of its norm, the same on every call for
         // a given state; AllProbabilities divides by the exact norm, so the two differ by the error of the norm.
+        RequireQubits(GetNumberOfQubits()); // also for no outcomes
         for (const Types::qubit_t outcome : outcomes)
             RequireBasisState(outcome);
         return IState::Probabilities(outcomes);
@@ -803,8 +807,7 @@ class AerState : public ISimulator
     std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits) override
     {
         RequireMarginalQubits(qubits);
-        // No qubits: the total probability, from the marginal of qubit 0 (TotalProbability), not the whole
-        // distribution, which Aer caps at 64 qubits.
+        // No qubits is 1, read from no state (IState::MarginalProbabilities), at any width.
         if (qubits.empty() || simulationType == SimulationType::kExtendedStabilizer)
             return IState::MarginalProbabilities(qubits);
         return state->probabilities(AER::reg_t(qubits.begin(), qubits.end()));

@@ -215,9 +215,7 @@ class DistributedGpuState : public ISimulator
     std::vector<double> AllProbabilities() override
     {
         RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
-        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
-            throw std::length_error("The basis states of a register of " + std::to_string(nrQubits) + " qubits cannot all be listed");
-        std::vector<double> values(size_t{1} << nrQubits);
+        std::vector<double> values(ListableBasisStateCount(nrQubits));
         Native().AllProbabilities(values.data());
         return values;
     }

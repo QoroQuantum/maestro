@@ -430,9 +430,9 @@ network), whatever the index; an index that does not fit in 64 bits raises
 `TypeError` before it reaches Maestro; and a register without qubits raises
 `RuntimeError`, having no state to query. `MarginalProbabilities`, `Measure`,
 `ApplyReset` and `SampleCounts` take qubit indices; `MarginalProbabilities`
-returns the `2**k` probabilities of the listed qubits (one value, the total
-probability, for none), and raises an error where the register is too wide
-to list its basis states (`ValueError`; `RuntimeError` on the QCSim
+returns the `2**k` probabilities of the listed qubits (for none, one value,
+`1.0`, read from no state, at any width), and raises an error where the
+register is too wide to list its basis states (`ValueError`; `RuntimeError` on the QCSim
 stabilizer past 32 qubits) rather than returning zeros. On the Aer extended
 stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact
 amplitude of its decomposition over a sampled estimate of the norm, the same
