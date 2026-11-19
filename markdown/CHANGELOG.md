@@ -66,11 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given and in their order, on both backends; a set of Kraus operators
   placed on other targets (`Placed`, `OnQubit`) keeps its operators too,
   where it was replaced by the canonical operators of the same channel.
-  In general a channel is the same operation however its targets are
-  given: the channel without a target it leaves alone keeps every part,
-  with its kind, operators, order, probabilities, phase and random draw,
-  and the Kraus operators of a channel are those of that reduced form with
-  the identity on the removed target. The distribution is unchanged;
+  In general a target a channel leaves alone does not change the operation,
+  seeded trajectories included, wherever it is given: the channel without
+  it keeps every part, with its kind, operators, order, probabilities,
+  phase and random draw, and the Kraus operators of a channel are those of
+  that reduced form with the identity on the removed target. This is about
+  idle targets only: exchanging the targets of a channel that acts on both
+  keeps the distribution, but on the Aer MPS a seed may draw another
+  trajectory (the canonical operators of the exchanged channel are found
+  again, and can be another set where their weights are equal). The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on

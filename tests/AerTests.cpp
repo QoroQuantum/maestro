@@ -716,16 +716,18 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_branches_reach_only_the_targets_they_act_on
     }
 }
 
-// One operation, however it is given: on its qubit, on two targets with the other left alone (in
-// either order, placed, with the targets exchanged), reduced by hand, or rebuilt from its exported
-// Kraus operators. Removing a target a channel leaves alone must change nothing: not the branch a
+// One operation on one qubit, however it is given: on that qubit, on two targets with the other left
+// alone (in either order, placed, with the targets exchanged), reduced by hand, or rebuilt from its
+// exported Kraus operators. A target a channel leaves alone must change nothing: not the branch a
 // seed draws, not the operators applied, not a phase, on any backend. The comparison is of amplitudes.
+// (This is about idle targets. Exchanging the targets of a channel that acts on both keeps its
+// distribution, not necessarily the trajectory of a seed on the Aer MPS.)
 //
 // What makes it hold (QuantumChannel::OnActiveQubits, GetKrausOperators): the reduced channel keeps
 // every part of the channel, with its kind, operators, order and probabilities, so the same draws
 // select the same branches; and the Kraus operators of a channel are those of its reduced form with
 // the identity on the removed target, so the two descriptions cannot disagree.
-BOOST_AUTO_TEST_CASE(a_channel_is_the_same_operation_however_its_targets_are_given)
+BOOST_AUTO_TEST_CASE(a_target_a_channel_leaves_alone_does_not_change_the_operation)
 {
     using Channel = Simulators::QuantumChannel;
     using Matrix = Eigen::MatrixXcd;
@@ -907,6 +909,40 @@ BOOST_AUTO_TEST_CASE(a_channel_is_the_same_operation_however_its_targets_are_giv
             for (uint64_t seed = 1; seed <= 6; ++seed)
                 BOOST_TEST(distance(amplitudes(backend, seed, {target}, reduced), amplitudes(backend, seed, {other, target}, base.channel)) < 1e-9,
                            base.name << " on " << backend.name << ", seed " << seed << ": the reduced channel is another trajectory");
+    }
+
+    // A channel placed on the one target of a one-qubit channel is the channel, in either spelling.
+    {
+        const Channel projectors(Channel::KrausOperators{p0, p1});
+        BOOST_TEST(sameOperators(Channel::OnQubit(projectors, 0, 1).GetKrausOperators(), Channel::KrausOperators{p0, p1}));
+        BOOST_TEST(sameOperators(Channel::Placed(projectors, {0}, 1).GetKrausOperators(), Channel::KrausOperators{p0, p1}));
+        BOOST_TEST(sameOperators(Channel::OnQubit(given, 0, 1).GetKrausOperators(), given.GetKrausOperators()));
+    }
+
+    // Operators that were accepted are not checked again when the channel is reduced or placed. The
+    // tolerance of the check grows with the dimension: a 1% damping with sqrt(0.99) rounded to nine
+    // digits is accepted on two targets and would be rejected on one, so a request the statevector
+    // runs failed on the matrix product state.
+    {
+        Matrix r0 = Matrix::Zero(2, 2), r1 = Matrix::Zero(2, 2);
+        r0(0, 0) = 1.;
+        r0(1, 1) = 0.994987437;
+        r1(0, 1) = 0.1;
+        BOOST_CHECK_THROW(Channel(Channel::KrausOperators{r0, r1}), std::invalid_argument);
+        const Channel rounded(Channel::KrausOperators{pad(r0, 1), pad(r1, 1)});
+        BOOST_TEST((rounded.ActiveQubits() == std::vector<size_t>{1}));
+        BOOST_TEST(sameOperators(rounded.OnActiveQubits().GetKrausOperators(), Channel::KrausOperators{r0, r1}));
+        BOOST_TEST(sameOperators(Channel::Placed(rounded, {1, 0}).GetKrausOperators(), Channel::KrausOperators{pad(r0, 0), pad(r1, 0)}));
+        // Applied on every backend, and the same operation however the idle target is given.
+        for (const Backend &backend : backends)
+            for (uint64_t seed = 1; seed <= 6; ++seed)
+            {
+                const auto reference = amplitudes(backend, seed, {other, target}, rounded);
+                BOOST_TEST(distance(amplitudes(backend, seed, {target, other}, Channel::Placed(rounded, {1, 0})), reference) < 1e-9,
+                           "rounded Kraus operators with the targets exchanged on " << backend.name << ", seed " << seed);
+                BOOST_TEST(distance(amplitudes(backend, seed, {target}, rounded.OnActiveQubits()), reference) < 1e-9,
+                           "rounded Kraus operators reduced on " << backend.name << ", seed " << seed);
+            }
     }
 
     // Kraus operators given on two targets, the identity on one: the reduced channel has those

@@ -216,9 +216,11 @@ class QuantumChannel
      *
      * A channel built from Kraus operators returns them as given. A composed
      * channel derives them from its reduced form (OnActiveQubits), so that
-     * every presentation of the same operation has the same operators: the
-     * operators of the reduced channel, each with the identity on the targets
-     * the channel leaves alone. The reduced channel's own operators are the
+     * they do not depend on whether, or where, a target the channel leaves
+     * alone was given: the operators of the reduced channel, each with the
+     * identity on that target. (Exchanging the targets of a channel that acts
+     * on both is another matter: its canonical operators are found again, and
+     * where their weights are equal they may come out as another set.) The reduced channel's own operators are the
      * set it was given when it is a single set of Kraus operators on all its
      * targets, in that order, and the canonical set of the channel otherwise
      * (at most 4^n operators, largest weight first).
@@ -490,7 +492,7 @@ class QuantumChannel
             kraus.reserve(data_->kraus.size());
             for (const Matrix &op : data_->kraus)
                 kraus.emplace_back(LocalOperator(op, home == 0 ? LocalPart::kFirst : LocalPart::kSecond));
-            auto data = MakeKrausData(std::move(kraus));
+            auto data = MakeDerivedData(std::move(kraus), 1);
             if (!data_->pauliProbabilities.empty() && factors.size() == 1 && factors.front().kind == FactorKind::kPauli)
                 data->pauliProbabilities = factors.front().probabilities;
             data->factors = std::move(factors);
@@ -583,6 +585,9 @@ class QuantumChannel
     {
         if (channel.GetNumberOfQubits() != 1 || numQubits < 1 || numQubits > 2 || localQubit >= numQubits)
             throw std::invalid_argument("OnQubit places a one-qubit channel on a target of a one- or two-qubit channel");
+        // On the one target of a one-qubit channel: the channel itself, as Placed returns it.
+        if (numQubits == 1)
+            return channel;
         if (numQubits == 2 && IsGiven(channel))
             return PlaceGiven(channel, {localQubit});
         std::vector<Factor> factors = channel.GetFactors();
@@ -1174,6 +1179,18 @@ class QuantumChannel
         return data;
     }
 
+    // The data of a channel whose operators come from those of a channel that was validated: the same operators
+    // with the identity added on a target or removed from one, or with the targets exchanged. They are not
+    // validated again. The tolerance of the check grows with the dimension, so operators accepted on two targets
+    // (rounded input) could be rejected on one, and a request that was accepted would fail when it is applied.
+    static std::shared_ptr<Data> MakeDerivedData(KrausOperators krausOperators, size_t numQubits)
+    {
+        auto data = std::make_shared<Data>();
+        data->kraus = std::move(krausOperators);
+        data->numQubits = numQubits;
+        return data;
+    }
+
     // Returns the number of qubits the validated operators act on.
     static size_t Validate(const KrausOperators &krausOperators)
     {
@@ -1379,7 +1396,7 @@ class QuantumChannel
             }
             kraus.push_back(std::move(placed));
         }
-        auto data = MakeKrausData(std::move(kraus));
+        auto data = MakeDerivedData(std::move(kraus), 2);
         std::vector<Factor> factors = channel.GetFactors();
         for (Factor &factor : factors)
             for (size_t &q : factor.qubits)
