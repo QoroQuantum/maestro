@@ -61,7 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate given as a two-qubit unitary, no longer moves the other qubit, also
   when it is combined with a Kraus part; the same on QCSim's MPS, whose
   routing could truncate for it too. A branch that is a phase times the
-  identity keeps its phase in the amplitudes. The distribution is unchanged;
+  identity keeps its phase in the amplitudes. Kraus operators given on two
+  targets that are the identity on one are applied on the other alone, as
+  given and in their order, on both backends. The distribution is unchanged;
   seeded runs draw differently. This
   needs the pinned Aer: before it, a Kraus operation on qubits apart in the
   chain left the tensors between them stale, and expectation values on

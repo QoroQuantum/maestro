@@ -894,6 +894,43 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_identity_branch_does_not_route_under_a_bond
             BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
     }
 
+    // Kraus operators on two sites that are the identity on one of them are applied on the other alone:
+    // a damping of qubit 0 given on qubits 0 and 4 is the damping given on qubit 0, with the same draw.
+    // Routed together, P(q5 = 1) went from 0.397125 to 0.438238.
+    {
+        Matrix k0 = Matrix::Zero(2, 2), k1 = Matrix::Zero(2, 2);
+        k0(0, 0) = 1.;
+        k0(1, 1) = std::sqrt(0.7);
+        k1(0, 1) = std::sqrt(0.3);
+        const auto onTargets = [](const Matrix &second, const Matrix &first) {
+            Matrix u(4, 4);
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j)
+                    u(i, j) = second(i / 2, j / 2) * first(i % 2, j % 2);
+            return u;
+        };
+        const Matrix one = Matrix::Identity(2, 2);
+        auto reference = prepare();
+        reference->ApplyQuantumChannel({0}, Channel(Channel::KrausOperators{k0, k1}));
+        const auto expected = reference->AllProbabilities();
+
+        struct Given
+        {
+            Types::qubits_vector targets;
+            Channel channel;
+        };
+
+        for (const Given &g : std::vector<Given>{{{0, 4}, Channel(Channel::KrausOperators{onTargets(one, k0), onTargets(one, k1)})},
+                                                 {{4, 0}, Channel(Channel::KrausOperators{onTargets(k0, one), onTargets(k1, one)})}})
+        {
+            auto sim = prepare();
+            sim->ApplyQuantumChannel(g.targets, g.channel);
+            const auto probabilities = sim->AllProbabilities();
+            for (size_t i = 0; i < probabilities.size(); ++i)
+                BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9, "outcome " << i << ": " << probabilities[i] << " for " << expected[i]);
+        }
+    }
+
     for (const Case &c : cases)
     {
         auto sim = prepare(), reference = prepare();

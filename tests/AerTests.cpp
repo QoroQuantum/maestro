@@ -444,6 +444,46 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
         BOOST_TEST(&placed.OnActiveQubits().GetKrausOperators() == &copy.OnActiveQubits().GetKrausOperators());
     }
 
+    // A channel given by its Kraus operators keeps them on the target they act on: the trajectories
+    // are the ones the caller wrote. A 30% damping of |1> written as (K0 + K1) / sqrt(2) and
+    // (K0 - K1) / sqrt(2) leaves P(1) = 0.7 in either branch; its canonical operators would give 0 or 1.
+    {
+        Eigen::MatrixXcd k0 = Eigen::MatrixXcd::Zero(2, 2), k1 = Eigen::MatrixXcd::Zero(2, 2);
+        k0(0, 0) = 1.;
+        k0(1, 1) = std::sqrt(0.7);
+        k1(0, 1) = std::sqrt(0.3);
+        const Eigen::MatrixXcd plus = (k0 + k1) / std::sqrt(2.), minus = (k0 - k1) / std::sqrt(2.);
+
+        struct Given
+        {
+            Types::qubits_vector targets;
+            Channel channel;
+        };
+
+        const std::vector<Given> given{{{0}, Channel(Channel::KrausOperators{plus, minus})},
+                                       {{0, 1}, Channel(Channel::KrausOperators{onTargets(one, plus), onTargets(one, minus)})},
+                                       {{1, 0}, Channel(Channel::KrausOperators{onTargets(plus, one), onTargets(minus, one)})}};
+        BOOST_TEST(&given[1].channel.OnActiveQubits().GetKrausOperators() == &given[1].channel.OnActiveQubits().GetKrausOperators());
+        BOOST_TEST(given[1].channel.OnActiveQubits().GetKrausOperators().size() == 2u);
+        BOOST_TEST((given[1].channel.OnActiveQubits().GetKrausOperators()[0] - plus).isZero(1e-15));
+        BOOST_TEST((given[2].channel.OnActiveQubits().GetKrausOperators()[1] - minus).isZero(1e-15));
+        for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kStatevector})
+            for (const Given &g : given)
+                for (uint64_t seed = 1; seed <= 6; ++seed)
+                {
+                    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+                    sim->AllocateQubits(2);
+                    sim->Initialize();
+                    sim->SetSeed(seed);
+                    sim->ApplyX(0);
+                    sim->ApplyQuantumChannel(g.targets, g.channel);
+                    const auto probabilities = sim->AllProbabilities();
+                    BOOST_TEST(std::abs(probabilities[1] + probabilities[3] - 0.7) < 1e-9, "a damping given by its own Kraus operators on "
+                                                                                               << g.targets.size() << " targets, seed " << seed
+                                                                                               << ": P(1) = " << probabilities[1] + probabilities[3]);
+                }
+    }
+
     struct Form
     {
         Types::qubits_vector targets;

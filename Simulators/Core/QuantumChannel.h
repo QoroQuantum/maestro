@@ -382,6 +382,8 @@ class QuantumChannel
      * is reduced to the targets it acts on, and dropped if it acts on none.
      * The result is built on first use and kept: every call returns the same
      * channel, with what that one has cached (its canonical Kraus operators).
+     * A channel given by its Kraus operators is reduced to those operators on
+     * the target they act on, in the order given.
      */
     QuantumChannel OnActiveQubits() const
     {
@@ -392,6 +394,20 @@ class QuantumChannel
             throw std::invalid_argument("A channel that acts on none of its targets has no active part");
         // Built once and kept with this channel: the copies of a channel share it, and its caches.
         std::call_once(data_->reducedOnce, [this, &active]() {
+            // A channel given by its Kraus operators keeps them, and their order, on the target they act on. They
+            // are the trajectories the caller chose: the canonical operators of the same channel are another
+            // unraveling of it, with other branches (a damping given as (K0 + K1) / sqrt(2), (K0 - K1) / sqrt(2)
+            // keeps P(1) = 0.7 in both of its branches; its canonical operators give 0 or 1).
+            if (!data_->composed && GetNumberOfQubits() == 2 && active.size() == 1)
+            {
+                KrausOperators local;
+                size_t position = 0;
+                if (LocalOperators(data_->kraus, position, local) && position == active[0])
+                {
+                    data_->reduced.push_back(QuantumChannel(std::move(local)));
+                    return;
+                }
+            }
             std::vector<size_t> position(GetNumberOfQubits(), 0);
             for (size_t k = 0; k < active.size(); ++k)
                 position[active[k]] = k;
@@ -497,6 +513,36 @@ class QuantumChannel
             return LocalPart::kSecond;
         }
         return LocalPart::kBoth;
+    }
+
+    /**
+     * Operators on two targets that are all the identity on the same target:
+     * what they do on the other one, as 2x2 operators in the same order.
+     * `position` is the target they act on (0 the first, 1 the second; 0 when
+     * every operator is a multiple of the identity). False when an operator
+     * acts on both targets, or two of them act on different ones. A simulator
+     * that would have to bring the two targets together applies `local` on
+     * the one target instead.
+     */
+    static bool LocalOperators(const KrausOperators &operators, size_t &position, KrausOperators &local)
+    {
+        LocalPart side = LocalPart::kNone;
+        local.clear();
+        local.reserve(operators.size());
+        for (const Matrix &op : operators)
+        {
+            Eigen::Matrix2cd part;
+            const LocalPart found = LocalPartOfTwoQubitUnitary(op, part);
+            if (found == LocalPart::kBoth || (found != LocalPart::kNone && side != LocalPart::kNone && found != side))
+                return false;
+            if (found == LocalPart::kNone)
+                part = op(0, 0) * Eigen::Matrix2cd::Identity();
+            else
+                side = found;
+            local.emplace_back(part);
+        }
+        position = side == LocalPart::kSecond ? 1 : 0;
+        return !operators.empty();
     }
 
     /** A one-qubit channel on one target of a two-qubit channel that leaves the other target alone. */
