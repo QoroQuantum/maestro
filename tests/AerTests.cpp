@@ -988,6 +988,7 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_agree_on_every_backend)
                                         {Type::kQCSim, Method::kExtendedStabilizer, "QCSim extended stabilizer", false, true},
                                         {Type::kQCSim, Method::kPauliPropagator, "QCSim Pauli propagator", false, true},
                                         {Type::kQCSim, Method::kPathIntegral, "QCSim path integral", true, true},
+                                        {Type::kQCSim, Method::kTensorNetwork, "QCSim tensor network", false, false},
                                         {Type::kCompositeQCSim, Method::kStatevector, "QCSim composite", true, true},
                                         {Type::kCompositeQiskitAer, Method::kStatevector, "Aer composite", true, true}};
     constexpr size_t qubits = 3;
@@ -1005,7 +1006,8 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_agree_on_every_backend)
             sim->ApplyCX(0, 1);
             sim->ApplyS(0);
             sim->ApplyH(2);
-            const std::vector<double> all = sim->AllProbabilities();
+            // The tensor network has no AllProbabilities: one Probability per basis state instead.
+            const std::vector<double> all = backend.allProbabilities ? sim->AllProbabilities() : Simulators::BasisProbabilities(*sim);
             BOOST_REQUIRE_EQUAL(all.size(), size_t{1} << qubits);
             BOOST_TEST(std::abs(all[0] - 0.25) < 1e-9);
             BOOST_TEST(std::abs(all[3] - 0.25) < 1e-9);

@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an index of the qubit count or more. The marginal of some qubits is
   `MarginalProbabilities(qubits)`, new on every backend (C++, Python, C API):
   2^k values, the first listed qubit the least significant bit, computed
-  directly by Aer and from the whole distribution elsewhere.
+  directly by Aer and from the whole distribution elsewhere (on a tensor
+  network, one basis state at a time).
 - `Probability`, `Amplitude` and `Probabilities` throw `std::out_of_range`
   (Python `IndexError`) for a basis state of 2^n or more on every backend.
   It was 0 on some, the probability of the index's low bits on others (QCSim

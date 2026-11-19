@@ -164,6 +164,11 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
     return type == SimulatorType::kQCSim && (method == SimulationType::kStatevector || method == SimulationType::kMatrixProductState);
 }
 
+class IState;
+
+// The probability of every basis state, also where AllProbabilities is not defined (defined below).
+inline std::vector<double> BasisProbabilities(IState &state);
+
 /**
  * @class IState
  * @brief Interface class for a quantum computing simulator state.
@@ -1079,9 +1084,10 @@ class IState
      * std::invalid_argument, or std::out_of_range for a qubit past the
      * register, is thrown.
      *
-     * The default sums AllProbabilities, so it costs what the whole
-     * distribution costs; a backend that has the marginal directly (Qiskit
-     * Aer) overrides it.
+     * The default sums the whole distribution (BasisProbabilities: also on a
+     * tensor network, whose AllProbabilities is not defined, from one
+     * Probability per basis state), so it costs what that costs; a backend
+     * that has the marginal directly (Qiskit Aer) overrides it.
      *
      * @param qubits The qubits, the first one the least significant bit.
      * @return The 2^k probabilities.
@@ -1089,7 +1095,7 @@ class IState
     virtual std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits)
     {
         RequireMarginalQubits(qubits);
-        const std::vector<double> all = AllProbabilities();
+        const std::vector<double> all = BasisProbabilities(*this);
         std::vector<double> result(size_t{1} << qubits.size(), 0.0);
         for (size_t index = 0; index < all.size(); ++index)
         {
@@ -1389,12 +1395,18 @@ class IState
             throw std::out_of_range("Basis state " + std::to_string(outcome) + " is out of range for a register of " + std::to_string(qubits) + " qubits");
     }
 
-    /** The qubits of a marginal distribution (MarginalProbabilities): distinct, in the register, at most 62 of them. */
+    /**
+     * The qubits of a marginal distribution (MarginalProbabilities): distinct,
+     * in the register, and few enough that the 2^k values can be indexed:
+     * k at most the bits of size_t less two (62 on 64-bit platforms, 30 on
+     * 32-bit ones), so that size_t{1} << k is defined.
+     */
     void RequireMarginalQubits(const Types::qubits_vector &qubits) const
     {
         const size_t count = GetNumberOfQubits();
-        if (qubits.size() > 62)
-            throw std::invalid_argument("A marginal distribution of more than 62 qubits cannot be returned");
+        constexpr size_t limit = static_cast<size_t>(std::numeric_limits<size_t>::digits) - 2;
+        if (qubits.size() > limit)
+            throw std::invalid_argument("A marginal distribution of more than " + std::to_string(limit) + " qubits cannot be returned");
         for (size_t k = 0; k < qubits.size(); ++k)
         {
             if (qubits[k] >= count)
