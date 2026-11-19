@@ -1,6 +1,7 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
 #include "../Simulators/Core/RandomSeed.h"
+#include "../Utils/SystemMemory.h"
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "../maestrolib/Interface.h"
 #include "../maestrolib/Maestro.h"
@@ -289,13 +290,21 @@ inline size_t ConfiguredBondCap(const SimulatorConfig &config)
     return value == config.native_options.end() ? 0 : static_cast<size_t>(std::stoull(value->second));
 }
 
-// The soft realization memory budget in MiB (trajectory_max_memory_mb).
+inline bool IsAerTrajectoryBackend(const SimulatorConfig &config);
+
+// The soft realization memory budget in MiB (trajectory_max_memory_mb). Unset,
+// it is 1 GiB, except on the CPU Aer statevector and MPS: Aer itself runs as
+// many shots at once as the machine's memory holds, so their trajectories take
+// half of it (Utils::MachineTrajectoryBudgetMB). With 1 GiB, 22 qubits got 5
+// workers where Aer runs 16 shots, at twice its time.
 inline size_t RealizationBudgetMB(const SimulatorConfig &config)
 {
     if (config.trajectory_max_memory_mb)
         return *config.trajectory_max_memory_mb;
     const auto value = config.native_options.find("trajectory_max_memory_mb");
-    return value == config.native_options.end() ? 1024 : static_cast<size_t>(std::stoull(value->second));
+    if (value != config.native_options.end())
+        return static_cast<size_t>(std::stoull(value->second));
+    return IsAerTrajectoryBackend(config) ? Utils::MachineTrajectoryBudgetMB() : 1024;
 }
 
 // ConfigureNetwork applies the typed worker limit after native options.
@@ -382,6 +391,41 @@ inline bool RunsOnlyQCSim(const SimulatorConfig &config)
         return config.simulator_type == Simulators::SimulatorType::kQCSim;
     return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
                        [](const auto &candidate) { return candidate.first == Simulators::SimulatorType::kQCSim; });
+}
+
+// A fixed CPU Aer statevector or matrix product state: the Aer methods whose
+// trajectories run as QCSim's do, on realization workers and reused sessions.
+inline bool IsAerTrajectoryBackend(const SimulatorConfig &config)
+{
+#ifndef NO_QISKIT_AER
+    return !HasCandidateList(config) && config.simulator_type == Simulators::SimulatorType::kQiskitAer &&
+           (config.simulation_type == Simulators::SimulationType::kStatevector || config.simulation_type == Simulators::SimulationType::kMatrixProductState);
+#else
+    (void)config;
+    return false;
+#endif
+}
+
+// Whether every backend a request may run can host realization workers: QCSim,
+// and the CPU Aer statevector and matrix product state. An Aer worker runs
+// single-threaded (the network turns its internal threads off under a worker),
+// so the workers supply the parallelism that Aer gives shots on its own.
+inline bool RunsRealizationWorkerBackends(const SimulatorConfig &config)
+{
+    const auto supported = [](Simulators::SimulatorType type, Simulators::SimulationType method) {
+        if (type == Simulators::SimulatorType::kQCSim)
+            return true;
+#ifndef NO_QISKIT_AER
+        if (type == Simulators::SimulatorType::kQiskitAer)
+            return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState;
+#endif
+        (void)method;
+        return false;
+    };
+    if (!HasCandidateList(config))
+        return supported(config.simulator_type, config.simulation_type);
+    return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                       [&](const auto &candidate) { return supported(candidate.first, candidate.second); });
 }
 
 // Whether every backend a request may run evolves an ensemble: a density

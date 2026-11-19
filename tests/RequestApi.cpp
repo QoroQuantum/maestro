@@ -294,19 +294,66 @@ void TestSeededSharedRealizationWorkers()
     Check(tensorLimited.at("shots").to_number<size_t>() == 12 && Call(tensor).at("counts") == tensorLimited.at("counts"),
           "Memory-limited MPS shared realizations lost shots or reproducibility");
 
-    // An estimate and a noisy fidelity run their realizations one after another
-    // on the request's simulator, and report that one worker as execute reports its own.
-    for (const char *operation : {"estimate", "noisy_fidelity"})
+    // A noisy fidelity runs its realizations one after another on the request's
+    // simulator, and reports that one worker as execute reports its own.
     {
-        auto request = Request(operation, 2, "h q[0]; cx q[0],q[1];");
+        auto request = Request("noisy_fidelity", 2, "h q[0]; cx q[0],q[1];");
         request["execution"].as_object()["seed"] = 3;
         request["noise"] = bounded.at("noise");
-        if (std::string(operation) == "estimate")
-            request["observables"] = j::array{"ZZ"};
         const auto metadata = Call(request).at("execution_metadata").as_object();
         Check(metadata.contains("realization_workers") && metadata.at("realization_workers").to_number<size_t>() == 1,
-              "A noisy estimate or fidelity did not report the worker its realizations ran on");
+              "A noisy fidelity did not report the worker its realizations ran on");
     }
+    // A noisy estimate runs its realizations on workers, within max_simulators,
+    // and sums them in realization order: the values do not depend on how many ran.
+    {
+        auto estimate = Request("estimate", 2, "h q[0]; cx q[0],q[1];");
+        estimate["execution"].as_object()["seed"] = 3;
+        estimate["noise"] = bounded.at("noise");
+        estimate["observables"] = j::array{"ZZ", "XX"};
+        estimate["simulator"].as_object()["selection"] = "fixed";
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 1}};
+        const auto serial = Call(estimate);
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 2}};
+        const auto parallel = Call(estimate);
+        Check(serial.at("execution_metadata").at("realization_workers").to_number<size_t>() == 1, "A noisy estimate ignored max_simulators=1");
+        const auto workers = parallel.at("execution_metadata").at("realization_workers").to_number<size_t>();
+        Check(workers >= 1 && workers <= 2, "A noisy estimate did not report the workers its realizations ran on");
+        Check(serial.at("expectation_values") == parallel.at("expectation_values") &&
+                  serial.at("realization_standard_errors") == parallel.at("realization_standard_errors"),
+              "A noisy estimate depended on the number of its realization workers");
+    }
+    // Two realizations run one after the other whatever the workers: the first warms the
+    // estimation cache alone, and one is left. The estimate reports the workers available to it.
+    {
+        auto estimate = Request("estimate", 2, "h q[0]; cx q[0],q[1];");
+        estimate["execution"].as_object()["seed"] = 3;
+        estimate["noise"] = bounded.at("noise");
+        estimate["noise"].as_object()["realizations"] = 2;
+        estimate["observables"] = j::array{"ZZ"};
+        estimate["simulator"].as_object()["selection"] = "fixed";
+        estimate["simulator"].as_object()["options"] = j::object{{"max_simulators", 4}};
+        Check(Call(estimate).at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
+              "A two-realization estimate reported more workers than its one remaining realization could use");
+    }
+#ifndef NO_QISKIT_AER
+    // The trajectory memory budget applies to the CPU Aer statevector and matrix product state,
+    // so a request may set it there; Aer's density matrix runs no trajectories and rejects it.
+    for (const char *method : {"statevector", "matrix_product_state", "density_matrix"})
+    {
+        auto request = Request("execute", 3, "h q[0]; cx q[0],q[1]; cx q[1],q[2]; measure q->c;", method);
+        request["execution"].as_object()["shots"] = 8;
+        request["execution"].as_object()["seed"] = 3;
+        request["simulator"].as_object()["backend"] = "aer";
+        request["simulator"].as_object()["selection"] = "fixed";
+        request["simulator"].as_object()["options"] = j::object{{"trajectory_max_memory_mb", 64}};
+        // Call throws unless the request succeeds or fails as stated.
+        const auto response = Call(request, std::string(method) != "density_matrix");
+        if (std::string(method) == "density_matrix")
+            Check(response.at("error").at("code").as_string() == "unsupported_capability",
+                  "trajectory_max_memory_mb on Aer's density matrix failed for another reason");
+    }
+#endif
 
     // Shot rows whose realizations ran on realization workers report them too, within max_simulators.
     auto rows = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q->c;");

@@ -164,7 +164,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG c3baac240f5cdf3f6223584cceb0ab704e373e60
+            GIT_TAG ca45267eeda41127247722446e1944e832bad32a
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -210,7 +210,7 @@ if(QAER)
         FetchContent_Declare(
             qiskit_aer
             GIT_REPOSITORY https://github.com/QoroQuantum/qiskit-aer.git
-            GIT_TAG 0fc50b83bc2e149b564754dbffe6747b956e288b
+            GIT_TAG 23faa5b147cc8f65a2577d539386c2f34ea522ef
         )
         FetchContent_GetProperties(qiskit_aer)
         if(NOT qiskit_aer_POPULATED)

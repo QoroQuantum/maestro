@@ -18,6 +18,7 @@ namespace bdata = boost::unit_test::data;
 
 #include <algorithm>
 #include <chrono>
+#include <complex>
 #include <numeric>
 #include <random>
 #define _USE_MATH_DEFINES
@@ -826,6 +827,155 @@ BOOST_AUTO_TEST_CASE(TrimAndReCanonicalizeMatrixProductState)
     statevector->Initialize();
     BOOST_CHECK_THROW(statevector->Trim(), std::runtime_error);
     BOOST_CHECK_THROW(statevector->ReCanonicalize(), std::runtime_error);
+}
+
+// A drawn branch of a unitary mixture that is the identity on a target is not applied there. As a
+// two-qubit gate, the identity on sites apart was routed together, and under a bond limit of 2 that
+// changed this state (probabilities by up to 0.13), which the limit holds exactly.
+BOOST_AUTO_TEST_CASE(unitary_mixture_identity_branch_does_not_route_under_a_bond_limit)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Matrix = Eigen::MatrixXcd;
+    const auto prepare = [] {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        sim->Configure("matrix_product_state_max_bond_dimension", "2");
+        sim->AllocateQubits(6);
+        sim->Initialize();
+        sim->SetSeed(7);
+        sim->ApplyRy(3, 1.1);
+        sim->ApplyRy(4, 1.1);
+        sim->ApplyCX(3, 4);
+        sim->ApplyCX(0, 1);
+        sim->ApplyRy(2, 1.3);
+        sim->ApplyCX(2, 3);
+        sim->ApplyCX(4, 5);
+        sim->ApplyCX(0, 1);
+        return sim;
+    };
+    Matrix xOnSecond = Matrix::Zero(4, 4); // X on the second target, the first as local matrix bit zero
+    for (int first = 0; first < 2; ++first)
+        for (int second = 0; second < 2; ++second)
+            xOnSecond((1 - second) * 2 + first, second * 2 + first) = 1.;
+    Matrix xOnFirst = Matrix::Zero(4, 4);
+    for (int first = 0; first < 2; ++first)
+        for (int second = 0; second < 2; ++second)
+            xOnFirst(second * 2 + (1 - first), second * 2 + first) = 1.;
+
+    struct Case
+    {
+        Channel channel;
+        int flipped; // the qubit the drawn branch flips, or -1
+    };
+
+    const std::vector<Case> cases{{Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}), -1},
+                                  {Channel::UnitaryMixture({1.}, {Matrix::Identity(4, 4)}).Then(Channel::BitFlip(1.), {1}), 4},
+                                  {Channel::UnitaryMixture({1.}, {xOnSecond}), 4},
+                                  {Channel::UnitaryMixture({1.}, {xOnFirst}), 0}};
+    // A phase times the identity keeps its phase in the amplitudes, as on the statevector, and routes nothing.
+    {
+        const std::complex<double> phase(0., 1.);
+        for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kStatevector})
+            for (const bool two : {false, true})
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                sim->AllocateQubits(2);
+                sim->Initialize();
+                sim->SetSeed(1);
+                if (two)
+                    sim->ApplyQuantumChannel({0, 1}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+                else
+                    sim->ApplyQuantumChannel({0}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(2, 2))}));
+                BOOST_TEST(std::abs(sim->Amplitude(0) - phase) < 1e-12);
+            }
+        auto sim = prepare(), reference = prepare();
+        sim->ApplyQuantumChannel({0, 4}, Channel::UnitaryMixture({1.}, {Matrix(phase * Matrix::Identity(4, 4))}));
+        const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
+    }
+
+    // A channel reduced to the target it acts on keeps its parts as they are: a mixture of unitaries
+    // keeps its unitaries, with their phases, and its probabilities.
+    {
+        const std::complex<double> phase(0., 1.);
+        const auto second = [](const Matrix &first) { // identity on the second target
+            Matrix u = Matrix::Zero(4, 4);
+            u.block(0, 0, 2, 2) = first;
+            u.block(2, 2, 2, 2) = first;
+            return u;
+        };
+        Matrix x = Matrix::Zero(2, 2), up(2, 2), down(2, 2);
+        x(0, 1) = x(1, 0) = 1.;
+        const double c = std::cos(std::acos(-1.) / 4), s = std::sin(std::acos(-1.) / 4);
+        up << c, -s, s, c;
+        down << c, s, -s, c;
+        const Channel phased = Channel::UnitaryMixture({1.}, {Matrix(phase * second(x))}).OnActiveQubits(),
+                      rotations = Channel::UnitaryMixture({0.5, 0.5}, {second(up), second(down)}).OnActiveQubits();
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        sim->SetSeed(1);
+        sim->ApplyQuantumChannel({0}, phased);
+        BOOST_TEST(std::abs(sim->Amplitude(1) - phase) < 1e-12);
+        for (uint64_t seed = 1; seed <= 6; ++seed)
+        {
+            auto rotated = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+            rotated->AllocateQubits(2);
+            rotated->Initialize();
+            rotated->SetSeed(seed);
+            rotated->ApplyQuantumChannel({0}, rotations);
+            const auto probabilities = rotated->AllProbabilities();
+            BOOST_TEST(std::abs(probabilities[1] + probabilities[3] - 0.5) < 1e-9);
+        }
+    }
+
+    // Kraus operators on two sites that are the identity on one of them are applied on the other alone:
+    // a damping of qubit 0 given on qubits 0 and 4 is the damping given on qubit 0, with the same draw.
+    // Routed together, P(q5 = 1) went from 0.397125 to 0.438238.
+    {
+        Matrix k0 = Matrix::Zero(2, 2), k1 = Matrix::Zero(2, 2);
+        k0(0, 0) = 1.;
+        k0(1, 1) = std::sqrt(0.7);
+        k1(0, 1) = std::sqrt(0.3);
+        const auto onTargets = [](const Matrix &second, const Matrix &first) {
+            Matrix u(4, 4);
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j)
+                    u(i, j) = second(i / 2, j / 2) * first(i % 2, j % 2);
+            return u;
+        };
+        const Matrix one = Matrix::Identity(2, 2);
+        auto reference = prepare();
+        reference->ApplyQuantumChannel({0}, Channel(Channel::KrausOperators{k0, k1}));
+        const auto expected = reference->AllProbabilities();
+
+        struct Given
+        {
+            Types::qubits_vector targets;
+            Channel channel;
+        };
+
+        for (const Given &g : std::vector<Given>{{{0, 4}, Channel(Channel::KrausOperators{onTargets(one, k0), onTargets(one, k1)})},
+                                                 {{4, 0}, Channel(Channel::KrausOperators{onTargets(k0, one), onTargets(k1, one)})}})
+        {
+            auto sim = prepare();
+            sim->ApplyQuantumChannel(g.targets, g.channel);
+            const auto probabilities = sim->AllProbabilities();
+            for (size_t i = 0; i < probabilities.size(); ++i)
+                BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9, "outcome " << i << ": " << probabilities[i] << " for " << expected[i]);
+        }
+    }
+
+    for (const Case &c : cases)
+    {
+        auto sim = prepare(), reference = prepare();
+        sim->ApplyQuantumChannel({0, 4}, c.channel);
+        if (c.flipped >= 0)
+            reference->ApplyX(static_cast<Types::qubit_t>(c.flipped));
+        const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < probabilities.size(); ++i)
+            BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9, "outcome " << i << ": " << probabilities[i] << " for " << expected[i]);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

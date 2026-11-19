@@ -26,7 +26,7 @@ on:
         default: base
 
 env:
-  QCSIM_VERSION: "c3baac240f5cdf3f6223584cceb0ab704e373e60"
+  QCSIM_VERSION: "ca45267eeda41127247722446e1944e832bad32a"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
@@ -46,6 +46,11 @@ jobs:
     - name: Checkout Repo
       uses: actions/checkout@v5
 
+    # The Qiskit Aer revision CMake pins (FetchContent GIT_TAG): CI builds the
+    # same one, and the dependency cache is keyed by it.
+    - name: Read the pinned Qiskit Aer revision
+      run: echo "AER_VERSION=$(.github/scripts/fetch_pinned_aer.sh --print)" >> "$GITHUB_ENV"
+
     # 1. CACHE GIT DEPENDENCIES (QCSim/JSON/AER)
     - name: Cache Git Dependencies
       id: cache-git-deps
@@ -55,7 +60,7 @@ jobs:
           QCSim
           json
           qiskit-aer
-        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v3
+        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-aer${{ env.AER_VERSION }}-json3.11.2
 
     # 2. SETUP CCACHE (only main saves; PRs and releases restore main's cache)
     - name: Restore ccache
@@ -79,7 +84,7 @@ jobs:
         if [ ! -d QCSim ]; then git clone https://github.com/QoroQuantum/QCSim.git; fi
         cd QCSim && git checkout ${{ env.QCSIM_VERSION }} && cd ..
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
-        [ -d qiskit-aer ] || git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git
+        .github/scripts/fetch_pinned_aer.sh qiskit-aer
 
     # 4. BUILD WITH CCACHE + NINJA
     - name: Run CMake

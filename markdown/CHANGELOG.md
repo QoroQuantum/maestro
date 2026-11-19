@@ -9,6 +9,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Noisy trajectories on the Qiskit Aer statevector and matrix product state
+  run on realization workers, as on QCSim, from the Python noisy functions,
+  C++ callers (`ExecuteNoisy`, `EstimateNoisy`) and native requests. They ran
+  one after another before, each on a multithreaded Aer state, and were up to
+  12x (statevector) and 30x (MPS) slower than Aer running the same noise
+  model itself. With 200 shots: QFT 16 statevector 28.4 s -> 2.4 s (Aer
+  2.9 s), GHZ 20 statevector 75 s -> 8.9 s (Aer 9.0 s), QFT 16 MPS
+  24.9 s -> 1.4 s (Aer 1.1 s); a noisy Python estimate went from 14.7 s
+  (statevector) and 22.7 s (MPS) to 1.5 s and 1.7 s. The single worker that
+  QCSim keeps for statevectors from 20 qubits does not apply to Aer, whose
+  shots in parallel stay ahead there.
+- On the Aer statevector, one-qubit Kraus channels on two qubits (each
+  qubit's relaxation after a two-qubit gate) are applied as one two-qubit
+  Kraus operation when their operators multiply into at most 16, as two
+  relaxations do. Aer renormalizes after every Kraus operation, so this
+  halves that work, as Aer's own noise sampling does. Factors with more
+  operators are applied one by one. The distribution is unchanged; a seeded
+  run draws different samples than before.
+- `trajectory_max_memory_mb` applies to the CPU Aer statevector and MPS: to
+  their realization workers and to the network's shot workers, which had no
+  memory limit on Aer, and native requests accept the option for them (they
+  answered `unsupported_capability`). Without it, their trajectories may use
+  half of the machine's memory instead of 1 GiB, within the limit of the
+  process's cgroup or of a group above it. Aer runs as many shots at once as
+  its memory holds; 1 GiB held 22 qubits to five workers, at twice Aer's
+  time (GHZ 22: 22.5 s -> 12.5 s, Aer 11.7 s; QAOA 22: 33.4 s -> 20.0 s, Aer
+  21.9 s). QCSim's default is unchanged. A prepared state that the shot
+  workers clone is counted in the budget, and each worker clones it when it
+  starts a job instead of every queued job holding a clone (20 qubits, seven
+  shots, 128 MiB: peak 473 MiB -> 297 MiB). An Aer MPS without a bond limit
+  has no known size: under an explicit budget its shots keep one worker;
+  without one they are not limited. A bond limit above what the register
+  can reach (2^(qubits/2)) counts as that. The budget counts two copies of the
+  state per worker; a measurement of many qubits at once on the Aer
+  statevector allocates up to two more for its duration.
+- On the Aer matrix product state, a channel with any part that reads the
+  state through Kraus operators is applied as one Kraus operation, with its
+  canonical Kraus set, as Aer applies a gate's error. Drawn as Pauli gates
+  followed by each qubit's damping, the trajectories cost more to renormalize
+  (22% more SVDs, on larger bonds): QFT 16 1.44 s -> 0.87 s (Aer 0.86 s),
+  QFT 24 32.4 s -> 15.3 s, random 12 22.2 s -> 15.6 s, 200 shots. Pauli and
+  unitary-mixture channels, and relaxation with T2 <= T1, keep their cheaper
+  draws. Only the targets the channel acts on are sent: a channel given on
+  two targets that leaves one alone does not make Aer move that one (under a
+  bond limit the move truncated the state), also when it has a Pauli part,
+  which is stored over both targets, or when the other target carries a
+  part that changes nothing (a damping of strength zero, a relaxation of
+  zero duration). A drawn branch of a unitary mixture that is the identity
+  on a target is not applied there either: the identity, or a one-qubit
+  gate given as a two-qubit unitary, no longer moves the other qubit, also
+  when it is combined with a Kraus part; the same on QCSim's MPS, whose
+  routing could truncate for it too. A branch that is a phase times the
+  identity keeps its phase in the amplitudes. Kraus operators given on two
+  targets that are the identity on one are applied on the other alone, as
+  given and in their order, on both backends; a set of Kraus operators
+  placed on other targets (`Placed`, `OnQubit`) keeps its operators too,
+  where it was replaced by the canonical operators of the same channel.
+  In general a target a channel leaves alone does not change the operation,
+  seeded trajectories included, wherever it is given: the channel without
+  it keeps every part, with its kind, operators, order, probabilities,
+  phase and random draw, and the Kraus operators of a channel are those of
+  that reduced form with the identity on the removed target. This is about
+  idle targets only: exchanging the targets of a channel that acts on both
+  keeps the distribution, but on the Aer MPS a seed may draw another
+  trajectory (the canonical operators of the exchanged channel are found
+  again, and can be another set where their weights are equal). The distribution is unchanged;
+  seeded runs draw differently. This
+  needs the pinned Aer: before it, a Kraus operation on qubits apart in the
+  chain left the tensors between them stale, and expectation values on
+  those qubits wrong.
+- Noisy `estimate` requests run their realizations on realization workers, as
+  Python's estimate does. They are summed in realization order, each as soon
+  as the earlier ones are in, so the sums do not depend on the scheduling and
+  memory does not grow with the number of realizations. A realization's own
+  value can still depend on the threads its simulator uses: on Aer
+  statevectors from 14 qubits a single worker lets Aer thread its loops, and
+  values differed from four workers' by 7e-17. Aer statevector GHZ 20 with 64
+  realizations: 7.1 s -> 1.3 s; QCSim MPS QFT 16: 0.50 s -> 0.06 s.
+  `realization_workers`, there and in Python's estimate, is the number of
+  workers available after the first realization, which warms the estimation
+  cache alone: an upper bound on what overlaps, so two realizations report
+  1. A noisy fidelity still runs its
+  realizations one after another and reports 1.
+- QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
+  one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
+  one pass over the matrix instead of two, from 11 qubits for dense gates
+  (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y
+  (1.1-2x). Smaller registers and two-qubit gates keep the two passes, which
+  are faster there. With gate fusion, which hands the density matrix fused
+  two-qubit blocks, run times do not change; with `gate_fusion` off they
+  were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 23faa5b, and the wheel
+  builds and `build.sh` check out that revision too, where they cloned Aer's
+  default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
+  matrix; noisy MPS runs could reach one while renormalizing the chain, and
+  then hung. It renormalizes the chain from where the qubits are after a
+  Kraus operation on qubits that were apart: before, a six-qubit GHZ state
+  with a two-qubit Kraus on qubits 0 and 5 gave `<Z>` = 0 on the qubits in
+  between, where its probabilities give 0.34. The MPS settings (threads,
+  sample-measure algorithm, swap direction, LAPACK and others) belong to
+  each simulator instead of being shared by the process, so simulators on
+  different threads no longer write them concurrently; the temporary copy
+  an MPS makes of itself to answer a query has no bond limit, so a
+  bond-limited state is not truncated by being queried. Under a bond limit,
+  a Kraus operation on qubits apart weighs and applies its operator on the
+  state after the qubits are moved together (it could pick an operator the
+  truncated state gave no weight, and crash), and a gate on three qubits
+  stays within the limit. It inlines the
+  statevector index helpers, which the compiler had left out of line in
+  Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
+  gates on up to five qubits on the scalar kernels, which beat the AVX2 one
+  there (3.7x on one qubit). Maestro -> Aer statevector trajectories, 200
+  shots: random 14 with Pauli noise 0.84 s -> 0.31 s (Aer 0.56 s), with
+  relaxation 2.27 s -> 1.54 s (Aer 2.38 s), GHZ 20 9.19 s -> 7.85 s (Aer
+  8.53 s). It also merges upstream qiskit-aer main through 5cb4a838,
+  including rx, ry, rzz, rxx, ryy and rzx at Clifford angles on the
+  extended stabilizer.
 - On the QCSim Pauli propagator, `auto` noise evaluation applies relaxation
   (T1, thermal or idle noise towards unequal populations) as exact channels
   when a truncation threshold is in effect: a positive

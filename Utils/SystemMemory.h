@@ -1,0 +1,261 @@
+#pragma once
+
+#ifndef _UTILS_SYSTEM_MEMORY_H_
+#define _UTILS_SYSTEM_MEMORY_H_
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <istream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#undef min
+#undef max
+#endif
+
+namespace Utils
+{
+
+namespace SystemMemoryDetail
+{
+
+/** The files that hold a memory limit for the process: that of its cgroup and
+ * of every group above it, as far as the cgroup filesystem is mounted (a job's
+ * limit is often set on a parent group, with memory.max = max on the process's
+ * own). `cgroups` is the text of /proc/self/cgroup, `mountinfo` that of
+ * /proc/self/mountinfo.
+ *
+ * A group's directory is its path relative to the root of the mount, under the
+ * mount point: with /tenant mounted at /sys/fs/cgroup, the group /tenant/job is
+ * /sys/fs/cgroup/job, not /sys/fs/cgroup/tenant/job. A mount whose root does
+ * not hold the process's group is another group's and is skipped. Without mount
+ * information the conventional mount points and their roots are assumed. */
+inline std::vector<std::string> CgroupLimitFiles(std::istream &cgroups, std::istream &mountinfo)
+{
+    std::vector<std::string> files;
+    // The process's group in the unified hierarchy (v2, "0::/path") and in the
+    // v1 hierarchy that has the memory controller ("N:...,memory,...:/path").
+    std::string unified, memory;
+    bool hasUnified = false, hasMemory = false;
+    for (std::string line; std::getline(cgroups, line);)
+    {
+        const auto first = line.find(':'), second = line.find(':', first == std::string::npos ? first : first + 1);
+        if (first == std::string::npos || second == std::string::npos)
+            continue;
+        const std::string controllers = line.substr(first + 1, second - first - 1), path = line.substr(second + 1);
+        if (line.compare(0, first, "0") == 0 && controllers.empty())
+        {
+            unified = path;
+            hasUnified = true;
+        }
+        else if (("," + controllers + ",").find(",memory,") != std::string::npos)
+        {
+            memory = path;
+            hasMemory = true;
+        }
+    }
+    // Each group from `relative` (below the directory `mount`) up to the mount itself.
+    const auto addHierarchy = [&files](const std::string &mount, std::string relative, const char *file) {
+        while (!relative.empty() && relative.front() == '/')
+            relative.erase(relative.begin());
+        while (!relative.empty() && relative.back() == '/')
+            relative.pop_back();
+        while (true)
+        {
+            files.push_back(mount + (relative.empty() ? "" : "/" + relative) + "/" + file);
+            if (relative.empty())
+                break;
+            const auto slash = relative.find_last_of('/');
+            relative = slash == std::string::npos ? std::string() : relative.substr(0, slash);
+        }
+    };
+    // The group's path below the root of a mount; false when the group is not
+    // below it. Such a mount shows another part of the hierarchy (a sibling
+    // group's subtree), and its limits are not the process's. Paths are matched
+    // by whole components, whatever they are called: in a cgroup namespace both
+    // can start with "/.." (a process in /../other/job under a mount rooted at
+    // /../other), and "/..tenant" is an ordinary name.
+    // Otherwise, a root made only of ".." components ("/..", "/../..") is an
+    // ancestor of the namespace's root: its limit applies to the process, whose
+    // path below it the namespace hides, so the mount's own limit is read and
+    // nothing below it. A root that goes up and down again ("/../other") without
+    // holding the group is a sibling.
+    // A path that starts by going up leaves the subtree it is taken in.
+    const auto leaves = [](const std::string &path) { return path.compare(0, 3, "/..") == 0 && (path.size() == 3 || path[3] == '/'); };
+    const auto below = [&leaves](const std::string &root, const std::string &group, std::string &relative) {
+        if (root == "/" || root.empty())
+        {
+            // The root of the process's namespace: a group outside it is not below it.
+            relative = group;
+            return !leaves(relative);
+        }
+        if (group.compare(0, root.size(), root) == 0 && (group.size() == root.size() || group[root.size()] == '/'))
+        {
+            // What is left of the group's path must stay below the root: a process moved to
+            // /../../other/job is not below a mount rooted at /.., though its path starts with it.
+            relative = group.substr(root.size());
+            return !leaves(relative);
+        }
+        size_t at = 0;
+        while (root.compare(at, 3, "/..") == 0 && (at + 3 == root.size() || root[at + 3] == '/'))
+            at += 3;
+        relative.clear();
+        return at == root.size();
+    };
+    // mountinfo writes a space, tab, newline and backslash in a path as \040, \011, \012 and \134.
+    const auto unescape = [](const std::string &path) {
+        std::string out;
+        const auto octal = [](char c) { return c >= '0' && c <= '7'; };
+        for (size_t i = 0; i < path.size(); ++i)
+            if (path[i] == '\\' && i + 3 < path.size() && octal(path[i + 1]) && octal(path[i + 2]) && octal(path[i + 3]))
+            {
+                out.push_back(static_cast<char>((path[i + 1] - '0') * 64 + (path[i + 2] - '0') * 8 + (path[i + 3] - '0')));
+                i += 3;
+            }
+            else
+                out.push_back(path[i]);
+        return out;
+    };
+    // Whether the mount information lists the cgroup filesystem at all. If it
+    // does, only its mounts that hold the process's group are read, and the
+    // conventional paths, which may then be another group's, are not.
+    bool mounted = false;
+    // "ID parent major:minor root mount-point options... - fstype source super-options"
+    for (std::string line; std::getline(mountinfo, line);)
+    {
+        const auto separator = line.find(" - ");
+        if (separator == std::string::npos)
+            continue;
+        std::istringstream head(line.substr(0, separator)), tail(line.substr(separator + 3));
+        std::string id, parent, device, root, mount, type, source, options, relative;
+        if (!(head >> id >> parent >> device >> root >> mount) || !(tail >> type))
+            continue;
+        tail >> source >> options;
+        root = unescape(root);
+        mount = unescape(mount);
+        if (type == "cgroup2")
+        {
+            mounted = true;
+            if (hasUnified && below(root, unified, relative))
+                addHierarchy(mount, relative, "memory.max");
+        }
+        else if (type == "cgroup" && ("," + options + ",").find(",memory,") != std::string::npos)
+        {
+            mounted = true;
+            if (hasMemory && below(root, memory, relative))
+                addHierarchy(mount, relative, "memory.limit_in_bytes");
+        }
+    }
+    if (!mounted)
+    {
+        // No mount information: the conventional mount points, and their roots
+        // whatever /proc/self/cgroup listed (a cgroup namespace shows the
+        // process's group as the root). The tightest limit wins, so a file that
+        // does not apply can only be absent, never loosen it. A group that
+        // leaves the hierarchy's root (/../../other/job, a process moved out of
+        // its namespace's subtree) is not below the assumed mount point: nothing
+        // is read for it, not paths that climb out of the mount point and not the
+        // root's limit, which is another subtree's.
+        const bool unifiedInside = !hasUnified || !leaves(unified), memoryInside = !hasMemory || !leaves(memory);
+        if (hasUnified && unifiedInside)
+            addHierarchy("/sys/fs/cgroup", unified, "memory.max");
+        if (hasMemory && memoryInside)
+        {
+            // The v1 memory controller is mounted at /sys/fs/cgroup/memory, or on some systems at /sys/fs/cgroup itself.
+            addHierarchy("/sys/fs/cgroup/memory", memory, "memory.limit_in_bytes");
+            addHierarchy("/sys/fs/cgroup", memory, "memory.limit_in_bytes");
+        }
+        if (unifiedInside)
+            files.push_back("/sys/fs/cgroup/memory.max"); // cgroup v2
+        if (memoryInside)
+        {
+            files.push_back("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
+            files.push_back("/sys/fs/cgroup/memory.limit_in_bytes");        // cgroup v1 mounted at the root
+        }
+    }
+    return files;
+}
+
+} // namespace SystemMemoryDetail
+
+/** Physical memory available to the process in bytes, or 0 if unknown. On
+ * Linux a cgroup memory limit (v1 or v2) lowers it. */
+inline double PhysicalMemoryBytes()
+{
+#if defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t len = sizeof(bytes);
+    if (sysctlbyname("hw.memsize", &bytes, &len, nullptr, 0) == 0)
+        return static_cast<double>(bytes);
+#elif defined(__linux__)
+    const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGE_SIZE);
+    double mem = 0.;
+    if (pages > 0 && pageSize > 0)
+        mem = static_cast<double>(pages) * static_cast<double>(pageSize);
+
+    auto readLimit = [](const std::string &path) -> double {
+        std::ifstream f(path);
+        if (!f.is_open())
+            return 0.;
+        std::string token;
+        if (!(f >> token) || token == "max")
+            return 0.;
+        try
+        {
+            const auto limit = std::stoull(token);
+            // Treat limits >= LONG_MAX (typical cgroup v1 unlimited indicator) as unlimited.
+            if (limit > 0 && limit < 9223372036854771712ULL)
+                return static_cast<double>(limit);
+        }
+        catch (...)
+        {
+        }
+        return 0.;
+    };
+
+    // The tightest memory limit of the process's cgroup and of every group above it.
+    double limit = 0.;
+    std::ifstream cgroups("/proc/self/cgroup"), mountinfo("/proc/self/mountinfo");
+    for (const auto &file : SystemMemoryDetail::CgroupLimitFiles(cgroups, mountinfo))
+        if (const double l = readLimit(file); l > 0.)
+            limit = limit > 0. ? std::min(limit, l) : l;
+
+    if (limit > 0.)
+        mem = (mem > 0.) ? std::min(mem, limit) : limit;
+
+    return mem;
+#elif defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return static_cast<double>(status.ullTotalPhys);
+#endif
+    return 0.;
+}
+
+/** The default trajectory memory budget in MiB for backends that size their
+ * own parallel shots by the machine's memory, as Qiskit Aer does (its
+ * max_memory_mb defaults to all of it, one state per shot). Maestro counts two
+ * or three copies of a state per realization worker, so it takes half the
+ * memory, at least 1 MiB. `unknownMB` is the budget when the size is unknown. */
+inline size_t MachineTrajectoryBudgetMB(size_t unknownMB = 1024)
+{
+    const double bytes = PhysicalMemoryBytes();
+    if (!(bytes > 0.))
+        return unknownMB;
+    return std::max<size_t>(1, static_cast<size_t>(bytes / 2. / (1024. * 1024.)));
+}
+
+} // namespace Utils
+
+#endif

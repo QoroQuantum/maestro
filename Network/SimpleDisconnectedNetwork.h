@@ -18,6 +18,7 @@
 #include "../Circuit/ChainOrder.h"
 #include "../Estimators/SimulatorsEstimatorInterface.h"
 #include "../Utils/Sampling/Multinomial.h"
+#include "../Utils/SystemMemory.h"
 #include "NetworkJob.h"
 #include "QubitRegister.h"
 #include "SimpleController.h"
@@ -28,6 +29,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 #include <optional>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
@@ -881,6 +883,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             threadsPool.SetFinishLimit(shots);
 
             uint64_t jobStream = 0;
+            const auto cloneOrder = std::make_shared<typename ExecuteJob<Time>::CloneOrder>();
             while (shots > 0)
             {
                 const size_t curCnt = std::min(cntPerThread, shots);
@@ -907,10 +910,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (optSim)
                 {
-                    job->optSim = optSim->Clone();
+                    // Cloned when a worker takes the job, not here: there can be
+                    // more jobs than workers, and a clone made for each queued
+                    // job held a whole state beyond the memory budget.
+                    job->cloneSource = optSim;
+                    job->cloneOrder = cloneOrder;
+                    job->cloneIndex = job->randomStream;
                     job->executedGates = executed;
-                    if (job->config.IsSet("seed"))
-                        job->optSim->SetSeed(std::stoull(job->config.GetConfiguration("seed")));
                 }
 
                 threadsPool.AddRunJob(std::move(job));
@@ -1121,6 +1127,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             threadsPool.SetFinishLimit(shots);
 
             uint64_t jobStream = 0;
+            const auto cloneOrder = std::make_shared<typename ExecuteJob<Time>::CloneOrder>();
             while (shots > 0)
             {
                 const size_t curCnt = std::min(cntPerThread, shots);
@@ -1146,10 +1153,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (optSim)
                 {
-                    job->optSim = optSim->Clone();
+                    // Cloned when a worker takes the job, not here: there can be
+                    // more jobs than workers, and a clone made for each queued
+                    // job held a whole state beyond the memory budget.
+                    job->cloneSource = optSim;
+                    job->cloneOrder = cloneOrder;
+                    job->cloneIndex = job->randomStream;
                     job->executedGates = executed;
-                    if (job->config.IsSet("seed"))
-                        job->optSim->SetSeed(std::stoull(job->config.GetConfiguration("seed")));
                 }
 
                 threadsPool.AddRunJob(std::move(job));
@@ -3231,6 +3241,39 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (simType == Simulators::SimulatorType::kQuestSim || fullTerminalBatch)
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
+#ifndef NO_QISKIT_AER
+        // The CPU Aer statevector and matrix product state run their shots on
+        // these workers, one state each with its saved copy, and not on the
+        // logical shot blocks, which only QCSim reaches: the trajectory memory
+        // budget is applied to them here. A prepared simulator, which the
+        // workers clone, and its saved copy are reserved out of the budget. A
+        // matrix product state without a bond limit has no known size, and one
+        // whose size estimate no size_t holds is as good as unbounded: under an
+        // explicit budget they keep one worker, as realization workers do;
+        // without one they are not limited.
+        if (nrThreads > 1 && simType == Simulators::SimulatorType::kQiskitAer &&
+            (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
+        {
+            size_t bond = 0;
+            if (method == Simulators::SimulationType::kMatrixProductState && configuration.IsSet("matrix_product_state_max_bond_dimension"))
+            {
+                bond = std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"));
+                // No bond of the register can be larger than 2^(qubits / 2), whatever the limit says.
+                if (nrQubits / 2 < std::numeric_limits<size_t>::digits - 1)
+                    bond = std::min(bond, size_t{1} << (nrQubits / 2));
+            }
+            const long double bytes = method == Simulators::SimulationType::kStatevector
+                                          ? Utils::RealizationStateBytes(Utils::RealizationState::kStatevector, nrQubits)
+                                      : bond ? Utils::RealizationStateBytes(Utils::RealizationState::kMatrixProductState, nrQubits, bond)
+                                             : 0.L;
+            if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
+                nrThreads =
+                    Utils::LimitRealizationWorkersByMemory(nrThreads, static_cast<size_t>(bytes), TrajectoryBudgetMB(simType, method), optSim ? 2 : 0, 2);
+            else if (configuration.IsSet("trajectory_max_memory_mb"))
+                // No bond limit, or a size no size_t holds: unknown or beyond any budget.
+                nrThreads = 1;
+        }
+#endif
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)
         {
             if (!optSim)
@@ -3286,6 +3329,25 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return prepared;
     }
 
+    // trajectory_max_memory_mb, or its default: 1 GiB, and on the CPU Aer
+    // statevector and MPS half the machine's memory, as Aer itself runs as many
+    // shots at once as its memory holds (Utils::MachineTrajectoryBudgetMB).
+    // QCSim's shot blocks (ExecuteLogicalShotBlocks) and Aer's shot workers
+    // (ExecutionThreads) both read it.
+    size_t TrajectoryBudgetMB(Simulators::SimulatorType type, Simulators::SimulationType method) const
+    {
+        if (configuration.IsSet("trajectory_max_memory_mb"))
+            return std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb"));
+#ifndef NO_QISKIT_AER
+        if (type == Simulators::SimulatorType::kQiskitAer &&
+            (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kMatrixProductState))
+            return Utils::MachineTrajectoryBudgetMB();
+#endif
+        (void)type;
+        (void)method;
+        return 1024;
+    }
+
     bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
         return configuration.GetConfiguration("sampling_policy") != "legacy" && ExecuteJob<Time>::ReproducibleMethod(type, method);
@@ -3314,8 +3376,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             {
                 const size_t elements = size_t{1} << (bitsPerQubit * qubits);
                 const size_t bytes = elements * sizeof(std::complex<double>);
-                const size_t mb =
-                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                const size_t mb = TrajectoryBudgetMB(type, method);
                 const size_t slots = (mb << 20) / bytes;
                 // Prepared executions retain a source and one shared checkpoint.
                 // Without preparation each worker owns its own checkpoint too.
@@ -3360,8 +3421,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const long double bytes = Utils::RealizationStateBytes(state, qubits, bond);
             if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
             {
-                const size_t mb =
-                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                const size_t mb = TrajectoryBudgetMB(type, method);
                 // Tensor/tableau clones copy their saved checkpoint rather
                 // than sharing it. Keep two copies per worker also for terminal
                 // batches: explicit MPS measurement and a wide stabilizer tail

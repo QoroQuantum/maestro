@@ -85,7 +85,10 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     for (const auto &observable : observables)
         qubits = std::max(qubits, observable.size());
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
-    out.realization_workers = workers;
+    // The workers available to the realizations after the warm-up one below,
+    // which runs alone: two realizations run one after the other whatever the
+    // workers. An upper bound on what overlaps, not a measurement of it.
+    out.realization_workers = workers > 1 ? std::max<size_t>(1, std::min(workers, noise_realizations - 1)) : 1;
     // A cache serves one thread (EstimationCache).
     std::vector<EstimationCache> caches(workers);
     const auto run = [&](EstimationCache &cache, size_t r, const RecordCircuitPtr &noisy) {

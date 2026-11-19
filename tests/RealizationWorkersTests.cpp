@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -176,6 +177,128 @@ void BudgetsAndEmptyWork()
             "native worker limit did not constrain realization scheduling");
     config.max_simulators = 3;
     Require(MaestroExecution::EffectiveMaxSimulators(config) == 3, "typed worker limit did not override the native option");
+    // Unset, the trajectory budget is 1 GiB, and on the CPU Aer statevector and
+    // MPS half the machine's memory, as Aer fills it with parallel shots.
+    MaestroExecution::SimulatorConfig budget;
+    budget.simulation_type = Simulators::SimulationType::kStatevector;
+    budget.fixed_backend = true;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 1024, "QCSim's default trajectory budget changed");
+#ifndef NO_QISKIT_AER
+    budget.simulator_type = Simulators::SimulatorType::kQiskitAer;
+    const size_t machine = Utils::MachineTrajectoryBudgetMB();
+    Require(machine >= 1 && MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's statevector did not take the machine-sized budget");
+    budget.simulation_type = Simulators::SimulationType::kMatrixProductState;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == machine, "Aer's MPS did not take the machine-sized budget");
+    budget.simulation_type = Simulators::SimulationType::kDensityMatrix;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 1024, "Aer's density matrix took the trajectory budget");
+    budget.simulation_type = Simulators::SimulationType::kStatevector;
+    budget.native_options["trajectory_max_memory_mb"] = "300";
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 300, "a native trajectory budget lost to Aer's default");
+    budget.trajectory_max_memory_mb = 200;
+    Require(MaestroExecution::RealizationBudgetMB(budget) == 200, "a typed trajectory budget lost to Aer's default");
+    // A group's limit file is found below the mount's root: with /tenant mounted at /sys/fs/cgroup, the
+    // group /tenant/job is /sys/fs/cgroup/job. Its parents up to the mount are read too.
+    {
+        std::istringstream cgroups("0::/tenant/job/step\n"), mounts("30 25 0:26 /tenant /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n");
+        const auto files = Utils::SystemMemoryDetail::CgroupLimitFiles(cgroups, mounts);
+        const auto has = [&](const char *file) { return std::find(files.begin(), files.end(), file) != files.end(); };
+        Require(has("/sys/fs/cgroup/job/step/memory.max") && has("/sys/fs/cgroup/job/memory.max") && has("/sys/fs/cgroup/memory.max"),
+                "a cgroup below the mount's root was not resolved against it");
+        Require(!has("/sys/fs/cgroup/tenant/job/step/memory.max"), "a cgroup path was appended to the mount point unchanged");
+        // cgroup v1: the hierarchy with the memory controller, wherever it is mounted.
+        std::istringstream v1("5:cpu,cpuacct:/a\n9:memory:/docker/abc\n"),
+            v1Mounts("40 30 0:35 / /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n41 30 0:36 / /sys/fs/cgroup/cpu rw - cgroup cgroup rw,cpu,cpuacct\n");
+        const auto v1Files = Utils::SystemMemoryDetail::CgroupLimitFiles(v1, v1Mounts);
+        const auto v1Has = [&](const char *file) { return std::find(v1Files.begin(), v1Files.end(), file) != v1Files.end(); };
+        Require(v1Has("/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes") && v1Has("/sys/fs/cgroup/memory/docker/memory.limit_in_bytes") &&
+                    v1Has("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+                "the cgroup v1 memory hierarchy was not walked");
+        Require(!v1Has("/sys/fs/cgroup/cpu/a/memory.limit_in_bytes"), "a cgroup v1 hierarchy without the memory controller was read");
+        // Without mount information the conventional mount points are assumed.
+        std::istringstream plain("0::/user.slice/job\n"), none("");
+        const auto plainFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(plain, none);
+        Require(std::find(plainFiles.begin(), plainFiles.end(), "/sys/fs/cgroup/user.slice/job/memory.max") != plainFiles.end(),
+                "the conventional cgroup mount point was not assumed without mount information");
+    }
+    {
+        const auto listed = [](const std::vector<std::string> &files, const char *file) { return std::find(files.begin(), files.end(), file) != files.end(); };
+        // A mount whose root does not hold the process's group shows another group's limits: it is
+        // skipped, and so are the conventional paths once the mounts are known.
+        std::istringstream cgroups("0::/a/job\n"), mounts("30 25 0:26 /a /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n"
+                                                          "31 25 0:27 /b /mnt/other rw - cgroup2 cgroup2 rw\n"
+                                                          "32 25 0:28 /../outside /mnt/outside rw - cgroup2 cgroup2 rw\n");
+        const auto files = Utils::SystemMemoryDetail::CgroupLimitFiles(cgroups, mounts);
+        Require(listed(files, "/sys/fs/cgroup/job/memory.max") && listed(files, "/sys/fs/cgroup/memory.max"), "the process's own cgroup mount was not read");
+        Require(!listed(files, "/mnt/other/memory.max") && !listed(files, "/mnt/outside/memory.max"), "another group's cgroup mount was read");
+        Require(files.size() == 2, "paths outside the process's cgroup mount were read");
+        // In a cgroup namespace a mount rooted at "/.." (or "/../..") shows an ancestor of the
+        // namespace's root: its own limit applies. "/../other" is a sibling of the root.
+        std::istringstream inherited("0::/\n"), inheritedMounts("30 25 0:26 /.. /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n"
+                                                                "31 25 0:27 /../.. /mnt/grandparent rw - cgroup2 cgroup2 rw\n"
+                                                                "32 25 0:28 /../other /mnt/sibling rw - cgroup2 cgroup2 rw\n"
+                                                                "33 25 0:29 /..other /mnt/named rw - cgroup2 cgroup2 rw\n");
+        const auto inheritedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(inherited, inheritedMounts);
+        Require(listed(inheritedFiles, "/sys/fs/cgroup/memory.max") && listed(inheritedFiles, "/mnt/grandparent/memory.max"),
+                "the limit of an ancestor of the cgroup namespace's root was not read");
+        Require(!listed(inheritedFiles, "/mnt/sibling/memory.max") && !listed(inheritedFiles, "/mnt/named/memory.max") && inheritedFiles.size() == 2,
+                "a sibling of the cgroup namespace's root was read");
+        // Paths are matched by whole components first, whatever they are called: a process outside its
+        // namespace's root under a mount of that group, and a group whose name starts with "..".
+        for (const auto &[group, root] : std::vector<std::pair<std::string, std::string>>{{"/../other/job", "/../other"}, {"/..tenant/job", "/..tenant"}})
+        {
+            std::istringstream outside("0::" + group + "\n"), outsideMounts("30 25 0:26 " + root + " /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n");
+            const auto outsideFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(outside, outsideMounts);
+            Require(outsideFiles.size() == 2 && listed(outsideFiles, "/sys/fs/cgroup/job/memory.max") && listed(outsideFiles, "/sys/fs/cgroup/memory.max"),
+                    "a cgroup below a mount root starting with /.. was not matched by components");
+        }
+        // A sibling subtree reached through the parent: the process's path below the mount is known.
+        std::istringstream through("0::/../other/job\n"), throughMounts("30 25 0:26 /.. /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n");
+        const auto throughFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(through, throughMounts);
+        Require(throughFiles.size() == 3 && listed(throughFiles, "/sys/fs/cgroup/other/job/memory.max") && listed(throughFiles, "/sys/fs/cgroup/memory.max"),
+                "a cgroup below the parent of the namespace's root was not walked");
+        // A process moved above a mount's root is not below it, though its path starts with the root:
+        // /../../other/job under a mount rooted at /.. (and under the namespace's own root). Only the
+        // mount that holds it is read, for cgroup v2 and v1.
+        for (const bool v2 : {true, false})
+        {
+            const std::string type = v2 ? "cgroup2 cgroup2 rw" : "cgroup cgroup rw,memory", file = v2 ? "memory.max" : "memory.limit_in_bytes";
+            std::istringstream moved(std::string(v2 ? "0::" : "9:memory:") + "/../../other/job\n"),
+                movedMounts("30 25 0:26 /.. /mnt/parent rw - " + type + "\n31 25 0:27 / /mnt/root rw - " + type + "\n32 25 0:28 /../../other /mnt/job rw - " +
+                            type + "\n");
+            const auto movedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(moved, movedMounts);
+            Require(movedFiles.size() == 2 && listed(movedFiles, ("/mnt/job/job/" + file).c_str()) && listed(movedFiles, ("/mnt/job/" + file).c_str()),
+                    "a mount the process has moved out of was read for its memory limit");
+        }
+        // The same without mount information: nothing is assumed for a group that leaves its
+        // hierarchy's root, neither paths that climb out of the conventional mount point nor that
+        // mount point's own limit.
+        for (const bool v2 : {true, false})
+        {
+            std::istringstream moved(std::string(v2 ? "0::" : "9:memory:") + "/../../other/job\n"), none("");
+            for (const auto &file : Utils::SystemMemoryDetail::CgroupLimitFiles(moved, none))
+            {
+                Require(file.find("..") == std::string::npos, "a cgroup limit was looked up outside the conventional mount point");
+                Require(file != (v2 ? "/sys/fs/cgroup/memory.max" : "/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+                        "the limit of a hierarchy root the process has left was read");
+            }
+        }
+        // mountinfo escapes a space in a path as \040 (and a backslash as \134).
+        std::istringstream spaced("0::/job\n"), spacedMounts("30 25 0:26 / /mnt/my\\040cgroup\\134x rw - cgroup2 cgroup2 rw\n");
+        const auto spacedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(spaced, spacedMounts);
+        Require(listed(spacedFiles, "/mnt/my cgroup\\x/job/memory.max"), "an escaped mount point was not decoded");
+        // A cgroup namespace: the process's group is the root of its mount.
+        std::istringstream rooted("0::/\n"), rootedMounts("30 25 0:26 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n");
+        const auto rootedFiles = Utils::SystemMemoryDetail::CgroupLimitFiles(rooted, rootedMounts);
+        Require(rootedFiles.size() == 1 && rootedFiles[0] == "/sys/fs/cgroup/memory.max", "a namespaced cgroup root was not read");
+    }
+    // 22 qubits on Aer: 1 GiB held them to five workers; with 16 GiB the CPUs decide.
+    budget.trajectory_max_memory_mb.reset();
+    budget.native_options.clear();
+    budget.max_simulators = 16;
+    if (machine >= 16 * 1024)
+        Require(MaestroExecution::SamplingWorkers(budget, 64, 22) == Utils::RealizationWorkerCount(64, 16),
+                "Aer's 22-qubit trajectories were still held by a 1 GiB budget");
+#endif
 #endif
     Utils::RunRealizations(
         0, 4,
@@ -842,8 +965,7 @@ void NoiseAddBudgetsNetworkAllocation()
             // one qubit the circuit uses, so the 512 KiB caller leaves room for
             // workers within 1 MiB, while the 2 MiB one exhausts 1-2 MiB alone
             // and forces a serial fallback.
-            auto network =
-                std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{hostQubits}, std::vector<size_t>{hostQubits});
+            auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{hostQubits}, std::vector<size_t>{hostQubits});
             network->Configure("trajectory_max_memory_mb", std::to_string(budgetMB).c_str());
             network->SetMaxSimulators(4);
             network->SetOptimizeSimulator(false);
@@ -1041,6 +1163,104 @@ void NoiseAddBudgetsNetworkAllocation()
             }
         }
 }
+
+#ifndef NO_QISKIT_AER
+// The network's shot workers on the Aer statevector and matrix product state follow the trajectory
+// memory budget. A circuit with a gate after a measurement runs shot by shot on those workers; the
+// gate records whether a thread other than the caller executed it.
+void AerShotWorkersFollowTheBudget()
+{
+    class ObserveThreadX : public Circuits::XGate<>
+    {
+      public:
+        ObserveThreadX(std::shared_ptr<std::atomic<bool>> foreign, std::thread::id caller) : XGate(0), foreign(std::move(foreign)), caller(caller)
+        {
+        }
+
+        void Execute(const std::shared_ptr<Simulators::ISimulator> &simulator, Circuits::OperationState &state) const override
+        {
+            if (std::this_thread::get_id() != caller)
+                *foreign = true;
+            XGate::Execute(simulator, state);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Clone() const override
+        {
+            return std::make_shared<ObserveThreadX>(*this);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &,
+                                                      const std::unordered_map<Types::qubit_t, Types::qubit_t> & = {}) const override
+        {
+            return Clone(); // The test uses qubit 0.
+        }
+
+      private:
+        std::shared_ptr<std::atomic<bool>> foreign;
+        std::thread::id caller;
+    };
+
+    struct Case
+    {
+        Simulators::SimulationType method;
+        size_t qubits;
+        const char *budget; // trajectory_max_memory_mb, or null for the default
+        const char *bond;   // matrix_product_state_max_bond_dimension, or null
+        bool workers;       // whether shot workers are expected
+        const char *what;
+    };
+
+    const std::vector<Case> cases{
+        // A 17-qubit statevector is 2 MiB, and a worker holds two.
+        {Simulators::SimulationType::kStatevector, 17, "1", nullptr, false, "a 1 MiB budget did not hold 17-qubit Aer statevector shots to one worker"},
+        {Simulators::SimulationType::kStatevector, 17, "64", nullptr, true, "a 64 MiB budget kept 17-qubit Aer statevector shots off the workers"},
+        {Simulators::SimulationType::kStatevector, 17, nullptr, nullptr, true, "the default budget kept 17-qubit Aer statevector shots off the workers"},
+        // A matrix product state without a bond limit has no known size: one worker under an
+        // explicit budget, not limited without one.
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", nullptr, false,
+         "an explicit budget did not hold Aer MPS shots of unknown size to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, nullptr, nullptr, true,
+         "Aer MPS shots without a budget or a bond limit were kept off the workers"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", "32", false, "a 1 MiB budget did not hold bounded Aer MPS shots to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "64", "4", true, "a 64 MiB budget kept small bounded Aer MPS shots off the workers"},
+        // A bond limit beyond what 17 qubits can reach (2^8) counts as 256: 105 MiB a state.
+        {Simulators::SimulationType::kMatrixProductState, 17, "1", "2147483647", false,
+         "a 1 MiB budget did not hold Aer MPS shots with a huge bond limit to one worker"},
+        {Simulators::SimulationType::kMatrixProductState, 17, "2048", "2147483647", true,
+         "a 2 GiB budget kept Aer MPS shots with a huge bond limit off the workers"},
+    };
+    for (const auto &c : cases)
+    {
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{c.qubits}, std::vector<size_t>{2});
+        if (c.budget)
+            network->Configure("trajectory_max_memory_mb", c.budget);
+        if (c.bond)
+            network->Configure("matrix_product_state_max_bond_dimension", c.bond);
+        network->SetMaxSimulators(4);
+        network->SetOptimizeSimulator(false);
+        network->GetController()->SetOptimizeCircuit(false);
+        network->CreateSimulator(Simulators::SimulatorType::kQiskitAer, c.method);
+        auto foreign = std::make_shared<std::atomic<bool>>(false);
+        auto circuit = std::make_shared<Circuits::Circuit<>>();
+        // The register holds the qubits the circuit uses: a gate on each makes it the whole host.
+        for (size_t q = 0; q < c.qubits; ++q)
+            circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}}));
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 64);
+        size_t total = 0;
+        for (const auto &entry : counts)
+        {
+            total += entry.second;
+            // The X after the first measurement flips the qubit: the two bits always differ.
+            Require(entry.first.size() >= 2 && entry.first[0] != entry.first[1], "Aer shot workers returned a wrong outcome");
+        }
+        Require(total == 64, "Aer shot workers lost shots");
+        Require(foreign->load() == c.workers, c.what);
+    }
+}
+#endif
 
 void NoiseAddPreservesRealizationStreams()
 {
@@ -1392,6 +1612,9 @@ int main()
         NoiseInjectionPlanMatchesInjectors();
         InjectionCopiesAndRegisterWidth();
         NoiseAddBudgetsNetworkAllocation();
+#ifndef NO_QISKIT_AER
+        AerShotWorkersFollowTheBudget();
+#endif
         NoiseAddFrameCountPolicies();
         NoiseAddParallelEstimatesAndBatches();
         LibraryRealizationsMatchSerial();

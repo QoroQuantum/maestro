@@ -182,13 +182,14 @@ jobs:
           echo "BOOST_ROOT=$env:WINDOWS_BOOST_ROOT" >> $env:GITHUB_ENV
           echo "CMAKE_ARGS=-DBLAS_LIBRARIES=$($env:WINDOWS_OPENBLAS_ROOT -replace '\\','/')/lib/libopenblas.lib -DMAESTRO_BUILD_REQUEST_TESTS=ON -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
-      - name: Clone Qiskit Aer (Windows)
+      # The revision CMakeLists.txt pins, as on Linux and macOS below: the
+      # wheels ship the Qiskit Aer that CI tests, not its moving default branch.
+      - name: Check out the pinned Qiskit Aer (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: |
-          if (-not (Test-Path "C:\qiskit-aer")) {
-            git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git C:\qiskit-aer
-          }
-          echo "AER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
+          .github/scripts/fetch_pinned_aer.sh /c/qiskit-aer
+          echo "AER_INCLUDE_DIR=C:/qiskit-aer/src" >> "$GITHUB_ENV"
 
       # clang from Xcode 16.3 on emits __kmpc_dispatch_deinit, which the libomp in
       # torch <= 2.6 lacks. Maestro binds to torch's libomp when torch is
@@ -210,7 +211,7 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: >-
             (which yum >/dev/null 2>&1 && yum install -y openblas-devel || which dnf >/dev/null 2>&1 && dnf install -y openblas-devel || (apt-get update && apt-get install -y libopenblas-dev)) &&
             dnf install -y epel-release && dnf install -y ccache &&
-            git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer &&
+            bash {project}/.github/scripts/fetch_pinned_aer.sh /tmp/qiskit-aer &&
             curl -L https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.gz -o /tmp/boost.tgz &&
             tar -xzf /tmp/boost.tgz -C /tmp &&
             cd /tmp/boost_1_90_0 &&
@@ -243,7 +244,7 @@ jobs:
           # ---- macOS ----
           CIBW_BEFORE_ALL_MACOS: >-
             brew install boost openblas libomp ccache &&
-            git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer
+            bash {project}/.github/scripts/fetch_pinned_aer.sh /tmp/qiskit-aer
 
           # Homebrew's libomp and OpenBLAS, which delocate bundles, are built for
           # the runner's macOS, so the wheel can't target anything older.

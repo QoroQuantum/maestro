@@ -485,8 +485,41 @@ class AerState : public ISimulator
             NotifyObservers(targets);
             return;
         }
-        for (const auto &factor : channel.GetFactors())
+        const auto &factors = channel.GetFactors();
+        // The matrix product state renormalizes the chain after every Kraus
+        // operation, and how a channel is split into branches changes what its
+        // trajectories cost there: drawn as Pauli gates followed by each
+        // qubit's damping, QFT 16 took 1.7x Aer's time per shot, with 22% more
+        // SVDs on larger bonds. Aer applies a gate's whole error as one Kraus
+        // operation; so does this, with the channel's canonical Kraus set
+        // (largest branch first), when any part of it would read the state
+        // through Kraus operators anyway. A channel drawn without them (Pauli,
+        // unitary mixture, T2 <= T1 relaxation as nothing, a phase flip or a
+        // rare reset) keeps its cheaper draws below.
+        //
+        // Only the target the channel acts on goes to Aer when it leaves the
+        // other alone. To apply an operation on two qubits, the matrix product
+        // state first moves them next to each other, and under a bond limit
+        // that move truncates the state: a channel given on two targets that
+        // damps only one of them changed the other, and the qubits entangled
+        // with it. The reduced channel is the same operation (its Kraus
+        // operators are the channel's without the identity on the other target,
+        // in the same order), so the trajectory does not depend on how the
+        // channel was given.
+        if (simulationType == SimulationType::kMatrixProductState &&
+            std::any_of(factors.begin(), factors.end(), [](const QuantumChannel::Factor &factor) { return AppliesAsKraus(factor); }))
         {
+            const QuantumChannel reduced = channel.OnActiveQubits();
+            if (reduced.GetNumberOfQubits() == targets.size())
+                state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            else
+                state->apply_kraus(AER::reg_t{targets[channel.HomeQubit()]}, toAer(reduced.GetKrausOperators()));
+            NotifyObservers(targets);
+            return;
+        }
+        for (size_t index = 0; index < factors.size(); ++index)
+        {
+            const auto &factor = factors[index];
             Types::qubits_vector qubits;
             for (const size_t local : factor.qubits)
                 qubits.push_back(targets[local]);
@@ -511,17 +544,59 @@ class AerState : public ISimulator
             }
             else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
             {
+                // The branch is drawn whatever it is, so the draws that follow do not
+                // depend on it. A drawn unitary that is the identity on a target is
+                // not applied there: a two-qubit gate makes the matrix product state
+                // bring its qubits together, which truncates under a bond limit, also
+                // for the identity.
                 const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
                 if (qubits.size() == 1)
-                    ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                {
+                    // The literal identity is not applied; a phase is kept, as the amplitudes show it.
+                    if (!QuantumChannel::IsMultipleOfIdentity(unitary) || unitary(0, 0) != 1.)
+                        ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                }
                 else
-                    ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                {
+                    Eigen::Matrix2cd local;
+                    switch (QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local))
+                    {
+                    case QuantumChannel::LocalPart::kNone:
+                        // A phase other than one is applied, on one qubit: it shows in the amplitudes and needs no routing.
+                        if (unitary(0, 0) != 1.)
+                            ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary(0, 0) * Eigen::Matrix2cd::Identity()));
+                        break;
+                    case QuantumChannel::LocalPart::kFirst:
+                        ApplyGenericOneQubitGate(qubits[0], local);
+                        break;
+                    case QuantumChannel::LocalPart::kSecond:
+                        ApplyGenericOneQubitGate(qubits[1], local);
+                        break;
+                    case QuantumChannel::LocalPart::kBoth:
+                        ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                        break;
+                    }
+                }
             }
             else
             {
                 QuantumChannel::ThermalMixture mixture;
                 if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
                 {
+                    // Aer's statevector renormalizes after every Kraus operation,
+                    // with a pass over the state for each branch it weighs (the
+                    // matrix product state took its whole channel above). One-qubit
+                    // factors on two qubits (the relaxation of each qubit of a
+                    // two-qubit gate) commute, so they go to Aer as their tensor
+                    // product: one renormalization instead of two, as Aer's own
+                    // noise sampling applies a gate's error as one Kraus operation.
+                    if (index + 1 < factors.size() && MergesIntoTwoQubitKraus(factor, factors[index + 1]))
+                    {
+                        const auto &next = factors[index + 1];
+                        state->apply_kraus(AER::reg_t{qubits[0], targets[next.qubits[0]]}, toAer(TensorKraus(factor.operators, next.operators)));
+                        ++index;
+                        continue;
+                    }
                     state->apply_kraus(AER::reg_t(qubits.begin(), qubits.end()), toAer(factor.operators));
                     continue;
                 }
@@ -534,6 +609,50 @@ class AerState : public ISimulator
             }
         }
         NotifyObservers(targets);
+    }
+
+    // Whether a factor draws its branch from the state through Aer's Kraus
+    // operation: neither a Pauli channel nor a mixture of unitaries, nor a
+    // relaxation with T2 <= T1, which is drawn as nothing, a phase flip or a reset.
+    static bool AppliesAsKraus(const QuantumChannel::Factor &factor)
+    {
+        if (factor.IsStateIndependent())
+            return false;
+        QuantumChannel::ThermalMixture mixture;
+        return factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture);
+    }
+
+    // Two one-qubit Kraus factors on different qubits, which commute, with at
+    // most 16 products of their operators: the number a two-qubit channel needs
+    // at most, and what two relaxations give (four operators each). Factors
+    // given with more operators (a channel may come with any number) would
+    // multiply into as many matrices, and into as many branches for Aer to
+    // weigh, as the product of their counts; they are applied one by one.
+    static bool MergesIntoTwoQubitKraus(const QuantumChannel::Factor &first, const QuantumChannel::Factor &second)
+    {
+        return first.qubits.size() == 1 && second.qubits.size() == 1 && first.qubits[0] != second.qubits[0] && AppliesAsKraus(first) &&
+               AppliesAsKraus(second) && first.operators.size() * second.operators.size() <= kMaxMergedKrausOperators;
+    }
+
+    static constexpr size_t kMaxMergedKrausOperators = 16;
+
+    // The Kraus operators of two one-qubit channels side by side, the first on
+    // the local bit zero (LSB). The first operators lead, so the likeliest
+    // branch, both qubits' leading operator, is weighed first.
+    static QuantumChannel::KrausOperators TensorKraus(const QuantumChannel::KrausOperators &low, const QuantumChannel::KrausOperators &high)
+    {
+        QuantumChannel::KrausOperators product;
+        product.reserve(low.size() * high.size());
+        for (const auto &a : low)
+            for (const auto &b : high)
+            {
+                QuantumChannel::Matrix op(4, 4);
+                for (int row = 0; row < 4; ++row)
+                    for (int column = 0; column < 4; ++column)
+                        op(row, column) = a(row & 1, column & 1) * b(row >> 1, column >> 1);
+                product.emplace_back(std::move(op));
+            }
+        return product;
     }
 
     static size_t DrawChannelBranch(const std::vector<double> &probabilities, double random)

@@ -289,11 +289,37 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 }
                 else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
                 {
+                    // The branch is drawn whatever it is. A drawn unitary that is the identity on a
+                    // target is not applied there: a two-qubit gate on sites apart routes them
+                    // together, which can truncate under a bond limit, also for the identity.
                     const auto &unitary = factor.operators[DrawChannelBranch(factor.probabilities, ChannelUniform())];
                     if (factor.qubits.size() == 1)
-                        ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    {
+                        // The literal identity is not applied; a phase is kept, as the amplitudes show it.
+                        if (!QuantumChannel::IsMultipleOfIdentity(unitary) || unitary(0, 0) != 1.)
+                            ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    }
                     else
-                        ApplyGenericTwoQubitGate(first, targets[factor.qubits[1]], Eigen::Matrix4cd(unitary));
+                    {
+                        Eigen::Matrix2cd local;
+                        switch (QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local))
+                        {
+                        case QuantumChannel::LocalPart::kNone:
+                            // A phase other than one is applied, on one qubit: it shows in the amplitudes and needs no routing.
+                            if (unitary(0, 0) != 1.)
+                                ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary(0, 0) * Eigen::Matrix2cd::Identity()));
+                            break;
+                        case QuantumChannel::LocalPart::kFirst:
+                            ApplyGenericOneQubitGate(first, local);
+                            break;
+                        case QuantumChannel::LocalPart::kSecond:
+                            ApplyGenericOneQubitGate(targets[factor.qubits[1]], local);
+                            break;
+                        case QuantumChannel::LocalPart::kBoth:
+                            ApplyGenericTwoQubitGate(first, targets[factor.qubits[1]], Eigen::Matrix4cd(unitary));
+                            break;
+                        }
+                    }
                 }
                 else
                 {
@@ -301,10 +327,20 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                     QuantumChannel::ThermalMixture mixture;
                     if (factor.qubits.size() == 2)
                     {
-                        // Two sites: the chain brings them together first, as for a gate.
                         const Types::qubit_t second = targets[factor.qubits[1]];
-                        mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first), static_cast<Eigen::Index>(second));
-                        RecordExecutedTwoQubitGate(first, second, false, 4.);
+                        QuantumChannel::KrausOperators local;
+                        size_t position = 0;
+                        if (QuantumChannel::LocalOperators(factor.operators, position, local))
+                            // Operators that are the identity on one of the two sites: applied on the other alone,
+                            // with the same draw. Bringing the sites together for them could truncate the chain
+                            // under a bond limit, and changed qubits the operators do not act on.
+                            mpsSimulator->ApplyKrausOperator(local, random, static_cast<Eigen::Index>(position == 0 ? first : second));
+                        else
+                        {
+                            // Two sites: the chain brings them together first, as for a gate.
+                            mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first), static_cast<Eigen::Index>(second));
+                            RecordExecutedTwoQubitGate(first, second, false, 4.);
+                        }
                     }
                     else if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
                         mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first));

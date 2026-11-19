@@ -93,10 +93,8 @@ if [ -z "${NO_QISKIT_AER}" ]; then
 	fi
 
 
-	if [ ! -d qiskit-aer ]
-	then
-		git clone https://github.com/QoroQuantum/qiskit-aer.git
-	fi
+	# The revision CMakeLists.txt pins, also when an older checkout is here.
+	../.github/scripts/fetch_pinned_aer.sh qiskit-aer
 fi
 
 export EIGEN5_INCLUDE_DIR=$PWD/eigen-5.0.0

@@ -212,14 +212,65 @@ class QuantumChannel
     }
 
     /**
-     * Kraus operators of the channel. A channel built from Kraus operators
-     * returns them as given. A composed channel returns its canonical set: at
-     * most 4^n operators, largest weight first.
+     * Kraus operators of the channel, on all its targets.
+     *
+     * A channel built from Kraus operators returns them as given. A composed
+     * channel derives them from its reduced form (OnActiveQubits), so that
+     * they do not depend on whether, or where, a target the channel leaves
+     * alone was given: the operators of the reduced channel, each with the
+     * identity on that target. (Exchanging the targets of a channel that acts
+     * on both is another matter: its canonical operators are found again, and
+     * where their weights are equal they may come out as another set.) The reduced channel's own operators are the
+     * set it was given when it is a single set of Kraus operators on all its
+     * targets, in that order, and the canonical set of the channel otherwise
+     * (at most 4^n operators, largest weight first).
      */
     const KrausOperators &GetKrausOperators() const
     {
         if (data_->composed)
-            std::call_once(data_->krausOnce, [this]() { data_->kraus = CanonicalKraus(Superoperator(), Dimension()); });
+            std::call_once(data_->krausOnce, [this]() {
+                const QuantumChannel reduced = OnActiveQubits();
+                if (reduced.data_ != data_)
+                {
+                    // One target is left (channels act on two at most): its operators, with the identity on the other.
+                    const bool first = HomeQubit() == 0;
+                    for (const Matrix &op : reduced.GetKrausOperators())
+                    {
+                        Matrix padded = Matrix::Zero(4, 4);
+                        for (Eigen::Index idle = 0; idle < 2; ++idle)
+                            for (Eigen::Index row = 0; row < 2; ++row)
+                                for (Eigen::Index column = 0; column < 2; ++column)
+                                    padded(first ? 2 * idle + row : 2 * row + idle, first ? 2 * idle + column : 2 * column + idle) = op(row, column);
+                        data_->kraus.push_back(std::move(padded));
+                    }
+                    return;
+                }
+                // One set of Kraus operators on all the targets is kept, in its order: the canonical operators are
+                // another unraveling of the same channel, with other trajectories.
+                const std::vector<Factor> &factors = data_->factors;
+                if (factors.size() == 1 && (factors.front().kind == FactorKind::kKraus || factors.front().kind == FactorKind::kThermal) &&
+                    factors.front().qubits.size() == data_->numQubits && !factors.front().operators.empty())
+                {
+                    const Factor &factor = factors.front();
+                    if (data_->numQubits == 2 && factor.qubits[0] == 1)
+                    {
+                        // The factor's first qubit is the channel's second: the two bits of each index trade places.
+                        const auto swapped = [](Eigen::Index index) { return ((index & 1) << 1) | (index >> 1); };
+                        for (const Matrix &op : factor.operators)
+                        {
+                            Matrix reordered(4, 4);
+                            for (Eigen::Index row = 0; row < 4; ++row)
+                                for (Eigen::Index column = 0; column < 4; ++column)
+                                    reordered(row, column) = op(swapped(row), swapped(column));
+                            data_->kraus.push_back(std::move(reordered));
+                        }
+                    }
+                    else
+                        data_->kraus = factor.operators;
+                    return;
+                }
+                data_->kraus = CanonicalKraus(Superoperator(), Dimension());
+            });
         return data_->kraus;
     }
 
@@ -338,11 +389,207 @@ class QuantumChannel
         return FromFactors(std::move(factors), GetNumberOfQubits());
     }
 
+    /**
+     * The targets the channel acts on, in ascending order; the others it
+     * leaves alone (OnQubit, Placed, operators given with the identity on a
+     * target). A simulator that has to bring the targets of an operation
+     * together, as a matrix product state does, should not move those.
+     *
+     * A target is left alone when every part of the channel is the identity
+     * on it, found exactly: a Pauli part has no term of non-zero probability
+     * with a Pauli other than I there, and the operators of any other part are
+     * the identity there (LocalPartOfTwoQubitUnitary), or multiples of the
+     * identity altogether. For a channel given by its Kraus operators, those
+     * operators have to be the identity there too. No target may be active:
+     * the channel then changes nothing but a phase.
+     *
+     * The list is kept with the channel. Called on a temporary channel, it is
+     * returned by value: a reference would not outlive the channel.
+     */
+    const std::vector<size_t> &ActiveQubits() const &
+    {
+        std::call_once(data_->activeOnce, [this]() {
+            const size_t count = GetNumberOfQubits();
+            std::vector<bool> used(count, false);
+            for (const Factor &factor : GetFactors())
+                for (size_t k = 0; k < factor.qubits.size(); ++k)
+                    if (FactorActsOn(factor, k))
+                        used[factor.qubits[k]] = true;
+            // The operators a channel was given with are what GetKrausOperators returns: a target is left alone
+            // only if they agree. Channels on more than two targets are not reduced.
+            if (count > 2)
+                used.assign(count, true);
+            else if (count == 2 && !data_->composed && !(used[0] && used[1]))
+                for (const Matrix &op : data_->kraus)
+                {
+                    Eigen::Matrix2cd local;
+                    const LocalPart part = LocalPartOfTwoQubitUnitary(op, local);
+                    if (part == LocalPart::kBoth || (part == LocalPart::kFirst && !used[0]) || (part == LocalPart::kSecond && !used[1]))
+                    {
+                        used.assign(count, true);
+                        break;
+                    }
+                }
+            for (size_t q = 0; q < used.size(); ++q)
+                if (used[q])
+                    data_->active.push_back(q);
+        });
+        return data_->active;
+    }
+
+    std::vector<size_t> ActiveQubits() const &&
+    {
+        const QuantumChannel &self = *this;
+        return self.ActiveQubits();
+    }
+
+    /**
+     * The target the channel is reduced to when it leaves one alone: the one
+     * it acts on, or its first target when it acts on none.
+     */
+    size_t HomeQubit() const
+    {
+        const std::vector<size_t> &active = ActiveQubits();
+        return active.empty() ? 0 : active.front();
+    }
+
+    /**
+     * This channel without the target it leaves alone: a one-qubit channel on
+     * HomeQubit(). The channel itself when it acts on all its targets.
+     *
+     * The reduction is the same operation, not only the same ensemble. Every
+     * part of the channel is kept, in its place and with its kind: its
+     * operators are reduced to what they do on the remaining target, in their
+     * order and with their probabilities, a Pauli part to its terms there. A
+     * part that acted on the removed target alone can only have been the
+     * identity up to a phase; it stays, on the remaining target, so that its
+     * phase is still applied and its branch is still drawn. A simulator that
+     * samples the channel part by part therefore makes the same draws and
+     * applies the same matrices, and the Kraus operators of the reduced
+     * channel are those of the channel without the identity on the removed
+     * target (GetKrausOperators), in the same order.
+     *
+     * The result is built on first use and kept with the channel: its copies
+     * share it, and what it caches in turn.
+     */
+    QuantumChannel OnActiveQubits() const
+    {
+        if (GetNumberOfQubits() != 2 || ActiveQubits().size() == 2)
+            return *this;
+        std::call_once(data_->reducedOnce, [this]() {
+            const size_t home = HomeQubit();
+            std::vector<Factor> factors;
+            for (const Factor &original : GetFactors())
+                factors.push_back(ReducedFactor(original, home));
+            if (data_->composed)
+            {
+                data_->reduced.push_back(FromFactors(std::move(factors), 1));
+                return;
+            }
+            // Given with its Kraus operators: the reduced channel is given with theirs on the remaining target, and
+            // with the same parts, which are not found again from the operators.
+            KrausOperators kraus;
+            kraus.reserve(data_->kraus.size());
+            for (const Matrix &op : data_->kraus)
+                kraus.emplace_back(LocalOperator(op, home == 0 ? LocalPart::kFirst : LocalPart::kSecond));
+            auto data = MakeDerivedData(std::move(kraus), 1);
+            if (!data_->pauliProbabilities.empty() && factors.size() == 1 && factors.front().kind == FactorKind::kPauli)
+                data->pauliProbabilities = factors.front().probabilities;
+            data->factors = std::move(factors);
+            data_->reduced.push_back(QuantumChannel(std::move(data)));
+        });
+        return data_->reduced.front();
+    }
+
+    // Whether a matrix is a multiple of the identity, compared exactly: as a gate it changes nothing but a global phase.
+    static bool IsMultipleOfIdentity(const Matrix &matrix)
+    {
+        return matrix.rows() > 0 && (matrix - matrix(0, 0) * Matrix::Identity(matrix.rows(), matrix.cols())).isZero(0.0);
+    }
+
+    // The targets a two-qubit unitary acts on, found exactly, for a simulator
+    // that applies a drawn branch of a unitary mixture as a gate: a two-qubit
+    // gate makes a matrix product state bring its qubits together, which can
+    // truncate under a bond limit, also when the gate is the identity or acts
+    // on one of them only. With the first
+    // target as local matrix bit zero, U = V1 (x) V0 has entries
+    // U(2 i1 + i0, 2 j1 + j0) = V1(i1, j1) V0(i0, j0). When U is the identity
+    // on one target, `local` is what it does on the other.
+    enum class LocalPart
+    {
+        kNone,   // a multiple of the identity: at most a phase, U(0, 0), which needs no second qubit
+        kFirst,  // `local` on the first target
+        kSecond, // `local` on the second target
+        kBoth    // a gate on both
+    };
+
+    static LocalPart LocalPartOfTwoQubitUnitary(const Matrix &unitary, Eigen::Matrix2cd &local)
+    {
+        if (unitary.rows() != 4 || unitary.cols() != 4)
+            return LocalPart::kBoth;
+        if (IsMultipleOfIdentity(unitary))
+            return LocalPart::kNone;
+        // Identity on the second target: two equal diagonal blocks, V0, and nothing off them.
+        if (unitary.block(0, 2, 2, 2).isZero(0.0) && unitary.block(2, 0, 2, 2).isZero(0.0) && unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
+        {
+            local = unitary.block(0, 0, 2, 2);
+            return LocalPart::kFirst;
+        }
+        // Identity on the first target: entries only where its bit is kept, the same for both of its values.
+        bool second = true;
+        for (int i1 = 0; i1 < 2 && second; ++i1)
+            for (int j1 = 0; j1 < 2 && second; ++j1)
+                second = unitary(2 * i1, 2 * j1) == unitary(2 * i1 + 1, 2 * j1 + 1) && unitary(2 * i1, 2 * j1 + 1) == 0. && unitary(2 * i1 + 1, 2 * j1) == 0.;
+        if (second)
+        {
+            for (int i1 = 0; i1 < 2; ++i1)
+                for (int j1 = 0; j1 < 2; ++j1)
+                    local(i1, j1) = unitary(2 * i1, 2 * j1);
+            return LocalPart::kSecond;
+        }
+        return LocalPart::kBoth;
+    }
+
+    /**
+     * Operators on two targets that are all the identity on the same target:
+     * what they do on the other one, as 2x2 operators in the same order.
+     * `position` is the target they act on (0 the first, 1 the second; 0 when
+     * every operator is a multiple of the identity). False when an operator
+     * acts on both targets, or two of them act on different ones. A simulator
+     * that would have to bring the two targets together applies `local` on
+     * the one target instead.
+     */
+    static bool LocalOperators(const KrausOperators &operators, size_t &position, KrausOperators &local)
+    {
+        LocalPart side = LocalPart::kNone;
+        local.clear();
+        local.reserve(operators.size());
+        for (const Matrix &op : operators)
+        {
+            Eigen::Matrix2cd part;
+            const LocalPart found = LocalPartOfTwoQubitUnitary(op, part);
+            if (found == LocalPart::kBoth || (found != LocalPart::kNone && side != LocalPart::kNone && found != side))
+                return false;
+            if (found == LocalPart::kNone)
+                part = op(0, 0) * Eigen::Matrix2cd::Identity();
+            else
+                side = found;
+            local.emplace_back(part);
+        }
+        position = side == LocalPart::kSecond ? 1 : 0;
+        return !operators.empty();
+    }
+
     /** A one-qubit channel on one target of a two-qubit channel that leaves the other target alone. */
     static QuantumChannel OnQubit(const QuantumChannel &channel, size_t localQubit, size_t numQubits = 2)
     {
         if (channel.GetNumberOfQubits() != 1 || numQubits < 1 || numQubits > 2 || localQubit >= numQubits)
             throw std::invalid_argument("OnQubit places a one-qubit channel on a target of a one- or two-qubit channel");
+        // On the one target of a one-qubit channel: the channel itself, as Placed returns it.
+        if (numQubits == 1)
+            return channel;
+        if (numQubits == 2 && IsGiven(channel))
+            return PlaceGiven(channel, {localQubit});
         std::vector<Factor> factors = channel.GetFactors();
         for (Factor &factor : factors)
             for (size_t &q : factor.qubits)
@@ -373,6 +620,8 @@ class QuantumChannel
         }
         if (inPlace)
             return channel;
+        if (numQubits == 2 && IsGiven(channel))
+            return PlaceGiven(channel, localQubits);
         std::vector<Factor> factors = channel.GetFactors();
         for (Factor &factor : factors)
             for (size_t &q : factor.qubits)
@@ -793,6 +1042,13 @@ class QuantumChannel
         mutable std::once_flag firstOnce;
         // Whether the channel has one branch only (IsDeterministic): -1 until asked.
         mutable std::atomic<signed char> deterministic{-1};
+        // The targets the channel acts on, and the channel on those alone when they are not all of them, found on
+        // first use (ActiveQubits, OnActiveQubits). The reduced channel is kept so that what it caches in turn (its
+        // canonical Kraus operators, an eigendecomposition) is computed once, not at every application.
+        mutable std::vector<size_t> active;
+        mutable std::once_flag activeOnce;
+        mutable std::vector<QuantumChannel> reduced;
+        mutable std::once_flag reducedOnce;
     };
 
     explicit QuantumChannel(std::shared_ptr<Data> data) : data_(std::move(data))
@@ -920,6 +1176,18 @@ class QuantumChannel
         auto data = std::make_shared<Data>();
         data->kraus = std::move(krausOperators);
         data->numQubits = Validate(data->kraus);
+        return data;
+    }
+
+    // The data of a channel whose operators come from those of a channel that was validated: the same operators
+    // with the identity added on a target or removed from one, or with the targets exchanged. They are not
+    // validated again. The tolerance of the check grows with the dimension, so operators accepted on two targets
+    // (rounded input) could be rejected on one, and a request that was accepted would fail when it is applied.
+    static std::shared_ptr<Data> MakeDerivedData(KrausOperators krausOperators, size_t numQubits)
+    {
+        auto data = std::make_shared<Data>();
+        data->kraus = std::move(krausOperators);
+        data->numQubits = numQubits;
         return data;
     }
 
@@ -1091,6 +1359,151 @@ class QuantumChannel
     }
 
     // Probabilities over a factor's targets as probabilities over all targets, identity elsewhere.
+    // Whether a channel holds the Kraus operators it was given with, which GetKrausOperators returns: one built
+    // from Kraus operators, a mixture of unitaries, a relaxation. A composed channel derives its operators, and a
+    // channel built by Pauli() keeps its probabilities in the form the samplers read.
+    static bool IsGiven(const QuantumChannel &channel)
+    {
+        return !channel.data_->composed && channel.data_->pauliProbabilities.empty();
+    }
+
+    // A channel given with its Kraus operators, placed on targets of a two-qubit channel: it stays given, with the
+    // same operators in the same order, each with the identity on a target it is not placed on, and with the same
+    // parts on their new targets. Placing a channel does not replace its operators by derived ones.
+    static QuantumChannel PlaceGiven(const QuantumChannel &channel, const std::vector<size_t> &localQubits)
+    {
+        KrausOperators kraus;
+        kraus.reserve(channel.data_->kraus.size());
+        for (const Matrix &op : channel.data_->kraus)
+        {
+            Matrix placed = Matrix::Zero(4, 4);
+            if (localQubits.size() == 1)
+            {
+                // On one target, the identity on the other.
+                const bool first = localQubits[0] == 0;
+                for (Eigen::Index idle = 0; idle < 2; ++idle)
+                    for (Eigen::Index row = 0; row < 2; ++row)
+                        for (Eigen::Index column = 0; column < 2; ++column)
+                            placed(first ? 2 * idle + row : 2 * row + idle, first ? 2 * idle + column : 2 * column + idle) = op(row, column);
+            }
+            else
+            {
+                // The two targets exchanged: the two bits of each index trade places.
+                const auto swapped = [](Eigen::Index index) { return ((index & 1) << 1) | (index >> 1); };
+                for (Eigen::Index row = 0; row < 4; ++row)
+                    for (Eigen::Index column = 0; column < 4; ++column)
+                        placed(row, column) = op(swapped(row), swapped(column));
+            }
+            kraus.push_back(std::move(placed));
+        }
+        auto data = MakeDerivedData(std::move(kraus), 2);
+        std::vector<Factor> factors = channel.GetFactors();
+        for (Factor &factor : factors)
+            for (size_t &q : factor.qubits)
+                q = localQubits[q];
+        data->factors = std::move(factors);
+        return QuantumChannel(std::move(data));
+    }
+
+    // What a 4x4 operator that is the identity on one target does on the other one, `side`. An operator that is a
+    // multiple of the identity is that multiple of the 2x2 identity. Any other operator does not act on `side`
+    // alone: it can only be one that is never applied, and the identity stands in for it.
+    static Matrix LocalOperator(const Matrix &op, LocalPart side)
+    {
+        Eigen::Matrix2cd local;
+        const LocalPart part = LocalPartOfTwoQubitUnitary(op, local);
+        if (part == LocalPart::kNone)
+            local = op(0, 0) * Eigen::Matrix2cd::Identity();
+        else if (part != side)
+            local.setIdentity();
+        return local;
+    }
+
+    // A factor of a two-qubit channel that leaves a target alone, as a factor of the one-qubit channel on the other
+    // target, `home` (OnActiveQubits). Kind, order of the operators and probabilities stay; nothing is dropped.
+    static Factor ReducedFactor(const Factor &original, size_t home)
+    {
+        Factor factor = original;
+        factor.qubits = {0};
+        // The place of `home` among the factor's qubits, if it is one of them.
+        size_t place = original.qubits.size();
+        for (size_t k = 0; k < original.qubits.size(); ++k)
+            if (original.qubits[k] == home)
+                place = k;
+        if (original.kind == FactorKind::kPauli)
+        {
+            // Its terms on `home`: every term that counts has the identity elsewhere.
+            std::vector<double> reduced(4, 0.0);
+            for (size_t index = 0; index < original.probabilities.size(); ++index)
+                reduced[place < original.qubits.size() ? (index >> (2 * place)) & 3 : 0] += original.probabilities[index];
+            factor.probabilities = std::move(reduced);
+        }
+        else if (original.qubits.size() == 2)
+            for (Matrix &op : factor.operators)
+                op = LocalOperator(op, place == 0 ? LocalPart::kFirst : LocalPart::kSecond);
+        // A one-qubit factor on `home` stays as it is. One on the removed target is a phase times the identity in
+        // every operator: it moves to `home` unchanged, where the phase is applied and the branch drawn as before.
+        return factor;
+    }
+
+    // Whether a factor is known to change nothing: each of its operators that counts (non-zero, and of non-zero
+    // probability in a mixture) is a multiple of the identity. A damping of strength zero, a relaxation of zero
+    // duration and a mixture of the identity alone are written that way; the comparison is exact.
+    static bool FactorIsIdentity(const Factor &factor)
+    {
+        if (factor.kind == FactorKind::kPauli)
+        {
+            for (size_t index = 1; index < factor.probabilities.size(); ++index)
+                if (factor.probabilities[index] != 0.0)
+                    return false;
+            return true;
+        }
+        for (size_t index = 0; index < factor.operators.size(); ++index)
+        {
+            if (!OperatorCounts(factor, index))
+                continue;
+            const Matrix &op = factor.operators[index];
+            if (op.rows() == 0 || !(op - op(0, 0) * Matrix::Identity(op.rows(), op.cols())).isZero(0.0))
+                return false;
+        }
+        return !factor.operators.empty();
+    }
+
+    // Whether a factor acts on the k-th of its qubits. A Pauli mixture does when a term of non-zero probability has
+    // a Pauli other than the identity there. A factor of operators on two qubits does when one of its operators
+    // that count is not the identity there (LocalPartOfTwoQubitUnitary): a bit flip written as a mixture of 4x4
+    // unitaries acts on one qubit only. Any other factor acts on its qubit unless it is the identity.
+    static bool FactorActsOn(const Factor &factor, size_t k)
+    {
+        if (factor.kind == FactorKind::kPauli)
+        {
+            for (size_t index = 0; index < factor.probabilities.size(); ++index)
+                if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
+                    return true;
+            return false;
+        }
+        if (FactorIsIdentity(factor))
+            return false;
+        if (factor.qubits.size() != 2)
+            return true;
+        for (size_t index = 0; index < factor.operators.size(); ++index)
+        {
+            if (!OperatorCounts(factor, index))
+                continue;
+            Eigen::Matrix2cd local;
+            const LocalPart part = LocalPartOfTwoQubitUnitary(factor.operators[index], local);
+            if (part == LocalPart::kBoth || (part == LocalPart::kFirst && k == 0) || (part == LocalPart::kSecond && k == 1))
+                return true;
+        }
+        return false;
+    }
+
+    // Whether an operator of a factor is ever applied: of non-zero probability in a mixture.
+    static bool OperatorCounts(const Factor &factor, size_t index)
+    {
+        return factor.kind != FactorKind::kUnitaryMixture || index >= factor.probabilities.size() || factor.probabilities[index] != 0.0;
+    }
+
     static std::vector<double> ExpandPauli(const Factor &factor, size_t numQubits)
     {
         const size_t terms = size_t{1} << (2 * numQubits);

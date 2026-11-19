@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <iostream>
 #include <numeric>
 #include <optional>
@@ -874,6 +875,135 @@ void HostSimulatorReuse()
             reused->ExecuteOnHost(CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 1), measured}), 0);
             Check(fresh.size() == 4 && reused->RepeatedExecuteOnHost(noisy, 0, 257) == fresh, "Host reuse leaked retained state or readout RNG position");
         }
+}
+
+// Jobs that clone a prepared simulator take their clones in job order. The pool does not run the
+// jobs it takes after one has failed, so their turns never come: a failing job has to release the
+// jobs already waiting, and the caller gets its exception.
+void FailedJobReleasesCloneTurns()
+{
+    class FailingX : public Circuits::XGate<>
+    {
+      public:
+        FailingX() : XGate(0)
+        {
+        }
+
+        void Execute(const std::shared_ptr<Simulators::ISimulator> &, Circuits::OperationState &) const override
+        {
+            throw std::runtime_error("shot failed");
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Clone() const override
+        {
+            return std::make_shared<FailingX>(*this);
+        }
+    };
+
+    const auto circuitWith = [](bool failing) {
+        auto circuit = std::make_shared<Circuit>();
+        if (failing)
+            circuit->AddOperation(std::make_shared<FailingX>());
+        else
+            circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        return circuit;
+    };
+
+    // Job 0 fails, job 1 is one the pool skipped, job 2 already waits for its turn.
+    for (bool waiterFirst : {true, false})
+    {
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector);
+        std::shared_ptr<Simulators::ISimulator> prepared = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQCSim, Method::kStatevector);
+        prepared->AllocateQubits(2);
+        prepared->Initialize();
+        const auto order = std::make_shared<Network::ExecuteJob<>::CloneOrder>();
+        Counts counts;
+        std::mutex mutex;
+        const auto makeJob = [&](bool failing, uint64_t index) {
+            const auto circuit = circuitWith(failing);
+            auto job = std::make_shared<Network::ExecuteJob<>>(circuit, counts, 1, 2, 2, 2, Backend::kQCSim, Method::kStatevector, mutex);
+            job->network = network;
+            job->cloneSource = prepared;
+            job->cloneOrder = order;
+            job->cloneIndex = index;
+            job->executedGates.assign(circuit->size(), false);
+            return job;
+        };
+        const auto failing = makeJob(true, 0), waiting = makeJob(false, 2);
+        std::promise<void> released;
+        auto done = released.get_future();
+        std::thread waiter;
+        const auto startWaiter = [&] {
+            waiter = std::thread([&] {
+                try
+                {
+                    waiting->DoWork();
+                    released.set_value();
+                }
+                catch (...)
+                {
+                    released.set_exception(std::current_exception());
+                }
+            });
+        };
+        if (waiterFirst)
+        {
+            startWaiter();
+            // Let it reach the wait: its turn (2) is not the next one (0).
+            Check(done.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout, "A job cloned before its turn");
+        }
+        bool thrown = false;
+        try
+        {
+            failing->DoWork();
+        }
+        catch (const std::runtime_error &error)
+        {
+            thrown = std::string(error.what()) == "shot failed";
+        }
+        Check(thrown, "A failing job did not pass its exception on");
+        if (!waiterFirst)
+            startWaiter();
+        if (done.wait_for(std::chrono::seconds(30)) != std::future_status::ready)
+        {
+            // The waiter cannot be joined: report and leave.
+            std::cerr << "A job waited for the clone turn of a job that never ran, after another job failed\n";
+            std::_Exit(1);
+        }
+        waiter.join();
+        done.get(); // the released job ends without an exception of its own
+        Check(counts.empty(), "A job released by a failure still ran its shots");
+    }
+
+    // Without a failure the turns pass from job to job, whatever order the jobs start in.
+    {
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector);
+        std::shared_ptr<Simulators::ISimulator> prepared = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQCSim, Method::kStatevector);
+        prepared->AllocateQubits(2);
+        prepared->Initialize();
+        const auto order = std::make_shared<Network::ExecuteJob<>::CloneOrder>();
+        Counts counts;
+        std::mutex mutex;
+        std::vector<std::thread> threads;
+        for (uint64_t index : {uint64_t{2}, uint64_t{1}, uint64_t{0}})
+        {
+            const auto circuit = circuitWith(false);
+            auto job = std::make_shared<Network::ExecuteJob<>>(circuit, counts, 3, 2, 2, 2, Backend::kQCSim, Method::kStatevector, mutex);
+            job->network = network;
+            job->cloneSource = prepared;
+            job->cloneOrder = order;
+            job->cloneIndex = index;
+            job->executedGates.assign(circuit->size(), false);
+            threads.emplace_back([job] { job->DoWork(); });
+        }
+        for (auto &thread : threads)
+            thread.join();
+        size_t total = 0;
+        for (const auto &entry : counts)
+            total += entry.second;
+        Check(total == 9 && order->next == 3 && !order->cancelled, "Jobs taking their clones in turn lost shots");
+    }
 }
 
 void QCSimWorkerRandomStreams()
@@ -3087,6 +3217,7 @@ try
     NoiseClonePolicy();
     ConditionalOutputMapping();
     QCSimWorkerRandomStreams();
+    FailedJobReleasesCloneTurns();
     AdaptiveWorkerCounts();
     LargeTrajectoryWorkers();
     LargeTrajectoryThreadBudget();

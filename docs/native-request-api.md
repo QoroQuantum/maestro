@@ -428,7 +428,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `enable_sampling_reduction` | `` | boolean | all (default false) |
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
-| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO |
+| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO; Qiskit Aer statevector and MPS |
 | `counts_policy` | `` | `auto` (default), `legacy`, `frame_v1` or `multinomial_v1` | all (specialized samplers run on QCSim) |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
@@ -879,21 +879,26 @@ the reported backend and method are `qcsim` and `stabilizer`,
 seed section above). Shot rows (below) always report `sampling_strategy`;
 counts from the ordinary executor omit it.
 
-Noisy CPU QCSim `execute` requests can run their
-realizations on several networks at once, within `max_simulators` and
-`trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
+Noisy CPU `execute` requests on QCSim, and on the Qiskit Aer statevector and
+MPS, can run their realizations on several networks at once, within
+`max_simulators` and `trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
 counts replay for the same request configuration. Multi-shot realizations keep
 their shared noise and execute as complete batches; outer workers use one inner
 simulator each. `execution_metadata.realization_workers` reports the actual
 outer concurrency for ordinary noisy execute requests, and for shot-row
 requests whose realizations ran on such workers (a dedicated sampler, such as
-frames, draws the rows without them and leaves it out). Noisy `estimate` and
-`noisy_fidelity` requests run their realizations one after another on the
-request's simulator and report 1. Checkpoint suffixes retain
-their defined call order. The Python noisy execute, estimate and fidelity
-functions report the number as `realization_workers` in their result, by the
-same rule; there the realizations of an estimate and of a fidelity run on
-several workers.
+frames, draws the rows without them and leaves it out). Noisy `estimate`
+requests run their realizations on such workers too and sum them in
+realization order; they report the workers available to the realizations
+after the first one, which runs alone to warm the estimation cache: at most
+one fewer than the realizations, and at least 1 (one or two realizations
+report 1). It is an upper
+bound on the realizations that overlap, not a count of them. `noisy_fidelity` requests run their realizations
+one after another on the request's simulator and report 1. Checkpoint
+suffixes retain their defined call order. The Python noisy execute, estimate
+and fidelity functions report the number as `realization_workers` in their
+result, by the same rule; there the realizations of a fidelity run on several
+workers too.
 
 ### Shot rows
 

@@ -169,5 +169,8 @@ def test_gpu_estimates_do_not_depend_on_worker_count():
                       pp_memory_limit_bytes=256 << 20,
                       pp_sampling_cache_nodes=1024)
     assert tuned == pytest.approx(serial, abs=1e-9)
+    # The GPU propagator runs in single precision unless asked otherwise
+    # (7e-8 from QCSim here); in double it matches QCSim.
     cpu = _estimate(maestro.SimulatorType.QCSim)
-    assert serial == pytest.approx(cpu, abs=1e-9)
+    double = _estimate(gpu, pp_workers=1, precision="double")
+    assert double == pytest.approx(cpu, abs=1e-9)
