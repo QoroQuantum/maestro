@@ -298,7 +298,7 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_bond_limit_does_not_truncate_marginal_
         }
         for (const auto &query : queries)
         {
-            const auto marginal = sim->Probabilities(query);
+            const auto marginal = sim->MarginalProbabilities(query);
             BOOST_REQUIRE_EQUAL(marginal.size(), size_t{1} << query.size());
             for (size_t outcome = 0; outcome < marginal.size(); ++outcome)
                 BOOST_TEST(std::abs(marginal[outcome] - 1. / marginal.size()) < 1e-9, "bond limit '" << bond << "', marginal of " << query.size()
@@ -952,6 +952,105 @@ BOOST_AUTO_TEST_CASE(a_target_a_channel_leaves_alone_does_not_change_the_operati
         BOOST_TEST((dephasing.ActiveQubits() == std::vector<size_t>{1}));
         BOOST_TEST(sameOperators(dephasing.OnActiveQubits().GetKrausOperators(), Channel::KrausOperators{p0, p1}));
         BOOST_TEST((dephasing.OnActiveQubits().GetFactors()[0].kind == dephasing.GetFactors()[0].kind));
+    }
+}
+
+// Probability, Amplitude and Probabilities take basis-state indices, and MarginalProbabilities takes
+// qubits, the same on every backend. The Aer statevector, MPS and stabilizer used to answer
+// Probabilities with Aer's marginal over the outcomes read as qubits (2^k values; a read past the
+// state or a crash for an outcome of the qubit count or more), and an outcome past the register was
+// 0 on some backends, the probability of its low bits on others, and a read past the state on the
+// QCSim statevector. It is std::out_of_range everywhere now.
+BOOST_AUTO_TEST_CASE(basis_state_queries_agree_on_every_backend)
+{
+    using Type = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+
+    struct Backend
+    {
+        Type type;
+        Method method;
+        const char *name;
+        bool amplitudes;       // Amplitude is defined
+        bool allProbabilities; // AllProbabilities is defined
+    };
+
+    const std::vector<Backend> backends{{Type::kQiskitAer, Method::kStatevector, "Aer statevector", true, true},
+                                        {Type::kQiskitAer, Method::kMatrixProductState, "Aer MPS", true, true},
+                                        {Type::kQiskitAer, Method::kStabilizer, "Aer stabilizer", false, true},
+                                        {Type::kQiskitAer, Method::kExtendedStabilizer, "Aer extended stabilizer", true, true},
+                                        {Type::kQiskitAer, Method::kDensityMatrix, "Aer density matrix", false, true},
+                                        {Type::kQCSim, Method::kStatevector, "QCSim statevector", true, true},
+                                        {Type::kQCSim, Method::kMatrixProductState, "QCSim MPS", true, true},
+                                        {Type::kQCSim, Method::kMatrixProductOperator, "QCSim MPO", false, true},
+                                        {Type::kQCSim, Method::kDensityMatrix, "QCSim density matrix", false, true},
+                                        {Type::kQCSim, Method::kStabilizer, "QCSim stabilizer", false, true},
+                                        {Type::kQCSim, Method::kExtendedStabilizer, "QCSim extended stabilizer", false, true},
+                                        {Type::kQCSim, Method::kPauliPropagator, "QCSim Pauli propagator", false, true},
+                                        {Type::kQCSim, Method::kPathIntegral, "QCSim path integral", true, true},
+                                        {Type::kCompositeQCSim, Method::kStatevector, "QCSim composite", true, true},
+                                        {Type::kCompositeQiskitAer, Method::kStatevector, "Aer composite", true, true}};
+    constexpr size_t qubits = 3;
+    for (const Backend &backend : backends)
+    {
+        BOOST_TEST_CONTEXT(backend.name)
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(backend.type, backend.method);
+            BOOST_REQUIRE(sim);
+            sim->AllocateQubits(qubits);
+            sim->Initialize();
+            sim->SetSeed(1);
+            // Clifford, so that every method holds it exactly: (|000> + i|011>)/sqrt(2), then H on qubit 2.
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyS(0);
+            sim->ApplyH(2);
+            const std::vector<double> all = sim->AllProbabilities();
+            BOOST_REQUIRE_EQUAL(all.size(), size_t{1} << qubits);
+            BOOST_TEST(std::abs(all[0] - 0.25) < 1e-9);
+            BOOST_TEST(std::abs(all[3] - 0.25) < 1e-9);
+
+            // One value per outcome, in the order given, each what Probability returns.
+            const Types::qubits_vector outcomes{7, 0, 3, 4, 6, 1, 3};
+            const std::vector<double> probabilities = sim->Probabilities(outcomes);
+            BOOST_REQUIRE_EQUAL(probabilities.size(), outcomes.size());
+            for (size_t i = 0; i < outcomes.size(); ++i)
+            {
+                BOOST_TEST(std::abs(probabilities[i] - all[outcomes[i]]) < 1e-9, "outcome " << outcomes[i]);
+                BOOST_TEST(std::abs(sim->Probability(outcomes[i]) - all[outcomes[i]]) < 1e-9, "outcome " << outcomes[i]);
+                if (backend.amplitudes)
+                    BOOST_TEST(std::abs(std::norm(sim->Amplitude(outcomes[i])) - all[outcomes[i]]) < 1e-9, "outcome " << outcomes[i]);
+            }
+
+            // Past the register: the same error everywhere, for one outcome and inside a list.
+            for (const Types::qubit_t outside : {Types::qubit_t{8}, Types::qubit_t{11}, Types::qubit_t{64}, Types::qubit_t{1} << 40})
+            {
+                BOOST_CHECK_THROW(sim->Probability(outside), std::out_of_range);
+                BOOST_CHECK_THROW(sim->Probabilities({0, outside}), std::out_of_range);
+                if (backend.amplitudes)
+                    BOOST_CHECK_THROW(sim->Amplitude(outside), std::out_of_range);
+            }
+
+            // The distribution of some qubits, the first listed the least significant bit.
+            for (const Types::qubits_vector &marginalQubits : std::vector<Types::qubits_vector>{{2, 0}, {0, 1}, {1}, {2, 1, 0}, {}})
+            {
+                std::vector<double> expected(size_t{1} << marginalQubits.size(), 0.);
+                for (size_t index = 0; index < all.size(); ++index)
+                {
+                    size_t outcome = 0;
+                    for (size_t k = 0; k < marginalQubits.size(); ++k)
+                        if ((index >> marginalQubits[k]) & 1)
+                            outcome |= size_t{1} << k;
+                    expected[outcome] += all[index];
+                }
+                const std::vector<double> marginal = sim->MarginalProbabilities(marginalQubits);
+                BOOST_REQUIRE_EQUAL(marginal.size(), expected.size());
+                for (size_t i = 0; i < expected.size(); ++i)
+                    BOOST_TEST(std::abs(marginal[i] - expected[i]) < 1e-9, "marginal of " << marginalQubits.size() << " qubits, outcome " << i);
+            }
+            BOOST_CHECK_THROW(sim->MarginalProbabilities({0, 0}), std::invalid_argument);
+            BOOST_CHECK_THROW(sim->MarginalProbabilities({0, 3}), std::out_of_range);
+        }
     }
 }
 

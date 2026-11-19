@@ -28,6 +28,7 @@
 #include <limits>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -975,7 +976,9 @@ class IState
      * @sa IState::Amplitude
      * @sa IState::Probabilities
      *
-     * @param outcome The outcome to obtain the probability for.
+     * @param outcome The outcome to obtain the probability for: a basis-state
+     * index, qubit q as bit q. It must be below 2^GetNumberOfQubits();
+     * otherwise std::out_of_range is thrown (see RequireBasisState).
      * @return The probability of the specified outcome.
      */
     virtual double Probability(Types::qubit_t outcome) = 0;
@@ -987,7 +990,8 @@ class IState
      * @sa IState::Probability
      * @sa IState::Probabilities
      *
-     * @param outcome The outcome to obtain the amplitude for.
+     * @param outcome The outcome to obtain the amplitude for, a basis-state
+     * index below 2^GetNumberOfQubits(); otherwise std::out_of_range is thrown.
      * @return The amplitude of the specified outcome.
      */
     virtual std::complex<double> Amplitude(Types::qubit_t outcome) = 0;
@@ -1044,15 +1048,59 @@ class IState
     /**
      * @brief Returns the probabilities of the specified outcomes.
      *
-     * Use it to obtain the probabilities of the specified outcomes.
+     * Use it to obtain the probabilities of the specified outcomes: one value
+     * per outcome, in the order given, each what Probability returns for it.
+     * The outcomes are basis-state indices (qubit q as bit q), not qubits; an
+     * outcome of 2^GetNumberOfQubits() or more throws std::out_of_range. For
+     * the distribution of some of the qubits, see MarginalProbabilities.
      * @sa IState::Probability
      * @sa IState::Amplitude
+     * @sa IState::MarginalProbabilities
      *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
+     * @param outcomes The basis-state indices.
+     * @return The probability of each outcome.
      */
-    virtual std::vector<double> Probabilities(const Types::qubits_vector &qubits) = 0;
+    virtual std::vector<double> Probabilities(const Types::qubits_vector &outcomes)
+    {
+        std::vector<double> result;
+        result.reserve(outcomes.size());
+        for (const Types::qubit_t outcome : outcomes)
+            result.push_back(Probability(outcome));
+        return result;
+    }
+
+    /**
+     * @brief Returns the probability distribution of some of the qubits.
+     *
+     * The marginal distribution of the listed qubits, the others traced out:
+     * 2^k values for k qubits, with the first listed qubit as the least
+     * significant bit of the index (as the packed outcomes of SampleCounts).
+     * The qubits must be distinct and below GetNumberOfQubits(); otherwise
+     * std::invalid_argument, or std::out_of_range for a qubit past the
+     * register, is thrown.
+     *
+     * The default sums AllProbabilities, so it costs what the whole
+     * distribution costs; a backend that has the marginal directly (Qiskit
+     * Aer) overrides it.
+     *
+     * @param qubits The qubits, the first one the least significant bit.
+     * @return The 2^k probabilities.
+     */
+    virtual std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits)
+    {
+        RequireMarginalQubits(qubits);
+        const std::vector<double> all = AllProbabilities();
+        std::vector<double> result(size_t{1} << qubits.size(), 0.0);
+        for (size_t index = 0; index < all.size(); ++index)
+        {
+            size_t outcome = 0;
+            for (size_t k = 0; k < qubits.size(); ++k)
+                if (qubits[k] < std::numeric_limits<size_t>::digits && ((index >> qubits[k]) & 1))
+                    outcome |= size_t{1} << k;
+            result[outcome] += all[index];
+        }
+        return result;
+    }
 
     /**
      * @brief Returns the counts of the outcomes of measurement of the specified
@@ -1325,6 +1373,38 @@ class IState
     }
 
   protected:
+    /**
+     * Throws std::out_of_range unless `outcome` is a basis state of this
+     * register: below 2^GetNumberOfQubits(). Every implementation of
+     * Probability and Amplitude checks it first (AmplitudeRaw too, where the
+     * state is still in place; Aer checks its saved amplitudes), so an outcome
+     * past the register is the same error on every backend. (It used to be
+     * 0 on some, the probability of its low bits on others, and a read past
+     * the state on others again.)
+     */
+    void RequireBasisState(Types::qubit_t outcome) const
+    {
+        const size_t qubits = GetNumberOfQubits();
+        if (qubits < static_cast<size_t>(std::numeric_limits<Types::qubit_t>::digits) && (outcome >> qubits) != 0)
+            throw std::out_of_range("Basis state " + std::to_string(outcome) + " is out of range for a register of " + std::to_string(qubits) + " qubits");
+    }
+
+    /** The qubits of a marginal distribution (MarginalProbabilities): distinct, in the register, at most 62 of them. */
+    void RequireMarginalQubits(const Types::qubits_vector &qubits) const
+    {
+        const size_t count = GetNumberOfQubits();
+        if (qubits.size() > 62)
+            throw std::invalid_argument("A marginal distribution of more than 62 qubits cannot be returned");
+        for (size_t k = 0; k < qubits.size(); ++k)
+        {
+            if (qubits[k] >= count)
+                throw std::out_of_range("Qubit " + std::to_string(qubits[k]) + " is out of range for a register of " + std::to_string(count) + " qubits");
+            for (size_t j = 0; j < k; ++j)
+                if (qubits[j] == qubits[k])
+                    throw std::invalid_argument("The qubits of a marginal distribution must be distinct");
+        }
+    }
+
     /** Shared by SetSeed and backend Configure("seed") implementations. */
     void SeedAuxiliaryRng(uint64_t seed)
     {

@@ -1916,6 +1916,29 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
+        double *MarginalProbabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits)
+    {
+        try
+        {
+            if (!sim || !qubits || nrQubits == 0)
+                return nullptr;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+            const auto probabilities = simulator->MarginalProbabilities(qubitVector);
+
+            double *result = new double[probabilities.size()];
+            std::copy(probabilities.begin(), probabilities.end(), result);
+            return result;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
         unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots)
     {
         try

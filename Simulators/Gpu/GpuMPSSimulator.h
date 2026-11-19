@@ -402,6 +402,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         double real = 0.0;
         double imag = 0.0;
         {

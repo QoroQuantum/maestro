@@ -183,6 +183,36 @@ def test_save_restore_and_flush(simulator):
     assert simulator.Probability(4) == pytest.approx(0)
 
 
+@pytest.mark.parametrize("backend_name, method_name", [
+    ("QCSim", "Statevector"), ("QCSim", "MatrixProductState"),
+    ("QiskitAer", "Statevector"), ("QiskitAer", "MatrixProductState")])
+def test_probabilities_take_basis_states_on_every_backend(backend_name, method_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    getattr(maestro.SimulationType, method_name))
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(3)
+        sim.InitializeSimulator()
+        sim.ApplyH(0)
+        sim.ApplyCX(0, 1)
+        sim.FlushSimulator()
+        # Basis-state indices, one value each (Aer's statevector and MPS used to return the
+        # marginal of the indices read as qubits, and crashed for an index of 3 or more).
+        assert sim.Probabilities([3, 0, 1, 7]) == pytest.approx([0.5, 0.5, 0, 0])
+        with pytest.raises(IndexError):
+            sim.Probabilities([0, 8])
+        with pytest.raises(IndexError):
+            sim.Probability(8)
+        # The distribution of qubits: the first listed the least significant bit.
+        assert sim.MarginalProbabilities([1, 2]) == pytest.approx([0.5, 0.5, 0, 0])
+        assert sim.MarginalProbabilities([0, 1]) == pytest.approx([0.5, 0, 0, 0.5])
+    finally:
+        owner.destroy_simulator(handle)
+
+
 @pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
 def test_internal_state_save_restore(backend_name):
     if not hasattr(maestro.SimulatorType, backend_name):

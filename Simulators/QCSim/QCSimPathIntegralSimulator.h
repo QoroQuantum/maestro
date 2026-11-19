@@ -156,11 +156,13 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pathIntegralSimulator->Probability(outcome);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pathIntegralSimulator->AmplitudeForOutcome(outcome);
     }
 
@@ -170,16 +172,6 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)
             result[i] = pathIntegralSimulator->Probability(i);
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = pathIntegralSimulator->Probability(qubits[i]);
-        }
         return result;
     }
 
@@ -805,8 +797,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
                     return Utils::Sampling::CountCdfRange<Many>(
                         amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); }, bit, uniform, options);
                 return Utils::Sampling::CountCdfRange<Many>(
-                    amplitudes, shots, qubits.size(), [amplitudeShift](const auto &row) { return ScaledNorm(row.second, amplitudeShift); }, bit,
-                    uniform, options);
+                    amplitudes, shots, qubits.size(), [amplitudeShift](const auto &row) { return ScaledNorm(row.second, amplitudeShift); }, bit, uniform,
+                    options);
             });
             NotifyObservers(qubits);
             return result;

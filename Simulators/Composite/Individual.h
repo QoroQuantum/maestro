@@ -810,22 +810,6 @@ class IndividualSimulator : public ISimulator
     }
 
     /**
-     * @brief Returns the probabilities of the specified outcomes.
-     *
-     * Use it to obtain the probabilities of the specified outcomes.
-     *
-     * WARNING: Use it with care, might not do what you expect.
-     *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
-     */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        return simulator->Probabilities(ConvertQubits(qubits));
-    }
-
-    /**
      * @brief Returns the counts of the outcomes of measurement of the specified
      * qubits, for repeated measurements.
      *

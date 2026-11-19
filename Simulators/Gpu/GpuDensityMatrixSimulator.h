@@ -373,6 +373,7 @@ class GpuDensityMatrixSimulator : public ImmediateGpuSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return densityMatrix->Probability(outcome);
     }
 
@@ -392,16 +393,6 @@ class GpuDensityMatrixSimulator : public ImmediateGpuSimulator
         const size_t numStates = size_t{1} << nrQubits;
         std::vector<double> result(numStates);
         densityMatrix->AllProbabilities(result.data());
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (size_t i = 0; i < qubits.size(); ++i)
-                result[i] = densityMatrix->Probability(qubits[i]);
-        }
         return result;
     }
 

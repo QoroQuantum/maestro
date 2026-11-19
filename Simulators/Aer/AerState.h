@@ -684,6 +684,7 @@ class AerState : public ISimulator
      */
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return state->probability(outcome);
     }
 
@@ -699,6 +700,7 @@ class AerState : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         if (simulationType == SimulationType::kDensityMatrix)
             throw std::runtime_error("AerState::Amplitude is not defined for density matrix simulation");
 
@@ -771,28 +773,40 @@ class AerState : public ISimulator
      * @return A vector with the probabilities for the specified qubit
      * configurations.
      */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
+    std::vector<double> Probabilities(const Types::qubits_vector &outcomes) override
     {
-        if (simulationType == SimulationType::kDensityMatrix)
-        {
-            std::vector<double> probabilities;
-            probabilities.reserve(qubits.size());
-            for (const auto outcome : qubits)
-                probabilities.push_back(state->probability(outcome));
-            return probabilities;
-        }
-
+        // One value per basis-state index. Aer's own probabilities(qubits) is the marginal distribution of qubits
+        // (MarginalProbabilities): this called it on the statevector, MPS and stabilizer, which read the outcomes
+        // as qubits, returned 2^k values, and read past the state for an outcome of the qubit count or more.
+        for (const Types::qubit_t outcome : outcomes)
+            RequireBasisState(outcome);
         if (simulationType == SimulationType::kExtendedStabilizer)
         {
             const auto amplitudes = state->statevector();
             std::vector<double> probabilities;
-            probabilities.reserve(qubits.size());
-            for (const auto outcome : qubits)
+            probabilities.reserve(outcomes.size());
+            for (const auto outcome : outcomes)
                 probabilities.push_back(outcome < amplitudes.size() ? std::norm(amplitudes[outcome]) : 0.0);
             return probabilities;
         }
+        return IState::Probabilities(outcomes);
+    }
 
-        return state->probabilities(qubits);
+    /**
+     * @brief Returns the probability distribution of some of the qubits.
+     *
+     * Aer computes it directly (save_probs on the qubits) on the statevector,
+     * the density matrix, the matrix product state and the stabilizer; the
+     * extended stabilizer sums its statevector. The first listed qubit is the
+     * least significant bit, as Aer orders it.
+     * @sa IState::MarginalProbabilities
+     */
+    std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits) override
+    {
+        RequireMarginalQubits(qubits);
+        if (simulationType == SimulationType::kExtendedStabilizer || qubits.empty())
+            return IState::MarginalProbabilities(qubits);
+        return state->probabilities(AER::reg_t(qubits.begin(), qubits.end()));
     }
 
     /**
@@ -1190,6 +1204,9 @@ class AerState : public ISimulator
             throw std::runtime_error("AerState::AmplitudeRaw is not defined for density matrix "
                                      "simulation");
 
+        // Read from the destructively saved amplitudes: the state itself, and so its qubit count, is gone.
+        if (outcome >= savedAmplitudes.size())
+            throw std::out_of_range("AerState::AmplitudeRaw: basis state " + std::to_string(outcome) + " is not in the saved state");
         return savedAmplitudes[outcome];
     }
 

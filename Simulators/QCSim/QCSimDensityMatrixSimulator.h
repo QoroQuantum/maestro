@@ -355,6 +355,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return densityMatrix->getBasisStateProbability(outcome);
     }
 
@@ -370,16 +371,6 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)
             result[i] = densityMatrix->getBasisStateProbability(i);
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = densityMatrix->getBasisStateProbability(qubits[i]);
-        }
         return result;
     }
 

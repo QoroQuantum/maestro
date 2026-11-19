@@ -140,6 +140,7 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         if constexpr (std::numeric_limits<size_t>::digits >= std::numeric_limits<Types::qubit_t>::digits)
         {
             return cliffordSimulator->getBasisStateProbability(static_cast<size_t>(outcome));
@@ -159,12 +160,6 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
     std::vector<double> AllProbabilities() override
     {
         return cliffordSimulator->AllProbabilities();
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        throw std::runtime_error("QCSimState::Probabilities: Invalid simulation "
-                                 "type for obtaining probabilities.");
     }
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override

@@ -314,6 +314,7 @@ class QuestState : public ISimulator
      */
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return questLib->GetOutcomeProbability(sim, static_cast<long long int>(outcome));
     }
 
@@ -329,6 +330,7 @@ class QuestState : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         std::complex<double> amplitude;
         if (questLib->GetAmplitude(sim, static_cast<long long int>(outcome), amplitude))
         {
@@ -376,25 +378,6 @@ class QuestState : public ISimulator
         std::vector<double> result(numStates);
         for (size_t i = 0; i < numStates; ++i)
             result[i] = std::norm(amplitudes[i]);
-        return result;
-    }
-
-    /**
-     * @brief Returns the probabilities of the specified outcomes.
-     *
-     * Use it to obtain the probabilities of the specified outcomes.
-     * @sa QuestState::Probability
-     * @sa QuestState::Amplitude
-     *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
-     */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        for (size_t i = 0; i < qubits.size(); ++i)
-            result[i] = questLib->GetOutcomeProbability(sim, static_cast<long long int>(qubits[i]));
         return result;
     }
 

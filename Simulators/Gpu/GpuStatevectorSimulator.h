@@ -235,11 +235,13 @@ class GpuStatevectorSimulator : public ImmediateGpuSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return state->BasisStateProbability(outcome);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         double real = 0.0;
         double imag = 0.0;
         state->Amplitude(outcome, &real, &imag);
@@ -256,16 +258,6 @@ class GpuStatevectorSimulator : public ImmediateGpuSimulator
         const size_t numStates = size_t{1} << nrQubits;
         std::vector<double> result(numStates);
         state->AllProbabilities(result.data());
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (size_t i = 0; i < qubits.size(); ++i)
-                result[i] = state->BasisStateProbability(qubits[i]);
-        }
         return result;
     }
 

@@ -361,6 +361,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         std::complex<double> res = 1.0;
 
         for (auto &[id, simulator] : simulators)
@@ -476,6 +477,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         std::complex<double> res = 1.0;
 
         for (auto &[id, simulator] : simulators)
@@ -521,25 +523,6 @@ class ImmediateCompositeSimulator : public ISimulator
 
         for (size_t i = 0; i < nrBasisStates; ++i)
             result.emplace_back(Probability(i));
-
-        return result;
-    }
-
-    /**
-     * @brief Returns the probabilities of the specified outcomes.
-     *
-     * Use it to obtain the probabilities of the specified outcomes.
-     *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
-     */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result;
-
-        for (size_t i = 0; i < qubits.size(); ++i)
-            result.emplace_back(Probability(qubits[i]));
 
         return result;
     }

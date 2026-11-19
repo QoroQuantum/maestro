@@ -436,12 +436,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
-        return mpsSimulator->getBasisStateProbability(static_cast<unsigned int>(outcome));
+        RequireBasisState(outcome);
+        return mpsSimulator->getBasisStateProbability(static_cast<size_t>(outcome));
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
-        return mpsSimulator->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
+        RequireBasisState(outcome);
+        return mpsSimulator->getBasisStateAmplitude(static_cast<size_t>(outcome));
     }
 
     std::complex<double> ProjectOnZero() override
@@ -455,16 +457,6 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         std::vector<double> result(probs.size());
         for (int i = 0; i < probs.size(); ++i)
             result[i] = probs[i].real();
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = mpsSimulator->getBasisStateProbability(qubits[i]);
-        }
         return result;
     }
 

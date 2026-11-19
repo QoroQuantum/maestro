@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Probabilities(outcomes)` takes basis-state indices and returns one
+  probability per index on every backend, as documented. On the Qiskit Aer
+  statevector, MPS and stabilizer it returned Aer's marginal distribution of
+  the indices read as qubits: 2^k values, and a read past the state or a crash
+  for an index of the qubit count or more. The marginal of some qubits is
+  `MarginalProbabilities(qubits)`, new on every backend (C++, Python, C API):
+  2^k values, the first listed qubit the least significant bit, computed
+  directly by Aer and from the whole distribution elsewhere.
+- `Probability`, `Amplitude` and `Probabilities` throw `std::out_of_range`
+  (Python `IndexError`) for a basis state of 2^n or more on every backend.
+  It was 0 on some, the probability of the index's low bits on others (QCSim
+  MPS and path integral, Aer MPS and stabilizer), and a read past the state
+  on the QCSim statevector. `Probability` and `Amplitude` on the QCSim
+  statevector and MPS no longer cut the index to 32 bits, which on an MPS of
+  more than 32 qubits read another basis state.
+- `Probabilities` now works on the QCSim stabilizer and tensor network, from
+  their `Probability`; the composite simulator's components no longer read
+  the outcomes as qubits.
+
 - Noisy trajectories on the Qiskit Aer statevector and matrix product state
   run on realization workers, as on QCSim, from the Python noisy functions,
   C++ callers (`ExecuteNoisy`, `EstimateNoisy`) and native requests. They ran

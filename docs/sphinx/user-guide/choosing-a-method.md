@@ -411,7 +411,7 @@ while its handle is alive.
 |----------|---------|
 | Lifecycle | `AllocateQubits`, `GetNumberOfQubits`, `InitializeSimulator`, `ResetSimulator`, `ClearSimulator`, `FlushSimulator` |
 | Configuration | `ConfigureSimulator`, `GetConfiguration`, `GetSimulatorType`, `GetSimulationType`, `SetMultithreading`, `GetMultithreading`, `IsQcsim` |
-| Measurement and state queries | `Measure`, `MeasureNoCollapse`, `ApplyReset`, `Probability`, `Amplitude`, `AllProbabilities`, `Probabilities`, `SampleCounts` |
+| Measurement and state queries | `Measure`, `MeasureNoCollapse`, `ApplyReset`, `Probability`, `Amplitude`, `AllProbabilities`, `Probabilities`, `MarginalProbabilities`, `SampleCounts` |
 | Saved state | `SaveState`, `RestoreState`, `SaveStateToInternalDestructive`, `RestoreInternalDestructiveSavedState` |
 | Single-qubit gates | `ApplyX`, `ApplyY`, `ApplyZ`, `ApplyH`, `ApplyS`, `ApplySDG`, `ApplyT`, `ApplyTDG`, `ApplySX`, `ApplySXDG`, `ApplyK`, `ApplyP`, `ApplyRx`, `ApplyRy`, `ApplyRz`, `ApplyU` |
 | Controlled gates | `ApplyCX`, `ApplyCY`, `ApplyCZ`, `ApplyCH`, `ApplyCSX`, `ApplyCSXDG`, `ApplyCP`, `ApplyCRx`, `ApplyCRy`, `ApplyCRz`, `ApplyCU`, `ApplyCCX` |
@@ -419,10 +419,14 @@ while its handle is alive.
 
 `Initialize`, `Reset`, `Configure`, `Clear` and `Flush` are shorter aliases for
 the methods ending in `Simulator`. Pass Python sequences for qubits or outcomes.
-`Amplitude` returns a complex number, `AllProbabilities` and `Probabilities`
-return lists, and `SampleCounts` returns a dictionary from integer outcomes to
-counts (`shots=1000` by default). `Probabilities` takes basis-state indices,
-while `Measure`, `ApplyReset` and `SampleCounts` take qubit indices. Packed
+`Amplitude` returns a complex number, `AllProbabilities`, `Probabilities` and
+`MarginalProbabilities` return lists, and `SampleCounts` returns a dictionary
+from integer outcomes to counts (`shots=1000` by default). `Probability`,
+`Amplitude` and `Probabilities` take basis-state indices, one value per index,
+and raise `IndexError` for an index of `2**num_qubits` or more, on every
+backend. `MarginalProbabilities`, `Measure`, `ApplyReset` and `SampleCounts`
+take qubit indices; `MarginalProbabilities` returns the `2**k` probabilities of
+the listed qubits. Packed
 outcomes use the first listed qubit as the least significant bit; for
 `MeasureNoCollapse`, qubit 0 is the least significant bit. `ApplyU` and
 `ApplyCU` take `theta`, `phi`, `lambda_` and an optional `gamma=0.0`.

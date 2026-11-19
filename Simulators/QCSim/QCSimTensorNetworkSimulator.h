@@ -140,6 +140,7 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return tensorNetwork->getBasisStateProbability(outcome);
     }
 
@@ -153,12 +154,6 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
     {
         throw std::runtime_error("QCSimState::AllProbabilities: Invalid "
                                  "simulation type for obtaining probabilities.");
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        throw std::runtime_error("QCSimState::Probabilities: Not implemented yet "
-                                 "for the tensor network simulator.");
     }
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override

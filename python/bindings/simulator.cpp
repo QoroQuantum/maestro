@@ -131,7 +131,12 @@ void bind_simulator(nb::module_ &m)
              nb::call_guard<nb::gil_scoped_release>(),
              "MPS expectation of ordered one-qubit operators; repeated targets "
              "are allowed.")
-        .def("Probabilities", &Simulators::ISimulator::Probabilities, "outcomes"_a, "Return probabilities for the given basis-state indices.")
+        .def("Probabilities", &Simulators::ISimulator::Probabilities, "outcomes"_a,
+             "Return probabilities for the given basis-state indices, one per index. An index of "
+             "2**num_qubits or more raises IndexError.")
+        .def("MarginalProbabilities", &Simulators::ISimulator::MarginalProbabilities, "qubits"_a,
+             "Return the probability distribution of the given qubits, the others traced out: "
+             "2**len(qubits) values, the first listed qubit the least significant bit.")
         .def("SampleCounts", &Simulators::ISimulator::SampleCounts, "qubits"_a, "shots"_a = 1000,
              "Sample without collapsing the state, returning {integer_outcome: "
              "count}; the first listed qubit is the least-significant result bit.")

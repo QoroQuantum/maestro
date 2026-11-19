@@ -268,6 +268,7 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pp->Probability(outcome);
     }
 
@@ -293,16 +294,6 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
             {
                 result[i] = pp->Probability(i);
             }
-        }
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (size_t i = 0; i < qubits.size(); ++i)
-                result[i] = pp->Probability(qubits[i]);
         }
         return result;
     }
