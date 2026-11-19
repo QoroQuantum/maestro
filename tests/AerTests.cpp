@@ -404,7 +404,9 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_channel_does_not_move_targets_it_leave
     {
         BOOST_TEST(idle.ActiveQubits().empty());
         BOOST_TEST((Channel::OnQubit(idle, 0).Then(damping, {1}).ActiveQubits() == std::vector<size_t>{1}));
-        BOOST_TEST(Channel::OnQubit(idle, 0).Then(damping, {1}).OnActiveQubits().GetFactors().size() == 1u);
+        // Nothing is dropped: the part that changes nothing stays in the reduced channel, where its
+        // branch is still drawn.
+        BOOST_TEST(Channel::OnQubit(idle, 0).Then(damping, {1}).OnActiveQubits().GetFactors().size() == 2u);
     }
     // The list is kept with the channel: a reference for a channel that stays, a copy for a temporary.
     static_assert(std::is_same_v<decltype(damping.ActiveQubits()), const std::vector<size_t> &>);
@@ -711,6 +713,209 @@ BOOST_AUTO_TEST_CASE(unitary_mixture_branches_reach_only_the_targets_they_act_on
         const auto probabilities = sim->AllProbabilities(), expected = reference->AllProbabilities();
         for (size_t i = 0; i < probabilities.size(); ++i)
             BOOST_TEST(std::abs(probabilities[i] - expected[i]) < 1e-9);
+    }
+}
+
+// One operation, however it is given: on its qubit, on two targets with the other left alone (in
+// either order, placed, with the targets exchanged), reduced by hand, or rebuilt from its exported
+// Kraus operators. Removing a target a channel leaves alone must change nothing: not the branch a
+// seed draws, not the operators applied, not a phase, on any backend. The comparison is of amplitudes.
+//
+// What makes it hold (QuantumChannel::OnActiveQubits, GetKrausOperators): the reduced channel keeps
+// every part of the channel, with its kind, operators, order and probabilities, so the same draws
+// select the same branches; and the Kraus operators of a channel are those of its reduced form with
+// the identity on the removed target, so the two descriptions cannot disagree.
+BOOST_AUTO_TEST_CASE(a_channel_is_the_same_operation_however_its_targets_are_given)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Matrix = Eigen::MatrixXcd;
+    using Type = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    const std::complex<double> phase(0., 1.);
+    const Matrix one = Matrix::Identity(2, 2);
+    Matrix k0 = Matrix::Zero(2, 2), k1 = Matrix::Zero(2, 2), x = Matrix::Zero(2, 2), p0 = Matrix::Zero(2, 2), p1 = Matrix::Zero(2, 2), up(2, 2), down(2, 2);
+    k0(0, 0) = 1.;
+    k0(1, 1) = std::sqrt(0.7);
+    k1(0, 1) = std::sqrt(0.3);
+    x(0, 1) = x(1, 0) = 1.;
+    p0(0, 0) = p1(1, 1) = 1.;
+    const double c = std::cos(std::acos(-1.) / 4), s = std::sin(std::acos(-1.) / 4);
+    up << c, -s, s, c;
+    down << c, s, -s, c;
+    // A 2x2 operator on one target of two, the identity on the other.
+    const auto pad = [](const Matrix &op, size_t home) {
+        Matrix full = Matrix::Zero(4, 4);
+        for (int idle = 0; idle < 2; ++idle)
+            for (int row = 0; row < 2; ++row)
+                for (int column = 0; column < 2; ++column)
+                    full(home == 0 ? 2 * idle + row : 2 * row + idle, home == 0 ? 2 * idle + column : 2 * column + idle) = op(row, column);
+        return full;
+    };
+    const auto sameOperators = [](const Channel::KrausOperators &a, const Channel::KrausOperators &b) {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if ((a[i] - b[i]).cwiseAbs().maxCoeff() > 1e-12)
+                return false;
+        return true;
+    };
+
+    struct Backend
+    {
+        Type type;
+        Method method;
+        const char *name;
+    };
+
+    const std::vector<Backend> backends{{Type::kQiskitAer, Method::kStatevector, "Aer statevector"},
+                                        {Type::kQiskitAer, Method::kMatrixProductState, "Aer MPS"},
+                                        {Type::kQCSim, Method::kStatevector, "QCSim statevector"},
+                                        {Type::kQCSim, Method::kMatrixProductState, "QCSim MPS"}};
+    const Types::qubit_t target = 1, other = 2;
+    const auto amplitudes = [](const Backend &backend, uint64_t seed, const Types::qubits_vector &targets, const Channel &channel) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(backend.type, backend.method);
+        sim->AllocateQubits(3);
+        sim->Initialize();
+        sim->SetSeed(seed);
+        sim->ApplyRy(0, 0.7);
+        sim->ApplyRy(1, 1.1);
+        sim->ApplyRy(2, 0.4);
+        sim->ApplyCX(0, 1);
+        sim->ApplyCX(1, 2);
+        sim->ApplyRy(1, 0.3);
+        sim->ApplyRz(1, 0.5);
+        sim->ApplyQuantumChannel(targets, channel);
+        std::vector<std::complex<double>> result;
+        for (size_t i = 0; i < 8; ++i)
+            result.push_back(sim->Amplitude(i));
+        return result;
+    };
+    const auto distance = [](const std::vector<std::complex<double>> &a, const std::vector<std::complex<double>> &b) {
+        double d = 0.;
+        for (size_t i = 0; i < a.size(); ++i)
+            d = std::max(d, std::abs(a[i] - b[i]));
+        return d;
+    };
+
+    const Channel given(Channel::KrausOperators{(k0 + k1) / std::sqrt(2.), (k0 - k1) / std::sqrt(2.)}); // a 30% damping, in another unraveling
+    const Channel identityPauli = Channel::Pauli(std::vector<double>{1., 0., 0., 0.});
+    // Whether a channel rebuilt from the exported Kraus operators is the same sampling program: on
+    // every backend when the channel is one set of Kraus operators; only where the Kraus operators are
+    // what is sampled (the Aer MPS, for a channel with a part that reads the state) when it has
+    // several parts; not at all when the operators are recognized as a Pauli or unitary mixture
+    // and drawn as that (see QuantumChannel::GetFactors), or carry relaxation parameters.
+    enum class Reload
+    {
+        kEverywhere,
+        kAerMps,
+        kNo
+    };
+
+    struct Base
+    {
+        const char *name;
+        Channel channel;
+        Reload reload;
+    };
+
+    const std::vector<Base> bases{
+        {"given Kraus operators", given, Reload::kEverywhere},
+        {"given Kraus operators, then an identity Pauli", given.Then(identityPauli), Reload::kAerMps},
+        {"an identity Pauli, then given Kraus operators", identityPauli.Then(given), Reload::kAerMps},
+        {"amplitude damping", Channel::AmplitudeDamping(0.3), Reload::kEverywhere},
+        {"bit flip", Channel::BitFlip(0.3), Reload::kNo},
+        {"bit flip, then amplitude damping", Channel::BitFlip(0.3).Then(Channel::AmplitudeDamping(0.9)), Reload::kAerMps},
+        {"a mixture of i X alone", Channel::UnitaryMixture({1.}, {Matrix(phase * x)}), Reload::kNo},
+        {"a mixture of two rotations", Channel::UnitaryMixture({0.5, 0.5}, {up, down}), Reload::kNo},
+        {"a mixture of i I alone, then a certain bit flip", Channel::UnitaryMixture({1.}, {Matrix(phase * one)}).Then(Channel::BitFlip(1.)), Reload::kNo},
+        {"dephasing given as two projectors", Channel(Channel::KrausOperators{p0, p1}), Reload::kNo},
+        {"relaxation with T2 <= T1", Channel::ThermalRelaxation(3e-5, 1e-4, 0.8e-4), Reload::kNo},
+        {"relaxation with T2 > T1", Channel::ThermalRelaxation(3e-5, 1e-4, 1.5e-4), Reload::kEverywhere},
+        {"an identity mixture, then amplitude damping", Channel::UnitaryMixture({1.}, {one}).Then(Channel::AmplitudeDamping(0.3)), Reload::kAerMps},
+        {"a damping of strength zero, then given Kraus operators", Channel::AmplitudeDamping(0.).Then(given), Reload::kAerMps},
+        {"depolarizing, then relaxation", Channel::Depolarizing(0.2).Then(Channel::ThermalRelaxation(3e-5, 1e-4, 1.5e-4)), Reload::kAerMps}};
+
+    for (const Base &base : bases)
+    {
+        const Channel &channel = base.channel;
+
+        struct Presentation
+        {
+            const char *name;
+            Types::qubits_vector targets;
+            Channel channel;
+        };
+
+        const Channel onSecond = Channel::OnQubit(channel, 1), onFirst = Channel::OnQubit(channel, 0);
+        const std::vector<Presentation> presentations{{"on the second of two targets", {other, target}, onSecond},
+                                                      {"on the first of two targets", {target, other}, onFirst},
+                                                      {"with the two targets exchanged", {target, other}, Channel::Placed(onSecond, {1, 0})},
+                                                      {"reduced to its active target", {target}, onSecond.OnActiveQubits()}};
+        // The two descriptions of a channel agree, in every presentation: its parts are those of the
+        // one-qubit channel, and its Kraus operators are that channel's with the identity added.
+        for (size_t i = 0; i < 3; ++i)
+        {
+            const Channel &placed = presentations[i].channel;
+            const Channel reduced = placed.OnActiveQubits();
+            BOOST_TEST(reduced.GetNumberOfQubits() == 1u, base.name << ", " << presentations[i].name);
+            BOOST_TEST(reduced.GetFactors().size() == channel.GetFactors().size(), base.name << ", " << presentations[i].name << ": parts were lost");
+            BOOST_TEST(sameOperators(reduced.GetKrausOperators(), channel.GetKrausOperators()),
+                       base.name << ", " << presentations[i].name << ": the reduced channel has other Kraus operators");
+            Channel::KrausOperators padded;
+            for (const Matrix &op : reduced.GetKrausOperators())
+                padded.push_back(pad(op, placed.HomeQubit()));
+            BOOST_TEST(sameOperators(padded, placed.GetKrausOperators()),
+                       base.name << ", " << presentations[i].name << ": the Kraus operators are not the reduced ones with the identity");
+        }
+        const Channel reloaded(onSecond.GetKrausOperators());
+        BOOST_TEST(sameOperators(reloaded.OnActiveQubits().GetKrausOperators(), channel.GetKrausOperators()),
+                   base.name << ": the exported Kraus operators do not reduce to the channel's");
+        for (const Backend &backend : backends)
+            for (uint64_t seed = 1; seed <= 6; ++seed)
+            {
+                const auto reference = amplitudes(backend, seed, {target}, channel);
+                for (const Presentation &presentation : presentations)
+                    BOOST_TEST(distance(amplitudes(backend, seed, presentation.targets, presentation.channel), reference) < 1e-9,
+                               base.name << " " << presentation.name << " on " << backend.name << ", seed " << seed << ": another trajectory");
+                const bool reload = base.reload == Reload::kEverywhere || (base.reload == Reload::kAerMps && std::string(backend.name) == "Aer MPS");
+                if (reload)
+                    BOOST_TEST(distance(amplitudes(backend, seed, {other, target}, reloaded), reference) < 1e-9,
+                               base.name << " rebuilt from its Kraus operators on " << backend.name << ", seed " << seed << ": another trajectory");
+            }
+    }
+
+    // A part on the target the channel otherwise leaves alone can only be a phase times the identity.
+    // It stays in the reduced channel, on the remaining target: its phase is applied, its branch drawn.
+    const std::vector<Base> withIdlePart{
+        {"i I on the idle target, then X on the other",
+         Channel::OnQubit(Channel::UnitaryMixture({1.}, {Matrix(phase * one)}), 0).Then(Channel::UnitaryMixture({1.}, {x}), {1}), Reload::kNo},
+        {"a draw between I and -I on the idle target, then a bit flip",
+         Channel::OnQubit(Channel::UnitaryMixture({0.5, 0.5}, {one, Matrix(-one)}), 0).Then(Channel::BitFlip(0.5), {1}), Reload::kNo},
+        {"i I on the idle target, then amplitude damping",
+         Channel::OnQubit(Channel::UnitaryMixture({1.}, {Matrix(phase * one)}), 0).Then(Channel::AmplitudeDamping(0.3), {1}), Reload::kNo},
+        {"a damping of strength zero on the idle target, then given Kraus operators", Channel::OnQubit(Channel::AmplitudeDamping(0.), 0).Then(given, {1}),
+         Reload::kNo},
+        {"an identity Pauli on the idle target, then given Kraus operators", Channel::OnQubit(identityPauli, 0).Then(given, {1}), Reload::kNo},
+        {"a bit flip, then i I on the idle target", Channel::OnQubit(Channel::BitFlip(0.5), 1).Then(Channel::UnitaryMixture({1.}, {Matrix(phase * one)}), {0}),
+         Reload::kNo}};
+    for (const Base &base : withIdlePart)
+    {
+        const Channel reduced = base.channel.OnActiveQubits();
+        BOOST_TEST(reduced.GetNumberOfQubits() == 1u, base.name);
+        BOOST_TEST(reduced.GetFactors().size() == base.channel.GetFactors().size(), base.name << ": a part was dropped");
+        for (const Backend &backend : backends)
+            for (uint64_t seed = 1; seed <= 6; ++seed)
+                BOOST_TEST(distance(amplitudes(backend, seed, {target}, reduced), amplitudes(backend, seed, {other, target}, base.channel)) < 1e-9,
+                           base.name << " on " << backend.name << ", seed " << seed << ": the reduced channel is another trajectory");
+    }
+
+    // Kraus operators given on two targets, the identity on one: the reduced channel has those
+    // operators on the other, also when they are recognized as a Pauli mixture and drawn as one.
+    {
+        const Channel dephasing(Channel::KrausOperators{pad(p0, 1), pad(p1, 1)});
+        BOOST_TEST((dephasing.ActiveQubits() == std::vector<size_t>{1}));
+        BOOST_TEST(sameOperators(dephasing.OnActiveQubits().GetKrausOperators(), Channel::KrausOperators{p0, p1}));
+        BOOST_TEST((dephasing.OnActiveQubits().GetFactors()[0].kind == dephasing.GetFactors()[0].kind));
     }
 }
 

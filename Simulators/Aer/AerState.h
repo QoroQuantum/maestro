@@ -497,24 +497,23 @@ class AerState : public ISimulator
         // unitary mixture, T2 <= T1 relaxation as nothing, a phase flip or a
         // rare reset) keeps its cheaper draws below.
         //
-        // Only the targets the channel acts on go to Aer. To apply an operation
-        // on two qubits, the matrix product state first moves them next to
-        // each other, and under a bond limit that move truncates the state: a
-        // channel given on two targets that damps only one of them changed
-        // the other, and the qubits entangled with it.
+        // Only the target the channel acts on goes to Aer when it leaves the
+        // other alone. To apply an operation on two qubits, the matrix product
+        // state first moves them next to each other, and under a bond limit
+        // that move truncates the state: a channel given on two targets that
+        // damps only one of them changed the other, and the qubits entangled
+        // with it. The reduced channel is the same operation (its Kraus
+        // operators are the channel's without the identity on the other target,
+        // in the same order), so the trajectory does not depend on how the
+        // channel was given.
         if (simulationType == SimulationType::kMatrixProductState &&
             std::any_of(factors.begin(), factors.end(), [](const QuantumChannel::Factor &factor) { return AppliesAsKraus(factor); }))
         {
-            const std::vector<size_t> &active = channel.ActiveQubits();
-            if (active.size() == targets.size())
+            const QuantumChannel reduced = channel.OnActiveQubits();
+            if (reduced.GetNumberOfQubits() == targets.size())
                 state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
-            else if (!active.empty()) // a channel that acts on no target changes nothing
-            {
-                AER::reg_t activeTargets;
-                for (const size_t local : active)
-                    activeTargets.push_back(targets[local]);
-                state->apply_kraus(activeTargets, toAer(channel.OnActiveQubits().GetKrausOperators()));
-            }
+            else
+                state->apply_kraus(AER::reg_t{targets[channel.HomeQubit()]}, toAer(reduced.GetKrausOperators()));
             NotifyObservers(targets);
             return;
         }
