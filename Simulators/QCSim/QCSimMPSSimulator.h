@@ -437,13 +437,15 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     double Probability(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
-        return mpsSimulator->getBasisStateProbability(static_cast<size_t>(outcome));
+        std::vector<bool> bits = BasisStateBits(outcome);
+        return mpsSimulator->getBasisStateProbability(bits);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
-        return mpsSimulator->getBasisStateAmplitude(static_cast<size_t>(outcome));
+        std::vector<bool> bits = BasisStateBits(outcome);
+        return mpsSimulator->getBasisStateAmplitude(bits);
     }
 
     std::complex<double> ProjectOnZero() override
@@ -453,10 +455,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // QCSim lists the statevector up to 31 qubits and returns nothing at 32: that is not a distribution.
         const Eigen::VectorXcd probs = mpsSimulator->getRegisterStorage().cwiseAbs2();
-        std::vector<double> result(probs.size());
-        for (int i = 0; i < probs.size(); ++i)
-            result[i] = probs[i].real();
+        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits) || static_cast<size_t>(probs.size()) != (size_t{1} << nrQubits))
+            throw std::length_error("The basis states of a matrix product state of " + std::to_string(nrQubits) + " qubits cannot all be listed");
+        std::vector<double> result(static_cast<size_t>(probs.size()));
+        for (Eigen::Index i = 0; i < probs.size(); ++i)
+            result[static_cast<size_t>(i)] = probs[i].real();
         return result;
     }
 
@@ -1088,6 +1094,16 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     }
 
   protected:
+    // The bits of a basis state, qubit q as element q. QCSim's size_t overloads take the index as a size_t, which
+    // on a 32-bit build cuts a 64-bit index (2^32 on 33 qubits read as 0); the bits never cut it.
+    std::vector<bool> BasisStateBits(Types::qubit_t outcome) const
+    {
+        std::vector<bool> bits(nrQubits, false);
+        for (size_t q = 0; q < nrQubits && q < static_cast<size_t>(std::numeric_limits<Types::qubit_t>::digits); ++q)
+            bits[q] = ((outcome >> q) & 1) != 0;
+        return bits;
+    }
+
     bool UseProbabilitySampling() const
     {
         return !configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities";

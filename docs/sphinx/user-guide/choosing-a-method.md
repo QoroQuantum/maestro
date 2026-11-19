@@ -423,10 +423,21 @@ the methods ending in `Simulator`. Pass Python sequences for qubits or outcomes.
 `MarginalProbabilities` return lists, and `SampleCounts` returns a dictionary
 from integer outcomes to counts (`shots=1000` by default). `Probability`,
 `Amplitude` and `Probabilities` take basis-state indices, one value per index,
-and raise `IndexError` for an index of `2**num_qubits` or more, on every
-backend. `MarginalProbabilities`, `Measure`, `ApplyReset` and `SampleCounts`
-take qubit indices; `MarginalProbabilities` returns the `2**k` probabilities of
-the listed qubits. Packed
+and raise `IndexError` for an index of `2**num_qubits` or more on every backend
+where they are defined. `Amplitude` raises `RuntimeError` on methods without
+amplitudes (density matrix, MPO, stabilizer, Pauli propagator, tensor
+network), whatever the index; an index that does not fit in 64 bits raises
+`TypeError` before it reaches Maestro; and a register without qubits raises
+`RuntimeError`, having no state to query. `MarginalProbabilities`, `Measure`,
+`ApplyReset` and `SampleCounts` take qubit indices; `MarginalProbabilities`
+returns the `2**k` probabilities of the listed qubits (one value, the total
+probability, for none), and raises an error where the register is too wide
+to list its basis states (`ValueError`; `RuntimeError` on the QCSim
+stabilizer past 32 qubits) rather than returning zeros. On the Aer extended
+stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact
+amplitude of its decomposition over a sampled estimate of the norm, the same
+on every call for a given state), while `AllProbabilities` divides by the
+exact norm. Packed
 outcomes use the first listed qubit as the least significant bit; for
 `MeasureNoCollapse`, qubit 0 is the least significant bit. `ApplyU` and
 `ApplyCU` take `theta`, `phi`, `lambda_` and an optional `gamma=0.0`.

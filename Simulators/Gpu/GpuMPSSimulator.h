@@ -424,8 +424,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (mps)
             return mps->AllProbabilities();
         if (nrQubits >= std::numeric_limits<size_t>::digits)

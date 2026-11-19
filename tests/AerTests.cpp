@@ -1031,7 +1031,11 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_agree_on_every_backend)
                 BOOST_CHECK_THROW(sim->Probabilities({0, outside}), std::out_of_range);
                 if (backend.amplitudes)
                     BOOST_CHECK_THROW(sim->Amplitude(outside), std::out_of_range);
+                else // a method without amplitudes says so first, whatever the index
+                    BOOST_CHECK_THROW(sim->Amplitude(outside), std::runtime_error);
             }
+            if (!backend.amplitudes)
+                BOOST_CHECK_THROW(sim->Amplitude(0), std::runtime_error);
 
             // The distribution of some qubits, the first listed the least significant bit.
             for (const Types::qubits_vector &marginalQubits : std::vector<Types::qubits_vector>{{2, 0}, {0, 1}, {1}, {2, 1, 0}, {}})
@@ -1054,6 +1058,145 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_agree_on_every_backend)
             BOOST_CHECK_THROW(sim->MarginalProbabilities({0, 3}), std::out_of_range);
         }
     }
+}
+
+// The edges of the basis-state queries: a register without qubits, registers too wide to list every
+// basis state, an empty marginal on a wide register, and indices past 32 bits.
+BOOST_AUTO_TEST_CASE(basis_state_queries_at_the_edges_of_the_register)
+{
+    using Type = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    const std::vector<std::pair<Type, Method>> backends{{Type::kQiskitAer, Method::kStatevector},      {Type::kQiskitAer, Method::kMatrixProductState},
+                                                        {Type::kQiskitAer, Method::kStabilizer},       {Type::kQiskitAer, Method::kExtendedStabilizer},
+                                                        {Type::kQiskitAer, Method::kDensityMatrix},    {Type::kQCSim, Method::kStatevector},
+                                                        {Type::kQCSim, Method::kMatrixProductState},   {Type::kQCSim, Method::kMatrixProductOperator},
+                                                        {Type::kQCSim, Method::kDensityMatrix},        {Type::kQCSim, Method::kStabilizer},
+                                                        {Type::kQCSim, Method::kExtendedStabilizer},   {Type::kQCSim, Method::kPauliPropagator},
+                                                        {Type::kQCSim, Method::kPathIntegral},         {Type::kQCSim, Method::kTensorNetwork},
+                                                        {Type::kCompositeQCSim, Method::kStatevector}, {Type::kCompositeQiskitAer, Method::kStatevector}};
+    // No qubits: no state to query, and an error rather than a read through a missing state.
+    for (const auto &[type, method] : backends)
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, method);
+        sim->AllocateQubits(0);
+        sim->Initialize();
+        BOOST_CHECK_THROW(sim->Probability(0), std::runtime_error);
+        BOOST_CHECK_THROW(sim->Probabilities({0}), std::runtime_error);
+        BOOST_CHECK_THROW(sim->Amplitude(0), std::runtime_error);
+        BOOST_CHECK_THROW(sim->MarginalProbabilities({}), std::runtime_error);
+        BOOST_CHECK_THROW(sim->AllProbabilities(), std::runtime_error);
+    }
+
+    // Too wide to list every basis state: the marginal throws rather than summing nothing.
+    struct Wide
+    {
+        Type type;
+        Method method;
+        size_t qubits;
+    };
+
+    for (const Wide &wide : {Wide{Type::kQCSim, Method::kMatrixProductState, 32}, Wide{Type::kQCSim, Method::kMatrixProductOperator, 64},
+                             Wide{Type::kQCSim, Method::kPathIntegral, 64}, Wide{Type::kQCSim, Method::kPauliPropagator, 64},
+                             Wide{Type::kCompositeQCSim, Method::kStatevector, 64}})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
+        sim->AllocateQubits(wide.qubits);
+        sim->Initialize();
+        sim->ApplyX(wide.qubits - 1);
+        BOOST_CHECK_THROW(sim->MarginalProbabilities({wide.qubits - 1}), std::length_error);
+        BOOST_CHECK_THROW(sim->AllProbabilities(), std::length_error);
+        BOOST_TEST(std::abs(sim->Probability(Types::qubit_t{1} << (wide.qubits - 1)) - 1.) < 1e-9);
+    }
+
+    // QCSim's stabilizer lists its distribution up to 32 qubits and throws its own error above.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStabilizer);
+        sim->AllocateQubits(40);
+        sim->Initialize();
+        sim->ApplyX(39);
+        BOOST_CHECK_THROW(sim->MarginalProbabilities({39}), std::exception);
+        BOOST_TEST(std::abs(sim->Probability(Types::qubit_t{1} << 39) - 1.) < 1e-12);
+    }
+
+    // An empty marginal is the total probability, not a read of the whole distribution: on a
+    // 65-qubit Aer stabilizer, past Aer's 64-qubit limit for the distribution.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kStabilizer);
+        sim->AllocateQubits(65);
+        sim->Initialize();
+        sim->ApplyX(64);
+        const auto last = sim->MarginalProbabilities({64});
+        BOOST_REQUIRE_EQUAL(last.size(), 2u);
+        BOOST_TEST(std::abs(last[1] - 1.) < 1e-12);
+        const auto total = sim->MarginalProbabilities({});
+        BOOST_REQUIRE_EQUAL(total.size(), 1u);
+        BOOST_TEST(std::abs(total[0] - 1.) < 1e-12);
+    }
+
+    // Indices past 32 bits on the QCSim MPS, read through the bits of the index.
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductState);
+        sim->AllocateQubits(40);
+        sim->Initialize();
+        sim->ApplyX(0);
+        sim->ApplyX(35);
+        const Types::qubit_t state = (Types::qubit_t{1} << 35) | 1;
+        BOOST_TEST(std::abs(sim->Probability(state) - 1.) < 1e-12);
+        BOOST_TEST(std::abs(std::norm(sim->Amplitude(state)) - 1.) < 1e-12);
+        BOOST_TEST(std::abs(sim->Probability(1)) < 1e-12);
+    }
+}
+
+// Aer's extended stabilizer Probability is an estimate: the exact amplitude of the decomposition
+// over a sampled estimate of its norm, the same on every call for a given state. Probabilities is
+// one Probability per index, so two simulators seeded alike, on one thread, and given the same
+// calls agree exactly; AllProbabilities divides by the exact norm instead.
+BOOST_AUTO_TEST_CASE(extended_stabilizer_probabilities_are_its_probability)
+{
+    const auto prepare = [](uint64_t seed) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kExtendedStabilizer);
+        // On several threads the norm is summed in parallel and agrees only to rounding: one thread, set before
+        // Initialize.
+        sim->SetMultithreading(false);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        sim->SetSeed(seed);
+        sim->ApplyH(0);
+        sim->ApplyT(0);
+        sim->ApplyH(0);
+        sim->ApplyCX(0, 1);
+        return sim;
+    };
+    for (uint64_t seed : {1, 6, 11})
+    {
+        auto batch = prepare(seed), single = prepare(seed);
+        const auto values = batch->Probabilities({0, 3, 1});
+        BOOST_REQUIRE_EQUAL(values.size(), 3u);
+        BOOST_TEST(values[0] == single->Probability(0), "seed " << seed);
+        BOOST_TEST(values[1] == single->Probability(3), "seed " << seed);
+        BOOST_TEST(values[2] == single->Probability(1), "seed " << seed);
+    }
+}
+
+// Qubit 63 on Aer's matrix product state. Aer maps an index between its internal qubit order and
+// the user's; it held the bit of a qubit as a signed integer, so the bit of qubit 63 was negative,
+// its right shift spread the sign, and a basis state with qubit 63 set read as probability 0
+// (qiskit-aer 23faa5b, the previous pin).
+BOOST_AUTO_TEST_CASE(matrix_product_state_reads_basis_states_with_qubit_63)
+{
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+    sim->AllocateQubits(64);
+    sim->Initialize();
+    sim->ApplyX(0);
+    sim->ApplyCX(0, 63); // reorders the chain to bring qubit 63 next to qubit 0
+    sim->ApplyCX(63, 31);
+    const Types::qubit_t state = (Types::qubit_t{1} << 63) | (Types::qubit_t{1} << 31) | 1;
+    BOOST_TEST(std::abs(sim->Probability(state) - 1.) < 1e-12);
+    BOOST_TEST(std::abs(sim->Probabilities({state})[0] - 1.) < 1e-12);
+    BOOST_TEST(std::abs(std::norm(sim->Amplitude(state)) - 1.) < 1e-12);
+    BOOST_TEST(std::abs(sim->Probability(state ^ (Types::qubit_t{1} << 63))) < 1e-12);
+    const auto marginal = sim->MarginalProbabilities({0, 63});
+    BOOST_TEST(std::abs(marginal[3] - 1.) < 1e-12);
 }
 
 BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit)

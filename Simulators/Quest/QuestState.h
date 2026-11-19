@@ -369,9 +369,11 @@ class QuestState : public ISimulator
      */
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
-        const size_t numStates = 1ULL << nrQubits;
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // 1 << n is undefined from 64 qubits: it listed one basis state, which passed for the distribution.
+        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
+            throw std::length_error("The basis states of a register of " + std::to_string(nrQubits) + " qubits cannot all be listed");
+        const size_t numStates = size_t{1} << nrQubits;
         std::vector<std::complex<double>> amplitudes(numStates);
         questLib->GetAmplitudes(sim, amplitudes);
 

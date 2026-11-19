@@ -157,6 +157,7 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
 
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         const size_t nrBasisStates = CheckedBasisStateCountForQueries();
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)

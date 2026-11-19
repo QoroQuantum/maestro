@@ -475,7 +475,7 @@ class ImmediateQCSimSimulator : public ISimulator
     size_t CheckedBasisStateCountForQueries() const
     {
         if (nrQubits >= std::numeric_limits<size_t>::digits)
-            throw std::runtime_error("ImmediateQCSimState: Too many qubits for enumerating basis states.");
+            throw std::length_error("ImmediateQCSimState: Too many qubits for enumerating basis states.");
         return 1ULL << nrQubits;
     }
 

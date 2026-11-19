@@ -518,7 +518,11 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::vector<double> AllProbabilities() override
     {
-        const size_t nrBasisStates = 1ULL << nrQubits;
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // 1 << n is undefined from 64 qubits: it listed one basis state, which passed for the distribution.
+        if (nrQubits >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
+            throw std::length_error("The basis states of a register of " + std::to_string(nrQubits) + " qubits cannot all be listed");
+        const size_t nrBasisStates = size_t{1} << nrQubits;
         std::vector<double> result;
 
         for (size_t i = 0; i < nrBasisStates; ++i)

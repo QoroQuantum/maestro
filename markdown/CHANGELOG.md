@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Probabilities` now works on the QCSim stabilizer and tensor network, from
   their `Probability`; the composite simulator's components no longer read
   the outcomes as qubits.
+- Basis-state queries at the edges of the register: a register without
+  qubits throws `std::runtime_error` (`RuntimeError` in Python), where most
+  backends read a state that was never created; a full distribution too
+  wide to list throws
+  `std::length_error` (QCSim MPS at 32 qubits returned nothing, the path
+  integral, Pauli propagator and composite one value at 64), so a marginal no
+  longer sums it to zero; an empty marginal is the total probability, from
+  the marginal of one qubit, also past Aer's 64-qubit limit for the
+  distribution; `Amplitude` on a method without amplitudes throws
+  `std::runtime_error` before the index is checked, on every backend; and the
+  QCSim MPS reads an index through its bits, never cutting it to `size_t`.
+  `AllProbabilities` on a register without qubits throws too, on every
+  backend, and `AllocateQubits(0)` on Aer no longer reads past an empty list
+  of qubit ids.
+- On the Aer extended stabilizer, `Probabilities` is one `Probability` per
+  index, Aer's estimate (the exact amplitude of the decomposition over a
+  sampled estimate of its norm); it read the statevector of the
+  decomposition, normalized exactly as `AllProbabilities` is, and so
+  disagreed with `Probability`.
 
 - Noisy trajectories on the Qiskit Aer statevector and matrix product state
   run on realization workers, as on QCSim, from the Python noisy functions,
@@ -120,7 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are faster there. With gate fusion, which hands the density matrix fused
   two-qubit blocks, run times do not change; with `gate_fusion` off they
   were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 23faa5b, and the wheel
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 3bf6094, and the wheel
   builds and `build.sh` check out that revision too, where they cloned Aer's
   default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
   matrix; noisy MPS runs could reach one while renormalizing the chain, and
@@ -136,8 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a Kraus operation on qubits apart weighs and applies its operator on the
   state after the qubits are moved together (it could pick an operator the
   truncated state gave no weight, and crash), and a gate on three qubits
-  stays within the limit. It inlines the
-  statevector index helpers, which the compiler had left out of line in
+  stays within the limit, and a basis state with qubit 63 set is read as
+  itself (on 64 qubits its probability and amplitude read as 0). It inlines
+  the statevector index helpers, which the compiler had left out of line in
   Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
   gates on up to five qubits on the scalar kernels, which beat the AVX2 one
   there (3.7x on one qubit). Maestro -> Aer statevector trajectories, 200

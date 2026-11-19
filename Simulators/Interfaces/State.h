@@ -983,7 +983,8 @@ class IState
      *
      * @param outcome The outcome to obtain the probability for: a basis-state
      * index, qubit q as bit q. It must be below 2^GetNumberOfQubits();
-     * otherwise std::out_of_range is thrown (see RequireBasisState).
+     * otherwise std::out_of_range is thrown (see RequireBasisState). A
+     * register without qubits throws std::runtime_error.
      * @return The probability of the specified outcome.
      */
     virtual double Probability(Types::qubit_t outcome) = 0;
@@ -997,6 +998,9 @@ class IState
      *
      * @param outcome The outcome to obtain the amplitude for, a basis-state
      * index below 2^GetNumberOfQubits(); otherwise std::out_of_range is thrown.
+     * A method without amplitudes (density matrix, matrix product operator,
+     * stabilizer, Pauli propagator, tensor network) throws std::runtime_error
+     * first, whatever the index.
      * @return The amplitude of the specified outcome.
      */
     virtual std::complex<double> Amplitude(Types::qubit_t outcome) = 0;
@@ -1082,12 +1086,17 @@ class IState
      * significant bit of the index (as the packed outcomes of SampleCounts).
      * The qubits must be distinct and below GetNumberOfQubits(); otherwise
      * std::invalid_argument, or std::out_of_range for a qubit past the
-     * register, is thrown.
+     * register, is thrown. No qubits is one value, the total probability,
+     * found as the sum of the marginal of qubit 0. A register without qubits
+     * throws std::runtime_error.
      *
      * The default sums the whole distribution (BasisProbabilities: also on a
      * tensor network, whose AllProbabilities is not defined, from one
-     * Probability per basis state), so it costs what that costs; a backend
-     * that has the marginal directly (Qiskit Aer) overrides it.
+     * Probability per basis state), so it costs what that costs, and throws
+     * where the register is too wide to list it (std::length_error, or the
+     * backend's own error, as QCSim's stabilizer past 32 qubits), never
+     * summing a short list; a backend that has the marginal directly (Qiskit
+     * Aer) overrides it.
      *
      * @param qubits The qubits, the first one the least significant bit.
      * @return The 2^k probabilities.
@@ -1095,7 +1104,15 @@ class IState
     virtual std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits)
     {
         RequireMarginalQubits(qubits);
+        if (qubits.empty())
+            return TotalProbability();
+        // A reader that cannot list every basis state must not pass for a distribution with no weight.
+        const size_t count = GetNumberOfQubits();
+        if (count >= static_cast<size_t>(std::numeric_limits<size_t>::digits))
+            throw std::length_error("The basis states of a register of " + std::to_string(count) + " qubits cannot all be listed");
         const std::vector<double> all = BasisProbabilities(*this);
+        if (all.size() != (size_t{1} << count))
+            throw std::length_error("The basis states of a register of " + std::to_string(count) + " qubits cannot all be listed");
         std::vector<double> result(size_t{1} << qubits.size(), 0.0);
         for (size_t index = 0; index < all.size(); ++index)
         {
@@ -1391,6 +1408,7 @@ class IState
     void RequireBasisState(Types::qubit_t outcome) const
     {
         const size_t qubits = GetNumberOfQubits();
+        RequireQubits(qubits);
         if (qubits < static_cast<size_t>(std::numeric_limits<Types::qubit_t>::digits) && (outcome >> qubits) != 0)
             throw std::out_of_range("Basis state " + std::to_string(outcome) + " is out of range for a register of " + std::to_string(qubits) + " qubits");
     }
@@ -1404,6 +1422,7 @@ class IState
     void RequireMarginalQubits(const Types::qubits_vector &qubits) const
     {
         const size_t count = GetNumberOfQubits();
+        RequireQubits(count);
         constexpr size_t limit = static_cast<size_t>(std::numeric_limits<size_t>::digits) - 2;
         if (qubits.size() > limit)
             throw std::invalid_argument("A marginal distribution of more than " + std::to_string(limit) + " qubits cannot be returned");
@@ -1415,6 +1434,27 @@ class IState
                 if (qubits[j] == qubits[k])
                     throw std::invalid_argument("The qubits of a marginal distribution must be distinct");
         }
+    }
+
+    /**
+     * A register without qubits holds no state to query: most backends then
+     * have no state object at all, and reading it crashed.
+     */
+    static void RequireQubits(size_t qubits)
+    {
+        if (qubits == 0)
+            throw std::runtime_error("The register has no qubits: there is no state to query");
+    }
+
+    /**
+     * The one value of an empty marginal: the total probability, as the sum of
+     * the marginal of qubit 0, which every backend computes without more than
+     * the distribution it already reads for one qubit (Aer: directly).
+     */
+    std::vector<double> TotalProbability()
+    {
+        const std::vector<double> first = MarginalProbabilities({0});
+        return {first.at(0) + first.at(1)};
     }
 
     /** Shared by SetSeed and backend Configure("seed") implementations. */

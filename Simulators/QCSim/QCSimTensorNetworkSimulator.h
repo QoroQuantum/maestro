@@ -152,6 +152,7 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
 
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         throw std::runtime_error("QCSimState::AllProbabilities: Invalid "
                                  "simulation type for obtaining probabilities.");
     }

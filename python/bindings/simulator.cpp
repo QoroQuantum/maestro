@@ -133,10 +133,11 @@ void bind_simulator(nb::module_ &m)
              "are allowed.")
         .def("Probabilities", &Simulators::ISimulator::Probabilities, "outcomes"_a,
              "Return probabilities for the given basis-state indices, one per index. An index of "
-             "2**num_qubits or more raises IndexError.")
+             "2**num_qubits or more raises IndexError; one that does not fit 64 bits, TypeError.")
         .def("MarginalProbabilities", &Simulators::ISimulator::MarginalProbabilities, "qubits"_a,
              "Return the probability distribution of the given qubits, the others traced out: "
-             "2**len(qubits) values, the first listed qubit the least significant bit.")
+             "2**len(qubits) values, the first listed qubit the least significant bit; for no "
+             "qubits, one value, the total probability.")
         .def("SampleCounts", &Simulators::ISimulator::SampleCounts, "qubits"_a, "shots"_a = 1000,
              "Sample without collapsing the state, returning {integer_outcome: "
              "count}; the first listed qubit is the least-significant result bit.")

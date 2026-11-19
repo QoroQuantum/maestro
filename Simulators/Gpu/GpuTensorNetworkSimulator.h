@@ -275,8 +275,7 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
 
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (nrQubits >= std::numeric_limits<size_t>::digits)
             throw std::length_error("Full probability enumeration exceeds the basis-index API; query "
                                     "selected bit vectors");

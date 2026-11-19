@@ -334,7 +334,9 @@ class AerState : public ISimulator
     size_t AllocateQubits(size_t num_qubits) override
     {
         const auto ids = state->allocate_qubits(num_qubits);
-        return ids[0];
+        // No qubits allocates none: return the index the next qubit would get, as QCSim does (ids[0] read past an
+        // empty list).
+        return ids.empty() ? static_cast<size_t>(state->num_of_qubits()) : static_cast<size_t>(ids[0]);
     }
 
     /**
@@ -700,9 +702,12 @@ class AerState : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
-        RequireBasisState(outcome);
+        // A method without amplitudes says so whatever the index, as every backend does.
         if (simulationType == SimulationType::kDensityMatrix)
             throw std::runtime_error("AerState::Amplitude is not defined for density matrix simulation");
+        if (simulationType == SimulationType::kStabilizer)
+            throw std::runtime_error("AerState::Amplitude is not defined for stabilizer simulation");
+        RequireBasisState(outcome);
 
         if (simulationType == SimulationType::kExtendedStabilizer)
         {
@@ -743,6 +748,7 @@ class AerState : public ISimulator
      */
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (simulationType == SimulationType::kDensityMatrix)
         {
             Types::qubits_vector qubits(GetNumberOfQubits());
@@ -775,20 +781,13 @@ class AerState : public ISimulator
      */
     std::vector<double> Probabilities(const Types::qubits_vector &outcomes) override
     {
-        // One value per basis-state index. Aer's own probabilities(qubits) is the marginal distribution of qubits
-        // (MarginalProbabilities): this called it on the statevector, MPS and stabilizer, which read the outcomes
-        // as qubits, returned 2^k values, and read past the state for an outcome of the qubit count or more.
+        // One value per basis-state index, each what Probability returns. (Aer's own probabilities(qubits) is the
+        // marginal distribution of qubits, MarginalProbabilities; this called it on the statevector, MPS and
+        // stabilizer, which read the outcomes as qubits.) On the extended stabilizer Probability is Aer's estimate:
+        // the exact amplitude of the decomposition over a sampled estimate of its norm, the same on every call for
+        // a given state; AllProbabilities divides by the exact norm, so the two differ by the error of the norm.
         for (const Types::qubit_t outcome : outcomes)
             RequireBasisState(outcome);
-        if (simulationType == SimulationType::kExtendedStabilizer)
-        {
-            const auto amplitudes = state->statevector();
-            std::vector<double> probabilities;
-            probabilities.reserve(outcomes.size());
-            for (const auto outcome : outcomes)
-                probabilities.push_back(outcome < amplitudes.size() ? std::norm(amplitudes[outcome]) : 0.0);
-            return probabilities;
-        }
         return IState::Probabilities(outcomes);
     }
 
@@ -804,7 +803,9 @@ class AerState : public ISimulator
     std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits) override
     {
         RequireMarginalQubits(qubits);
-        if (simulationType == SimulationType::kExtendedStabilizer || qubits.empty())
+        // No qubits: the total probability, from the marginal of qubit 0 (TotalProbability), not the whole
+        // distribution, which Aer caps at 64 qubits.
+        if (qubits.empty() || simulationType == SimulationType::kExtendedStabilizer)
             return IState::MarginalProbabilities(qubits);
         return state->probabilities(AER::reg_t(qubits.begin(), qubits.end()));
     }

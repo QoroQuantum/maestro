@@ -672,10 +672,11 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         const Eigen::VectorXcd probs = state->getRegisterStorage().cwiseAbs2();
-        std::vector<double> result(probs.size());
-        for (int i = 0; i < probs.size(); ++i)
-            result[i] = probs[i].real();
+        std::vector<double> result(static_cast<size_t>(probs.size()));
+        for (Eigen::Index i = 0; i < probs.size(); ++i)
+            result[static_cast<size_t>(i)] = probs[i].real();
         return result;
     }
 

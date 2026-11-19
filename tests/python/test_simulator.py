@@ -206,9 +206,34 @@ def test_probabilities_take_basis_states_on_every_backend(backend_name, method_n
             sim.Probabilities([0, 8])
         with pytest.raises(IndexError):
             sim.Probability(8)
+        # An index that does not fit 64 bits is refused by the argument conversion.
+        with pytest.raises(TypeError):
+            sim.Probabilities([2**64])
         # The distribution of qubits: the first listed the least significant bit.
         assert sim.MarginalProbabilities([1, 2]) == pytest.approx([0.5, 0.5, 0, 0])
         assert sim.MarginalProbabilities([0, 1]) == pytest.approx([0.5, 0, 0, 0.5])
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_amplitude_on_a_method_without_amplitudes(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    maestro.SimulationType.DensityMatrix)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(3)
+        sim.InitializeSimulator()
+        sim.FlushSimulator()
+        # The method has no amplitudes: RuntimeError, whatever the index, on every backend.
+        for index in (0, 8):
+            with pytest.raises(RuntimeError):
+                sim.Amplitude(index)
+        with pytest.raises(IndexError):
+            sim.Probability(8)
     finally:
         owner.destroy_simulator(handle)
 

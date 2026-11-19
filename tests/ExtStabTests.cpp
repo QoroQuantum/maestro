@@ -496,11 +496,18 @@ BOOST_FIXTURE_TEST_CASE(ExtendedStabilizerStateQueriesTest, ExtStabTestFixture)
     for (size_t outcome = 0; outcome < expected.size(); ++outcome)
         BOOST_TEST(std::abs(expected[outcome] - actual[outcome]) < 0.08);
 
+    // Probabilities is one Probability per outcome: Aer's estimate, the exact amplitude of the
+    // decomposition over a sampled estimate of its norm, the same on every call (to rounding on
+    // several threads), where AllProbabilities divides by the exact norm.
     const Types::qubits_vector selectedOutcomes = {0, 3, 5, 7};
     const auto selected = simExtStabilizer->Probabilities(selectedOutcomes);
     BOOST_REQUIRE_EQUAL(selected.size(), selectedOutcomes.size());
     for (size_t index = 0; index < selected.size(); ++index)
-        BOOST_TEST(std::abs(selected[index] - actual[selectedOutcomes[index]]) < 1e-10);
+    {
+        const double single = simExtStabilizer->Probability(selectedOutcomes[index]);
+        BOOST_TEST(std::abs(selected[index] - single) <= 1e-12 * std::max(1.0, single));
+        BOOST_TEST(std::abs(selected[index] - expected[selectedOutcomes[index]]) < 0.15);
+    }
 }
 
 BOOST_FIXTURE_TEST_CASE(SaveRestoreMeasurementTest, ExtStabTestFixture)
