@@ -319,7 +319,9 @@ and for the composite statevector, in the execute and estimate functions,
   keeps the environments of its bonds explicitly instead of being swept back
   into canonical form, so a channel costs a few matrix products and a two-qubit
   gate is truncated as in the canonical form. Two-qubit Kraus channels act on
-  any pair of qubits.
+  any pair of qubits. A generic gate whose matrix is not unitary, applied
+  through a simulator handle, is a channel of one operator: the chain is left
+  normalized, and a matrix that leaves nothing of the state is an error.
 - **Chain order.** Those environments cost one product per site between two
   operations that read them. When every two-qubit gate and channel of a circuit
   acts on neighbouring qubits, so that nothing has to be routed, the QCSim

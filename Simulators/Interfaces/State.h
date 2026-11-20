@@ -1159,14 +1159,9 @@ class IState
      * sums the paths it keeps (its threshold drops some); the composite
      * multiplies its components'; the matrix product operators normalize their
      * probabilities by the trace, so they total 1 where they are defined; a
-     * backend whose state cannot be left unnormalized is 1; and a matrix
-     * product state is 1 until the matrices that reach it may have moved its
-     * norm by more than kNormDeviationTolerance (NormDeviation), and the sum
-     * of its whole distribution after, since its reads of one qubit then do
-     * not hold. (On a matrix product state the weight a one-qubit matrix
-     * leaves lasts until the next two-qubit update on its site, a gate or a
-     * swap, which renormalizes the chain, as Aer's save does when it sorts the
-     * qubits.)
+     * backend whose state cannot be left unnormalized is 1; and so is a
+     * matrix product state, which restores its unit norm after a matrix that
+     * moved it (NormDeviation), at any width.
      */
     virtual double TotalProbability()
     {
@@ -1499,24 +1494,25 @@ class IState
     /**
      * How far a generic gate's matrix can move the norm of a state: the
      * Frobenius norm of M^dagger M - I, which bounds |<psi|M^dagger M|psi> - 1|
-     * for a unit psi; 0 where it is within kNormRoundingDeviation. It rejects
-     * nothing. A matrix product state adds up those of the matrices that
-     * reach it, since many matrices each close to unitary move the norm by
-     * their sum: its total probability is 1 while the sum stays within
-     * kNormDeviationTolerance, and only the whole distribution shows it after.
+     * for a unit psi. It rejects nothing.
+     *
+     * A matrix product state uses it to stay normalized. A matrix that does
+     * not keep the norm leaves more than a weight on the chain: the canonical
+     * form its reads of one qubit, its samples and its saves rely on no longer
+     * holds. So the chain adds up the deviations of the matrices that reach
+     * it (many matrices each close to unitary move the norm by their sum) and,
+     * once the sum passes kNormDeviationTolerance, restores its form and its
+     * unit norm, as its two-qubit updates always did. Its total probability is
+     * therefore 1, and a matrix that leaves no state at all is an error.
      */
     template <class Matrix> static double NormDeviation(const Matrix &matrix)
     {
-        const Eigen::MatrixXcd product = matrix.adjoint() * matrix;
-        const double deviation = (product - Eigen::MatrixXcd::Identity(product.rows(), product.cols())).norm();
-        // A matrix unitary to rounding counts as unitary: gate fusion hands over products of many gates, each
-        // carrying the rounding of its factors, and a long circuit of them must not add up to a state taken for
-        // unnormalized.
-        return deviation > kNormRoundingDeviation ? deviation : 0.;
+        // In the matrix's own type: the gates are fixed-size 2x2 and 4x4, which then stay off the heap.
+        const auto product = (matrix.adjoint() * matrix).eval();
+        return (product - std::decay_t<decltype(product)>::Identity(product.rows(), product.cols())).norm();
     }
 
     static constexpr double kNormDeviationTolerance = 1e-10;
-    static constexpr double kNormRoundingDeviation = 1e-12;
 
     /** Shared by SetSeed and backend Configure("seed") implementations. */
     void SeedAuxiliaryRng(uint64_t seed)

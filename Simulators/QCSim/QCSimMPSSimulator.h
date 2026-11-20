@@ -458,15 +458,12 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         return mpsSimulator->ProjectOnZero();
     }
 
-    // Unitary gates, measurements, channels and truncation keep the chain normalized, so its total probability is 1
-    // at any width. After a generic gate whose matrix may not keep the norm only the whole distribution shows it:
-    // QCSim's reads of one qubit renormalize the chain, and a one-qubit matrix leaves its form stale.
+    // The chain stays normalized, at any width: unitary gates, measurements, channels and truncation keep its norm,
+    // and a generic gate whose matrix moves it is applied so that it is restored (ApplyKeepingNorm).
     double TotalProbability() override
     {
         RequireQubits(GetNumberOfQubits());
-        if (normDeviation <= kNormDeviationTolerance)
-            return 1.;
-        return IState::TotalProbability();
+        return 1.;
     }
 
     std::vector<double> AllProbabilities() override
@@ -797,9 +794,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
-        normDeviation += NormDeviation(gate);
-        const QC::Gates::AppliedGate<> agate(gate, qubit);
-        mpsSimulator->ApplyGate(agate);
+        ApplyKeepingNorm(QC::Gates::AppliedGate<>(gate, qubit), gate);
         NotifyObservers({qubit});
     }
 
@@ -807,11 +802,43 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         if (IsExactSwapMatrix(gate))
             return ApplySwap(qubit0, qubit1);
-        normDeviation += NormDeviation(gate);
-        const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
-        mpsSimulator->ApplyGate(agate);
+        ApplyKeepingNorm(QC::Gates::AppliedGate<>(gate, qubit0, qubit1), gate);
         RecordExecutedTwoQubitGate(qubit0, qubit1, false, EffectiveSchmidtRank(gate));
         NotifyObservers({qubit0, qubit1});
+    }
+
+    // Applies a generic gate so that the chain stays normalized and its reads valid (see IState::NormDeviation).
+    // A matrix that is not unitary leaves the Schmidt values of the chain stale, not only a weight. QCSim applies
+    // one as the one operator of a channel: weighed on the state, normalized, with the environments of the chain
+    // kept from there on, at the cost of a gate and without a sweep over the chain; one that leaves nothing of the
+    // state is refused with the chain as it was. A matrix it takes for unitary can still move the norm by less than
+    // it tells from rounding, and many of them by their sum: the deviations add up, and once they pass the tolerance
+    // the chain is rebuilt from its tensors, which normalizes it.
+    template <class Matrix> void ApplyKeepingNorm(const QC::Gates::AppliedGate<> &agate, const Matrix &gate)
+    {
+        if (!agate.isUnitary()) // tested once: the gate keeps what it found for QCSim
+        {
+            try
+            {
+                mpsSimulator->ApplyGate(agate);
+            }
+            catch (const std::domain_error &)
+            {
+                throw std::runtime_error("The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm");
+            }
+            return;
+        }
+        mpsSimulator->ApplyGate(agate);
+        normDeviation += NormDeviation(gate);
+        if (normDeviation <= kNormDeviationTolerance)
+            return;
+        normDeviation = 0.;
+        if (nrQubits > 1)
+            return ReCanonicalize();
+        // One site has no bond to rebuild: it is scaled by its own weight, that of its two basis states.
+        const double weight = mpsSimulator->getBasisStateProbability(size_t{0}) + mpsSimulator->getBasisStateProbability(size_t{1});
+        if (weight > 0. && std::isfinite(weight))
+            mpsSimulator->ApplyGate(QC::Gates::AppliedGate<>(Eigen::Matrix2cd(Eigen::Matrix2cd::Identity() / std::sqrt(weight)), 0));
     }
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
@@ -1169,7 +1196,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     }
 
     std::unique_ptr<QC::TensorNetworks::MPSSimulator> mpsSimulator;
-    double normDeviation = 0.;      // how far the generic gates that reached the chain may have moved its norm
+    double normDeviation = 0.;      // how far the generic gates QCSim took for unitary may have moved its norm since it was last rebuilt
     double savedNormDeviation = 0.; // its value at SaveState
     bool normSaved = false;         // whether the chain holds a save
 };

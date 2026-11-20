@@ -191,6 +191,80 @@ BOOST_AUTO_TEST_CASE(basis_state_initialization_matches)
     }
 }
 
+// A generic gate whose matrix is not unitary: both chains stay normalized, and what is read or
+// sampled after it follows the state (the Schmidt values of the other bonds were left stale: a
+// qubit of a Bell pair whose other qubit had been projected was sampled as one half the time).
+BOOST_AUTO_TEST_CASE(matrix_that_is_not_unitary_leaves_both_chains_normalized)
+{
+    if (!MakeGpuMPS())
+    {
+        BOOST_TEST_MESSAGE("GPU MPS library is unavailable; skipping");
+        return;
+    }
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero(), damping;
+    projector(0, 0) = 1.;
+    damping << 1., 0., 0., .5;
+    Eigen::Matrix4cd pairFilter = Eigen::Matrix4cd::Zero();
+    pairFilter.diagonal() << 1., .5, .5, .25;
+    pairFilter(0, 3) = std::complex<double>(.2, .1);
+    for (int operation = 0; operation < 4; ++operation)
+    {
+        std::vector<std::vector<double>> distributions;
+        for (auto sim : {MakeGpuMPS(), MakeQCSimMPS()})
+        {
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyCX(1, 2);
+            sim->ApplyRy(2, .7);
+            sim->ApplyCX(2, 3);
+            if (operation == 0)
+                sim->ApplyGenericOneQubitGate(0, damping);
+            else if (operation == 1)
+                sim->ApplyGenericOneQubitGate(2, projector);
+            else if (operation == 2)
+                sim->ApplyGenericTwoQubitGate(1, 2, pairFilter);
+            else
+                sim->ApplyGenericTwoQubitGate(3, 0, pairFilter);
+            sim->ApplyH(1);
+            sim->ApplyCX(3, 1);
+            const std::vector<double> all = sim->AllProbabilities();
+            BOOST_TEST(std::abs(std::accumulate(all.begin(), all.end(), 0.) - 1.) < kTolerance, "operation " << operation);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, "operation " << operation);
+            for (const size_t qubit : {0, 1, 2, 3})
+            {
+                double one = 0.;
+                for (size_t index = 0; index < all.size(); ++index)
+                    if ((index >> qubit) & 1)
+                        one += all[index];
+                const size_t shots = 20000;
+                auto counts = sim->SampleCounts({qubit}, shots);
+                BOOST_TEST(std::abs(static_cast<double>(counts[1]) / shots - one) < 5. * std::sqrt(.25 / shots),
+                           "operation " << operation << ", sampled qubit " << qubit);
+            }
+            distributions.push_back(all);
+        }
+        CheckAllClose(distributions[0], distributions[1]);
+    }
+    for (auto sim : {MakeGpuMPS(2), MakeQCSimMPS(2)})
+    {
+        sim->ApplyH(0);
+        sim->ApplyCX(0, 1);
+        sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * std::sqrt(2.)));
+        auto counts = sim->SampleCounts({1}, 128);
+        BOOST_TEST(counts[0] == 128u);
+        // Nothing is left of the state after a second projection, onto one: refused.
+        Eigen::Matrix2cd other = Eigen::Matrix2cd::Zero();
+        other(1, 1) = 1.;
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(1, other), std::runtime_error);
+    }
+    for (auto sim : {MakeGpuMPS(1), MakeQCSimMPS(1)}) // one qubit: no bond to renormalize at
+    {
+        sim->ApplyH(0);
+        sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * .25));
+        BOOST_TEST(std::abs(sim->Probability(0) - 1.) < kTolerance);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(mixture_of_basis_states_is_rejected_by_both_backends)
 {
     auto gpuMPS = MakeGpuMPS(2);

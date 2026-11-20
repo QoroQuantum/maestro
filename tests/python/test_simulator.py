@@ -237,6 +237,56 @@ def test_empty_marginal_is_the_total_probability(backend_name):
         owner.destroy_simulator(handle)
 
 
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_matrix_product_state_stays_normalized_after_a_non_unitary_matrix(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    backend = getattr(maestro.SimulatorType, backend_name)
+
+    def make(qubits):
+        handle = owner.create_simulator(backend, maestro.SimulationType.MatrixProductState)
+        sim = owner.get_simulator(handle)
+        sim.AllocateQubits(qubits)
+        sim.InitializeSimulator()
+        return handle, sim
+
+    handle, sim = make(2)
+    try:
+        sim.ApplyH(0)
+        sim.ApplyCX(0, 1)
+        # Half of the Bell pair is projected away: the chain is renormalized, and the other qubit
+        # is zero in every read and in every shot (it was sampled as one half the time).
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sim.AllProbabilities() == pytest.approx([1, 0, 0, 0])
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+        assert sim.MarginalProbabilities([1]) == pytest.approx([1.0, 0.0])
+        assert dict(sim.SampleCounts([1], 128)) == {0: 128}
+        # A save leaves the state as it is.
+        sim.SaveState()
+        assert sim.Probability(0) == pytest.approx(1.0)
+        sim.RestoreState()
+        assert sim.Probability(0) == pytest.approx(1.0)
+        # Nothing is left of |00> projected onto |1>: refused, and the state is as it was.
+        with pytest.raises(RuntimeError):
+            sim.ApplyGenericOneQubitGate(1, [[0, 0], [0, 1]])
+        assert sim.AllProbabilities() == pytest.approx([1, 0, 0, 0])
+    finally:
+        owner.destroy_simulator(handle)
+
+    # A register too wide to list keeps its total, and Aer its marginals of a qubit.
+    handle, sim = make(40 if backend_name == "QCSim" else 70)
+    try:
+        sim.ApplyX(5)
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sim.Probability(32) == pytest.approx(1.0)
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+        if backend_name == "QiskitAer":
+            assert sim.MarginalProbabilities([5]) == pytest.approx([0.0, 1.0])
+    finally:
+        owner.destroy_simulator(handle)
+
+
 def test_marginal_too_wide_to_list_raises_value_error():
     # QCSim is always compiled in (the simulator fixture above relies on it); skipped as the
     # parametrized tests are, should that change.

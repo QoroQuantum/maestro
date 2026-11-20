@@ -185,19 +185,13 @@ class TensorNetwork
         return result;
     }
 
-    // The weight of the whole state. Its independent groups of qubits are factors of it, each weighing what both
-    // values of one of its qubits weigh: the probability of one qubit contracts the group of that qubit only, so
-    // qubit 0's alone missed what a matrix did to a group apart from it.
+    // The weight of the whole state: the network contracted with its conjugate, with no projector on any qubit. Its
+    // independent groups of qubits are factors of it and each is contracted once (qubit 0's group alone missed what
+    // a matrix did to a group apart from it), after one pass that connects the qubits: the weights of a qubit of
+    // each group, which connect the whole register every time, made that quadratic in the number of qubits.
     double TotalProbability()
     {
-        std::vector<Types::qubit_t> representatives;
-        representatives.reserve(qubitsGroups.size());
-        for (const auto &group : qubitsGroups)
-            representatives.push_back(*group.second.begin());
-        double total = 1.;
-        for (const Types::qubit_t qubit : representatives)
-            total *= Probability(qubit, true) + Probability(qubit, false);
-        return total;
+        return Contract();
     }
 
     double getBasisStateProbability(Types::qubit_t outcome)
@@ -328,6 +322,18 @@ class TensorNetwork
     const std::unordered_set<Types::qubit_t> &GetQubitGroup(Types::qubit_t q) const
     {
         return qubitsGroups.at(qubitsMap[q]);
+    }
+
+    // The positions in GetTensors() of the tensors of the group of a qubit, in their order there, while a
+    // contraction of every group holds them gathered (see Contract); nullptr otherwise. A contractor finds the
+    // tensors of a group by going through all the tensors of the network: once per group, that made contracting a
+    // network of many groups quadratic in its size.
+    const std::vector<size_t> *GetGatheredGroupTensors(Types::qubit_t q) const
+    {
+        if (gatheredGroupTensors.empty())
+            return nullptr;
+        const auto found = gatheredGroupTensors.find(qubitsMap[q]);
+        return found == gatheredGroupTensors.end() ? nullptr : &found->second;
     }
 
     void SaveState()
@@ -857,6 +863,22 @@ class TensorNetwork
 
         Connect();
 
+        // The tensors of every group, in one pass over the network, for the contractor (see GetGatheredGroupTensors).
+        struct Gathered
+        {
+            std::unordered_map<size_t, std::vector<size_t>> &groups;
+
+            ~Gathered()
+            {
+                groups.clear();
+            }
+        } gathered{gatheredGroupTensors};
+
+        if (qubitsGroups.size() > 1)
+            for (size_t i = 0; i < tensors.size(); ++i)
+                if (tensors[i] && !tensors[i]->qubits.empty())
+                    gatheredGroupTensors[qubitsMap[tensors[i]->qubits[0]]].push_back(i);
+
         // contract the network, save result to return
         double result = 1;
 
@@ -971,8 +993,9 @@ class TensorNetwork
     std::vector<Index> lastTensorIndicesSuper; // the indices of the last super
                                                // tensors in the network
 
-    std::vector<size_t> qubitsMap;                                               /**< A map between qubits (as identified from
-                                                                                    outside) and the qubits group ids */
+    std::vector<size_t> qubitsMap;                                        /**< A map between qubits (as identified from
+                                                                             outside) and the qubits group ids */
+    std::unordered_map<size_t, std::vector<size_t>> gatheredGroupTensors; /**< The tensors of each group, by position, during a contraction of every group. */
     std::unordered_map<size_t, std::unordered_set<Types::qubit_t>> qubitsGroups; /**< A map between qubits group ids and the qubits in that
                                                                                     group */
 

@@ -436,9 +436,10 @@ listed qubits (for none, one value, the total probability of the state: 1
 when it is normalized, less after a generic gate with a non-unitary matrix,
 which nothing renormalizes, or where the path integral's threshold drops
 paths; the MPOs normalize their probabilities by the trace, so theirs is 1
-where they are defined; on an MPS the weight a one-qubit matrix leaves lasts
-until the next two-qubit gate or swap on its site, which renormalizes the
-chain, as Aer's save does), and raises `ValueError` where the register is too
+where they are defined; an MPS renormalizes after such a matrix, so that its
+reads and samples follow the state, and its total is 1, while a matrix that
+leaves nothing of the state raises `RuntimeError`), and raises `ValueError`
+where the register is too
 wide to list its basis states, rather than returning zeros. On the Aer extended
 stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact
 amplitude of its decomposition over a sampled estimate of the norm, the same

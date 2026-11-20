@@ -15,8 +15,12 @@ namespace utf = boost::unit_test;
 
 #include <framework/avx2_detect.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <limits>
+#include <random>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -1219,9 +1223,9 @@ BOOST_AUTO_TEST_CASE(basis_state_queries_at_the_edges_of_the_register)
 }
 
 // The empty marginal is the total probability of the state, as every other query reports it: a
-// generic gate with a non-unitary matrix can leave it below 1, and nothing renormalizes the state
-// after a one-qubit one (the matrix product states renormalize after a two-qubit one). A constant 1
-// disagreed with the distribution after a projection.
+// generic gate with a non-unitary matrix can leave it below 1 on the dense backends, the tensor
+// network and the composite, where nothing renormalizes the state (the matrix product states do:
+// see the test after this one). A constant 1 disagreed with the distribution after a projection.
 BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
 {
     using Type = Simulators::SimulatorType;
@@ -1238,13 +1242,11 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
     // The backends that take the matrix: the total and every one-qubit marginal agree with the whole
     // distribution after a projection on qubit 0, on a qubit entangled with it, on a qubit apart
     // from it (the tensor network contracted qubit 0's group only), and after a two-qubit matrix.
-    // (Aer's MPS reads a qubit from its canonical form, which such a matrix leaves stale: [0.5, 0.5]
-    // for a qubit of a projected Bell pair; it reads the whole distribution once one reached it.)
+    // (The matrix product states renormalize instead: see
+    // matrix_product_state_stays_normalized_after_a_matrix_that_is_not_unitary.)
     for (const auto &[type, method] : std::vector<std::pair<Type, Method>>{{Type::kQiskitAer, Method::kStatevector},
-                                                                           {Type::kQiskitAer, Method::kMatrixProductState},
                                                                            {Type::kQiskitAer, Method::kDensityMatrix},
                                                                            {Type::kQCSim, Method::kStatevector},
-                                                                           {Type::kQCSim, Method::kMatrixProductState},
                                                                            {Type::kQCSim, Method::kDensityMatrix},
                                                                            {Type::kQCSim, Method::kTensorNetwork},
                                                                            {Type::kCompositeQCSim, Method::kStatevector},
@@ -1348,55 +1350,226 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
         else
             BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
     }
-    // A matrix product state is 1 while every matrix keeps the norm, at any width (a generic
-    // Hadamard too); after one that may not, only the whole distribution shows the total, which a
-    // wide register cannot list.
-    Eigen::Matrix2cd hadamard;
-    hadamard << 1., 1., 1., -1.;
-    hadamard /= std::sqrt(2.);
-    for (const Wide &wide : {Wide{Type::kQCSim, Method::kMatrixProductState, 40}, Wide{Type::kQiskitAer, Method::kMatrixProductState, 70}})
+    // ApplyLocalMapNorm leaves the state as the matrix leaves it.
     {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(wide.type, wide.method);
-        sim->AllocateQubits(wide.qubits);
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStatevector);
+        sim->AllocateQubits(1);
         sim->Initialize();
-        sim->ApplyGenericOneQubitGate(wide.qubits - 1, hadamard);
-        sim->ApplyCX(wide.qubits - 1, 0);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, wide.qubits << " qubits");
-        sim->SaveState();
-        sim->ApplyGenericOneQubitGate(wide.qubits - 1, projector);
-        BOOST_CHECK_THROW(sim->MarginalProbabilities({}), std::length_error);
-        sim->RestoreState(); // the state from before the projection, and its mark
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, wide.qubits << " qubits, restored");
+        BOOST_TEST(std::abs(sim->ApplyLocalMapNorm({0}, Eigen::MatrixXcd::Identity(2, 2) * .5) - .25) < 1e-12);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .25) < 1e-12);
     }
-    // A restore with nothing saved leaves the state as it is, and its mark with it.
-    {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductState);
-        sim->AllocateQubits(3);
-        sim->Initialize();
-        sim->ApplyH(2);
-        sim->ApplyCX(2, 0);
-        sim->ApplyGenericOneQubitGate(2, projector);
-        sim->RestoreState();
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .5) < 1e-9);
-    }
-    // Matrices each close to unitary move the norm by their sum: 1024 of them, each 8e-11 short,
-    // left 0.99999991808, which the mark must see.
+}
+
+// A matrix product state stays normalized. A generic gate whose matrix is not unitary left more
+// than a weight on the chain: the Schmidt values of its other bonds were stale, so that reads of
+// one qubit and samples came from a state it no longer held (a qubit of a Bell pair whose other
+// qubit had been projected onto zero was sampled as one half the time), Aer's save, which sorts
+// the qubits with swaps, renormalized the live state, and the total could only be had from the
+// whole distribution, which a wide register cannot list. Such a matrix is now applied as the one
+// operator of a channel, which leaves the chain normalized and its reads valid; one that leaves
+// nothing of the state is refused.
+BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_is_not_unitary)
+{
+    using Type = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero();
+    projector(0, 0) = 1.; // onto |0>
+    Eigen::Matrix2cd damping;
+    damping << 1., 0., 0., .5;
+    Eigen::Matrix4cd pairFilter = Eigen::Matrix4cd::Zero();
+    pairFilter.diagonal() << 1., .5, .5, .25;
+    pairFilter(0, 3) = std::complex<double>(.2, .1);
+    const auto sumOf = [](const std::vector<double> &values) {
+        double sum = 0.;
+        for (const double p : values)
+            sum += p;
+        return sum;
+    };
+    const auto prepare = [](Simulators::ISimulator &sim) {
+        sim.AllocateQubits(4);
+        sim.Initialize();
+        sim.ApplyH(0);
+        sim.ApplyCX(0, 1);
+        sim.ApplyCX(1, 2);
+        sim.ApplyRy(2, .7);
+        sim.ApplyCX(2, 3);
+        sim.ApplyRx(1, .4);
+    };
+    // The operations: a filter on a qubit at an end and on one inside, a projection, a two-qubit
+    // filter on neighbours and on qubits apart, each followed by gates.
+    const auto operate = [&](Simulators::ISimulator &sim, int operation) {
+        if (operation == 0)
+            sim.ApplyGenericOneQubitGate(0, damping);
+        else if (operation == 1)
+            sim.ApplyGenericOneQubitGate(2, damping);
+        else if (operation == 2)
+            sim.ApplyGenericOneQubitGate(3, projector);
+        else if (operation == 3)
+            sim.ApplyGenericTwoQubitGate(1, 2, pairFilter);
+        else
+            sim.ApplyGenericTwoQubitGate(3, 0, pairFilter);
+        sim.ApplyH(1);
+        sim.ApplyCX(3, 1);
+    };
+
     for (const Type type : {Type::kQCSim, Type::kQiskitAer})
     {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
-        sim->AllocateQubits(2);
-        sim->Initialize();
-        const Eigen::Matrix2cd almost = Eigen::Matrix2cd::Identity() * std::sqrt(1. - 8e-11);
-        for (int gate = 0; gate < 1024; ++gate)
-            sim->ApplyGenericOneQubitGate(gate % 2, almost);
-        const double whole = sumOf(sim->AllProbabilities());
-        BOOST_TEST(whole < 1. - 1e-8);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - whole) < 1e-12);
+        for (int operation = 0; operation < 5; ++operation)
+        {
+            auto reference = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStatevector);
+            prepare(*reference);
+            operate(*reference, operation);
+            std::vector<double> expected = reference->AllProbabilities();
+            const double weight = sumOf(expected);
+            BOOST_REQUIRE(weight < .95); // the matrix does move the norm
+            for (double &p : expected)
+                p /= weight;
+
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            prepare(*sim);
+            operate(*sim, operation);
+            const std::string where = "backend " + std::to_string(static_cast<int>(type)) + ", operation " + std::to_string(operation);
+            const std::vector<double> all = sim->AllProbabilities();
+            for (size_t index = 0; index < all.size(); ++index)
+                BOOST_TEST(std::abs(all[index] - expected[index]) < 1e-9, where << ", basis state " << index);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, where);
+            BOOST_TEST(std::abs(sim->TotalProbability() - 1.) < 1e-12, where);
+            for (const size_t qubit : {0, 1, 2, 3})
+            {
+                double one = 0.;
+                for (size_t index = 0; index < expected.size(); ++index)
+                    if ((index >> qubit) & 1)
+                        one += expected[index];
+                const auto marginal = sim->MarginalProbabilities({qubit});
+                BOOST_TEST(std::abs(marginal[1] - one) < 1e-9, where << ", qubit " << qubit);
+                BOOST_TEST(std::abs(marginal[0] - (1. - one)) < 1e-9, where << ", qubit " << qubit);
+                // Samples of one qubit follow the state (they came from the stale Schmidt values).
+                const size_t shots = 20000;
+                auto counts = sim->SampleCounts({qubit}, shots);
+                const double frequency = static_cast<double>(counts[1]) / shots;
+                BOOST_TEST(std::abs(frequency - one) < 5. * std::sqrt(.25 / shots), where << ", sampled qubit " << qubit);
+            }
+            // Saving, restoring and cloning leave the state as it is.
+            sim->SaveState();
+            const std::vector<double> saved = sim->AllProbabilities();
+            sim->ApplyX(0);
+            sim->RestoreState();
+            const std::vector<double> restored = sim->AllProbabilities();
+            const auto clone = sim->Clone();
+            const std::vector<double> cloned = clone->AllProbabilities(), original = sim->AllProbabilities();
+            for (size_t index = 0; index < all.size(); ++index)
+            {
+                BOOST_TEST(std::abs(saved[index] - all[index]) < 1e-12, where << ", after a save");
+                BOOST_TEST(std::abs(restored[index] - all[index]) < 1e-12, where << ", after a restore");
+                BOOST_TEST(std::abs(cloned[index] - all[index]) < 1e-12, where << ", in a clone");
+                BOOST_TEST(std::abs(original[index] - all[index]) < 1e-12, where << ", after a clone");
+            }
+        }
+
+        // The partner of a projected qubit of a Bell pair: zero in every read and in every shot.
+        // (The matrix leaves the norm at 1, and still left the partner's Schmidt values stale.)
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * std::sqrt(2.)));
+            const auto marginal = sim->MarginalProbabilities({1});
+            BOOST_TEST(std::abs(marginal[0] - 1.) < 1e-12);
+            auto counts = sim->SampleCounts({1}, 128);
+            BOOST_TEST(counts[0] == 128u);
+            BOOST_TEST(counts[1] == 0u);
+        }
+
+        // A save does not change what a read returns (Aer's renormalized a chain off its norm).
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(3);
+            sim->Initialize();
+            sim->ApplyH(2);
+            sim->ApplyCX(2, 0);
+            sim->ApplyGenericOneQubitGate(2, projector);
+            const double before = sim->Probability(0);
+            BOOST_TEST(std::abs(before - 1.) < 1e-12);
+            sim->SaveState();
+            BOOST_TEST(std::abs(sim->Probability(0) - before) < 1e-12);
+            sim->RestoreState();
+            BOOST_TEST(std::abs(sim->Probability(0) - before) < 1e-12);
+            const auto clone = sim->Clone();
+            BOOST_TEST(std::abs(sim->Probability(0) - before) < 1e-12);
+            BOOST_TEST(std::abs(clone->Probability(0) - before) < 1e-12);
+        }
+
+        // At a width the distribution cannot list: the total, and the reads of basis states.
+        {
+            const size_t qubits = type == Type::kQCSim ? 40 : 70;
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(qubits);
+            sim->Initialize();
+            sim->ApplyX(5);
+            sim->ApplyH(qubits - 1);
+            sim->ApplyCX(qubits - 1, 1);
+            sim->ApplyGenericOneQubitGate(0, projector);          // qubit 0 is zero already
+            sim->ApplyGenericOneQubitGate(qubits - 1, projector); // half of the state
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, qubits << " qubits");
+            BOOST_TEST(std::abs(sim->Probability(32) - 1.) < 1e-12, qubits << " qubits");
+            if (type == Type::kQiskitAer) // Aer reads a qubit of the chain at any width
+            {
+                const auto set = sim->MarginalProbabilities({5}), partner = sim->MarginalProbabilities({1});
+                BOOST_TEST(std::abs(set[1] - 1.) < 1e-12);
+                BOOST_TEST(std::abs(partner[0] - 1.) < 1e-12);
+            }
+        }
+
+        // Matrices each close to unitary move the norm by their sum: 65536 of them, each 6e-13
+        // short and below what one matrix is taken for unitary at, left 0.99999996.
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            const Eigen::Matrix2cd almost = Eigen::Matrix2cd::Identity() * (1. - 3e-13);
+            for (int gate = 0; gate < 65536; ++gate)
+                sim->ApplyGenericOneQubitGate(gate % 2, almost);
+            BOOST_TEST(std::abs(sumOf(sim->AllProbabilities()) - 1.) < 1e-9);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12);
+        }
+
+        // A matrix that leaves nothing of the state is refused, and the state is as it was.
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(3);
+            sim->Initialize();
+            sim->ApplyX(0);
+            sim->ApplyH(1);
+            sim->ApplyCX(1, 2);
+            const std::vector<double> before = sim->AllProbabilities();
+            Eigen::Matrix4cd both = Eigen::Matrix4cd::Zero();
+            both(0, 0) = 1.;
+            BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, projector), std::runtime_error);
+            BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(0, 2, both), std::runtime_error);
+            const std::vector<double> after = sim->AllProbabilities();
+            for (size_t index = 0; index < before.size(); ++index)
+                BOOST_TEST(std::abs(after[index] - before[index]) < 1e-12);
+        }
+
+        // A register of one qubit has no bond to renormalize at.
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(1);
+            sim->Initialize();
+            sim->ApplyH(0);
+            sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * .25));
+            BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-12);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12);
+        }
     }
-    // Matrices unitary to rounding count as unitary, however many: gate fusion hands over products
-    // of gates (here of 40 each, about 3e-15 from unitary), and a long circuit of them must not turn
-    // a wide register's total into an error (120000 of them add up to more than the tolerance).
+
+    // Matrices unitary to rounding, however many: gate fusion hands over products of gates (here
+    // of 40 each, about 3e-15 from unitary), and a long circuit of them leaves a wide register
+    // readable (120000 of them add up to more than the tolerance, and the chain is then rebuilt).
     {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kMatrixProductState);
         sim->AllocateQubits(40);
@@ -1417,43 +1590,54 @@ BOOST_AUTO_TEST_CASE(empty_marginal_is_the_total_probability)
             sim->ApplyGenericOneQubitGate(gate % 40, product);
         }
         BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12);
+        const double zero = sim->Probability(0);
+        BOOST_TEST((std::isfinite(zero) && zero >= 0. && zero <= 1.));
     }
-    // Aer's save sorts the qubits of the chain with swaps, two-qubit updates that renormalize it, as
-    // any two-qubit gate on the site would: the total reports the state as it then is.
+
+    // Amplitudes given to Aer's matrix product state are normalized (its statevector keeps them).
     {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kMatrixProductState);
-        sim->AllocateQubits(3);
-        sim->Initialize();
-        sim->ApplyH(2);
-        sim->ApplyCX(2, 0);
-        sim->ApplyGenericOneQubitGate(2, projector);
-        sim->SaveState();
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-12);
+        std::vector<std::complex<double>> amplitudes{.5, 0., 0., std::complex<double>(0., 1.5)};
+        sim->InitializeState(2, amplitudes);
+        const std::vector<double> all = sim->AllProbabilities();
+        BOOST_TEST(std::abs(all[0] - .1) < 1e-12);
+        BOOST_TEST(std::abs(all[3] - .9) < 1e-12);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({1})[1] - .9) < 1e-12);
+        std::vector<std::complex<double>> nothing(4, 0.);
+        BOOST_CHECK_THROW(sim->InitializeState(2, nothing), std::invalid_argument);
     }
-    // The mark goes with a clone. (QCSim copies the chain as it is; Aer copies it through a save and
-    // a restore, which renormalize it, the original's too.)
-    for (const Type type : {Type::kQCSim, Type::kQiskitAer})
-    {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
-        sim->AllocateQubits(3);
+}
+
+// The tensor network's total is one contraction of each of its independent groups of qubits, after
+// one pass over the network: it went through every tensor of the register once per group, and so
+// did the contractor's cache of plans, which made it quadratic in the number of qubits (seconds for
+// a few thousand qubits that no gate connects).
+BOOST_AUTO_TEST_CASE(tensor_network_total_probability_is_linear_in_independent_qubits)
+{
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero();
+    projector(0, 0) = 1.;
+    const auto timeOf = [&](size_t qubits) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kTensorNetwork);
+        sim->AllocateQubits(qubits);
         sim->Initialize();
-        sim->ApplyH(2);
-        sim->ApplyCX(2, 0);
-        sim->ApplyGenericOneQubitGate(2, projector);
-        const auto clone = sim->Clone();
-        BOOST_TEST(std::abs(clone->MarginalProbabilities({})[0] - sumOf(clone->AllProbabilities())) < 1e-9);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(sim->AllProbabilities())) < 1e-9);
-        if (type == Type::kQCSim)
-            BOOST_TEST(std::abs(clone->MarginalProbabilities({})[0] - .5) < 1e-9);
-    }
-    // ApplyLocalMapNorm leaves the state as the matrix leaves it.
-    {
-        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStatevector);
-        sim->AllocateQubits(1);
-        sim->Initialize();
-        BOOST_TEST(std::abs(sim->ApplyLocalMapNorm({0}, Eigen::MatrixXcd::Identity(2, 2) * .5) - .25) < 1e-12);
-        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .25) < 1e-12);
-    }
+        sim->ApplyH(qubits - 1);
+        sim->ApplyCX(qubits - 1, 0);
+        sim->ApplyH(qubits / 2);
+        sim->ApplyGenericOneQubitGate(qubits / 2, projector); // a group apart from qubit 0's: half the weight
+        double best = std::numeric_limits<double>::infinity();
+        for (int repeat = 0; repeat < 3; ++repeat) // the second and third find the plans cached
+        {
+            const auto start = std::chrono::steady_clock::now();
+            const double total = sim->MarginalProbabilities({})[0];
+            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+            BOOST_TEST(std::abs(total - .5) < 1e-9, qubits << " qubits");
+        }
+        return best;
+    };
+    const double small = timeOf(4096), large = timeOf(32768);
+    // Eight times the qubits: about eight times the time when linear, sixty-four when quadratic.
+    BOOST_TEST(large < 24. * small + 0.05, "4096 qubits: " << small << " s, 32768 qubits: " << large << " s");
 }
 
 // A statevector given to Aer must hold the amplitudes of the register: a shorter one was read past

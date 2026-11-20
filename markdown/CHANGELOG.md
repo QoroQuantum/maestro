@@ -42,13 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over each of its independent groups of qubits, the path integral over the
   paths its threshold keeps, the composite as the product of its
   components; 1 on the MPOs, which normalize by the trace and throw where it
-  cannot, and where the state cannot be left unnormalized; a matrix product
-  state is 1 until the matrices that reach it may have moved its norm by
-  more than 1e-10 together, and the sum of its whole distribution after);
-  Aer's MPS reads its marginals from the whole distribution once such a
-  matrix reached it (its canonical form then gave a qubit of a projected
-  Bell pair [0.5, 0.5]); a statevector given to Aer must hold the register's
-  amplitudes (a shorter one was read past its end);
+  cannot, where the state cannot be left unnormalized, and on a matrix
+  product state, see below); a statevector given to Aer must hold the
+  register's amplitudes (a shorter one was read past its end);
   `Probabilities`
   with no outcomes throws on a register without qubits too; an index on 65
   qubits or more no longer reads qubit 64 as qubit 0 (Aer MPS, through the
@@ -63,6 +59,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AllProbabilities` on a register without qubits throws too, on every
   backend, and `AllocateQubits(0)` on Aer no longer reads past an empty list
   of qubit ids.
+- A matrix product state stays normalized after a generic gate whose matrix
+  is not unitary (QCSim, Aer, GPU). Such a matrix left the Schmidt values of
+  the chain's other bonds stale, not only a weight: a qubit of a Bell pair
+  whose other qubit had been projected onto zero was read, by Aer, and
+  sampled, by Aer and QCSim, as one half the time; Aer's `SaveState` and
+  `Clone`, which sort the qubits with swaps, renormalized the live state;
+  and the weight a one-qubit matrix left lasted only until the next
+  two-qubit update on its site. The matrix is now applied as the one operator
+  of a channel: the chain is renormalized and its reads, samples and saves
+  follow the state, so the total probability of an MPS is 1 at any width and
+  Aer's MPS reads the marginal of a qubit at any width (QCSim does it
+  through the environments it keeps after a Kraus operator, QCSim b96ca88; Aer
+  through the sweep it does after one; the GPU library rebuilds its
+  canonical form). A matrix that leaves nothing of the state throws
+  `std::runtime_error` (on QCSim and Aer with the state as it was; Aer's
+  chain could not be split and crashed). Matrices each within 1e-10 of
+  unitary add up, and the chain is repaired once their sum passes that.
+  Amplitudes given to Aer's MPS are normalized, and ones without a norm
+  throw `std::invalid_argument`. Dense backends are unchanged: they keep the
+  weight the matrix leaves.
+- The tensor network's total probability is one contraction of each
+  independent group of qubits after one pass over the network, and the
+  contractor finds a cached plan by its fingerprint: both went through the
+  whole network (or the whole cache) once per group, quadratic in the number
+  of qubits that no gate connects (seconds at 8192 qubits, now milliseconds).
 - On the Aer extended stabilizer, `Probabilities` is one `Probability` per
   index, Aer's estimate (the exact amplitude of the decomposition over a
   sampled estimate of its norm); it read the statevector of the
@@ -152,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache alone: an upper bound on what overlaps, so two realizations report
   1. A noisy fidelity still runs its
   realizations one after another and reports 1.
-- QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
+- QCSim is pinned to QoroQuantum/QCSim b96ca88. On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
   one pass over the matrix instead of two, from 11 qubits for dense gates
   (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y

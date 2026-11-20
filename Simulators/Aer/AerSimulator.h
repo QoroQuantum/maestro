@@ -66,8 +66,12 @@ class AerSimulator : public AerState
         gate_matrix(1, 0) = gate(1, 0);
         gate_matrix(1, 1) = gate(1, 1);
 
-        normDeviation += NormDeviation(gate);
+        const double deviation = simulationType == SimulationType::kMatrixProductState ? NormDeviation(gate) : 0.;
+        if (deviation > kNormDeviationTolerance)
+            RequireWeightLeft(gate, qubits); // before the matrix is applied: the chain is as it was when it is refused
         state->apply_unitary(qubits, gate_matrix);
+        if (simulationType == SimulationType::kMatrixProductState)
+            RestoreChainNorm(deviation, qubit);
         NotifyObservers(qubits);
     }
 
@@ -86,8 +90,22 @@ class AerSimulator : public AerState
             for (size_t j = 0; j < 4; ++j)
                 gate_matrix(i, j) = gate(i, j);
 
-        normDeviation += NormDeviation(gate);
-        state->apply_unitary(qubits, gate_matrix);
+        const double deviation = simulationType == SimulationType::kMatrixProductState ? NormDeviation(gate) : 0.;
+        if (deviation > kNormDeviationTolerance)
+        {
+            // A matrix that moves the norm goes to the chain as a channel of one operator: Aer applies it as it is,
+            // renormalizes the bond between the two qubits as any two-qubit update does, and then, as it must after
+            // an operator that is not unitary, the tensors outside them (see RestoreChainNorm).
+            RequireWeightLeft(gate, qubits); // Aer cannot split a tensor that holds nothing: refused before
+            state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{gate_matrix});
+            RequireChainWeight(qubit0);
+        }
+        else
+        {
+            state->apply_unitary(qubits, gate_matrix);
+            if (simulationType == SimulationType::kMatrixProductState)
+                RestoreChainNorm(deviation, qubit0);
+        }
         NotifyObservers(qubits);
     }
 
