@@ -1718,6 +1718,79 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
             BOOST_TEST(std::abs(sumOf(sim->AllProbabilities()) - 1.) < 1e-9);
         }
 
+        // Singular values far apart. The weight a filter leaves was read from the eigenvalues of
+        // M^dagger M, the squares of its singular values: one below 1e-8 of the largest is lost
+        // there in rounding, and what came out for it was noise of either sign. On one qubit in
+        // |+>, diag(1e-8, 1) H leaves 1e-8|0>, that is |0>: Aer returned a probability of 1.27.
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(1);
+            sim->Initialize();
+            sim->ApplyH(0);
+            Eigen::Matrix2cd filter;
+            filter << 1e-8, 1e-8, 1., -1.;
+            filter /= std::sqrt(2.);
+            sim->ApplyGenericOneQubitGate(0, filter);
+            BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-9, "diag(1e-8, 1) H on |+>: " << sim->Probability(0));
+            BOOST_TEST(std::abs(sumOf(sim->AllProbabilities()) - 1.) < 1e-9);
+        }
+        for (const double small : {1e-5, 1e-8, 1e-10})
+            for (const size_t qubits : {size_t(1), size_t(3)})
+            {
+                // U diag(1, small) V^dagger with U and V turns that are not along the basis.
+                const auto turn = [](double angle, double phase) {
+                    Eigen::Matrix2cd matrix;
+                    matrix << std::cos(angle), -std::polar(1., phase) * std::sin(angle), std::polar(1., -phase) * std::sin(angle), std::cos(angle);
+                    return matrix;
+                };
+                Eigen::Matrix2cd values = Eigen::Matrix2cd::Identity();
+                values(1, 1) = small;
+                const Eigen::Matrix2cd filter = turn(.7, .3) * values * turn(1.1, -.4).adjoint();
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+                auto reference = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStatevector);
+                for (auto *each : {sim.get(), reference.get()})
+                {
+                    each->AllocateQubits(qubits);
+                    each->Initialize();
+                    each->ApplyRy(0, .9);
+                    if (qubits == 3)
+                    {
+                        each->ApplyCX(0, 1);
+                        each->ApplyRy(1, .4);
+                        each->ApplyCX(1, 2);
+                    }
+                    each->ApplyGenericOneQubitGate(0, filter);
+                }
+                std::vector<double> expected = reference->AllProbabilities();
+                const double weight = sumOf(expected);
+                const std::vector<double> all = sim->AllProbabilities();
+                for (size_t index = 0; index < all.size(); ++index)
+                    BOOST_TEST(std::abs(all[index] - expected[index] / weight) < 1e-7,
+                               "singular values 1 and " << small << ", " << qubits << " qubits, basis state " << index);
+            }
+        // And a projection onto a state orthogonal to the chain's is refused whatever the angle: of
+        // 59 such pairs, Aer applied 21 (the zero eigenvalue came out positive) and returned what
+        // rounding had left, probabilities that added up to 2.76e-17 for 0.8|0> - 0.6|1>.
+        for (int k = 1; k < 60; ++k)
+            for (const size_t qubits : {size_t(1), size_t(2)})
+            {
+                const double c = k == 1 ? .8 : std::cos(.05 * k), s = k == 1 ? .6 : std::sin(.05 * k);
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+                sim->AllocateQubits(qubits);
+                sim->Initialize();
+                Eigen::Matrix2cd prepare, onto;
+                prepare << c, s, -s, c;             // |0> -> c|0> - s|1>
+                onto << s * s, s * c, s * c, c * c; // onto s|0> + c|1>
+                sim->ApplyGenericOneQubitGate(0, prepare);
+                if (qubits == 2)
+                    sim->ApplyH(1);
+                const std::vector<double> before = sim->AllProbabilities();
+                BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, onto), std::runtime_error);
+                const std::vector<double> after = sim->AllProbabilities();
+                for (size_t index = 0; index < before.size(); ++index)
+                    BOOST_TEST(std::abs(after[index] - before[index]) < 1e-12, "orthogonal pair " << k << ", " << qubits << " qubits");
+            }
+
         // A register of one qubit has no bond to renormalize at.
         {
             auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
@@ -1775,6 +1848,38 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
         Eigen::VectorXcd eigenAmplitudes = Eigen::VectorXcd::Unit(4, 0);
         BOOST_CHECK_THROW(sim->InitializeState(2, eigenAmplitudes), std::runtime_error);
         BOOST_TEST(std::abs(sim->Probability(3) - before) < 1e-12, "method " << static_cast<int>(method));
+    }
+}
+
+// The targets of a generic gate are qubits of the register, each once. Aer does not check them (it
+// reads its tables at whatever index it is given), and the count the matrix product state keeps for
+// each qubit was written at that index too. The bindings check before they call; a C++ caller is
+// checked by the simulator.
+BOOST_AUTO_TEST_CASE(aer_generic_gate_targets_are_checked)
+{
+    Eigen::Matrix2cd one;
+    one << 1., 0., 0., 1. - 1e-11; // off unitary by less than the tolerance: the count of its qubit is kept
+    Eigen::Matrix4cd two = Eigen::Matrix4cd::Identity();
+    two(3, 3) = 1. - 1e-11;
+    for (const auto method :
+         {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kDensityMatrix})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, method);
+        sim->AllocateQubits(3);
+        sim->Initialize();
+        sim->ApplyH(0);
+        const std::vector<double> before = sim->AllProbabilities();
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(3, one), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(1000000, one), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(0, 3, two), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(7, 1, two), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(1, 1, two), std::invalid_argument);
+        BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(1, 1, Eigen::Matrix4cd(Eigen::Matrix4cd::Identity() * .5)), std::invalid_argument);
+        const std::vector<double> after = sim->AllProbabilities();
+        for (size_t index = 0; index < before.size(); ++index)
+            BOOST_TEST(std::abs(after[index] - before[index]) < 1e-12);
+        sim->ApplyGenericOneQubitGate(2, one); // the last qubit is one
+        sim->ApplyGenericTwoQubitGate(2, 0, two);
     }
 }
 

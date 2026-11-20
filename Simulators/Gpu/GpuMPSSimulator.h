@@ -670,47 +670,45 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     }
 
     // Whether a one-qubit matrix M leaves a weight on a chain, read on a copy of it. The weight <psi|M^dagger M|psi>
-    // is taken as a sum of positive terms, which keeps a small one as exact as a large one: M^dagger M = V diag(h)
-    // V^dagger and w = h_0 p_0 + h_1 p_1, with p the probabilities of the qubit once it is turned by V^dagger, each
-    // read as the probability of zero (of one, after an X). One within the rounding of amplitudes that cancel,
+    // is taken as a sum of positive terms, which keeps a small one as exact as a large one: M = U S V^dagger and
+    // w = s_0^2 p_0 + s_1^2 p_1, with p the probabilities of the qubit once it is turned by V^dagger, each read as
+    // the probability of zero (of one, after an X). One within the rounding of amplitudes that cancel,
     // (64 epsilon)^2 of what the matrix could leave, with epsilon the rounding of the precision the chain is kept
     // in, counts as none, as on QCSim and Aer: the library itself only tells an exact zero, and normalized what
     // rounding had left of a state (|+> projected onto |-> came back as a state).
     bool LeavesWeight(GpuLibMPSSim &trial, unsigned int qubit, const Eigen::Matrix2cd &gate) const
     {
-        const Eigen::Matrix2cd squared = gate.adjoint() * gate;
-        const Eigen::SelfAdjointEigenSolver<Eigen::Matrix2cd> solver(squared);
-        if (solver.info() != Eigen::Success)
-            return false;
-        const double largest = solver.eigenvalues()(1);
+        // The singular values of M itself: see CouldLeaveNothing.
+        const Eigen::JacobiSVD<Eigen::Matrix2cd> decomposition(gate, Eigen::ComputeFullV);
+        const double largest = decomposition.singularValues()(0) * decomposition.singularValues()(0);
+        const double smallest = decomposition.singularValues()(1) * decomposition.singularValues()(1);
         if (!(largest > 0.) || !std::isfinite(largest))
             return false;
-        const Eigen::Matrix2cd turn = solver.eigenvectors().adjoint().transpose(); // the library takes it input first
+        const Eigen::Matrix2cd turn = decomposition.matrixV().adjoint().transpose(); // the library takes it input first
         Eigen::Matrix2cd flip;
         flip << 0., 1., 1., 0.;
         if (!trial.ApplyOneQubitMatrix(qubit, reinterpret_cast<const double *>(turn.data())))
             return false;
-        const double zero = trial.Probability0(qubit);
+        const double zero = trial.Probability0(qubit); // along the direction the matrix keeps most of
         if (!trial.ApplyOneQubitMatrix(qubit, reinterpret_cast<const double *>(flip.data())))
             return false;
         const double one = trial.Probability0(qubit);
-        const double weight = std::max(solver.eigenvalues()(0), 0.) * zero + largest * one;
+        const double weight = largest * zero + smallest * one;
         const double rounding =
             64. * (trial.IsDoublePrecision() ? std::numeric_limits<double>::epsilon() : static_cast<double>(std::numeric_limits<float>::epsilon()));
         return std::isfinite(weight) && weight > rounding * rounding * largest;
     }
 
     // Whether a matrix has a direction it all but removes: its smallest singular value is below a millionth of its
-    // largest (their squares twelve digits apart), so that what it leaves of a state can be nothing, or too little
-    // to normalize.
+    // largest, so that what it leaves of a state can be nothing, or too little to normalize.
     template <class Matrix> static bool CouldLeaveNothing(const Matrix &gate)
     {
-        using Hermitian = std::decay_t<decltype((gate.adjoint() * gate).eval())>;
-        const Eigen::SelfAdjointEigenSolver<Hermitian> solver(Hermitian(gate.adjoint() * gate), Eigen::EigenvaluesOnly);
-        if (solver.info() != Eigen::Success)
-            return true;
-        const double smallest = solver.eigenvalues()(0), largest = solver.eigenvalues()(solver.eigenvalues().size() - 1);
-        return !(smallest > 1e-12 * largest);
+        // The singular values of the matrix itself, not the eigenvalues of M^dagger M, which are their squares: one
+        // below 1e-8 of the largest is lost there in the rounding of the product, and what came out for it was
+        // noise of either sign (a projection onto a state orthogonal to the chain's was weighed by it and applied).
+        const Eigen::JacobiSVD<Matrix> decomposition(gate);
+        const auto &values = decomposition.singularValues(); // in decreasing order
+        return !(values(values.size() - 1) > 1e-6 * values(0));
     }
 
     // Rebuilds the canonical form of a chain, which normalizes it; false when nothing is left to normalize. One

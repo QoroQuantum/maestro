@@ -288,6 +288,39 @@ BOOST_AUTO_TEST_CASE(matrix_that_is_not_unitary_leaves_both_chains_normalized)
                            "double " << doublePrecision << ", " << qubits << " qubits, basis state " << index);
             BOOST_TEST(std::abs(std::accumulate(after.begin(), after.end(), 0.) - 1.) < kTolerance);
         }
+    // The weight is read from the singular values of the matrix, not from the eigenvalues of
+    // M^dagger M, their squares, of which a small one is lost in rounding: a projection onto a state
+    // orthogonal to the chain's was weighed by the noise that came out for zero, and of 59 such
+    // pairs the GPU chain applied 21 and returned a state. All are refused, and
+    // diag(1e-8, 1) H on |+> is |0>.
+    for (int k = 1; k < 60; ++k)
+    {
+        const double c = k == 1 ? .8 : std::cos(.05 * k), s = k == 1 ? .6 : std::sin(.05 * k);
+        Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+        sim->Configure("use_double_precision", "true");
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        Eigen::Matrix2cd prepare, onto;
+        prepare << c, s, -s, c;             // |0> -> c|0> - s|1>
+        onto << s * s, s * c, s * c, c * c; // onto s|0> + c|1>
+        sim->ApplyGenericOneQubitGate(0, prepare);
+        sim->ApplyH(1);
+        const std::vector<double> before = sim->AllProbabilities();
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, onto), std::runtime_error);
+        const std::vector<double> after = sim->AllProbabilities();
+        for (size_t index = 0; index < before.size(); ++index)
+            BOOST_TEST(std::abs(after[index] - before[index]) < 1e-9, "orthogonal pair " << k);
+    }
+    {
+        auto sim = MakeGpuMPS(2);
+        sim->ApplyH(0);
+        Eigen::Matrix2cd filter;
+        filter << 1e-8, 1e-8, 1., -1.;
+        filter /= std::sqrt(2.);
+        sim->ApplyGenericOneQubitGate(0, filter);
+        BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-9);
+    }
     // A small weight is a weight, down to the rounding of amplitudes that cancel in the precision
     // the chain is kept in: P(1) = 9e-14 projects onto |1> in double precision, and is below what
     // single precision can tell from rounding, (64 epsilon)^2 or about 6e-11, where 1e-9 is not.

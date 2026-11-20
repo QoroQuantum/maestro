@@ -60,6 +60,7 @@ class AerSimulator : public AerState
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
         const AER::reg_t qubits = {qubit};
+        RequireGateTargets(qubits);
         if (simulationType == SimulationType::kMatrixProductState)
             ApplyGenericToChain(qubits, gate); // the chain stays normalized: see there
         else
@@ -77,6 +78,7 @@ class AerSimulator : public AerState
     {
         // Aer, like QCSim, maps the first entry to local matrix bit zero.
         const AER::reg_t qubits = {qubit0, qubit1};
+        RequireGateTargets(qubits);
         if (simulationType == SimulationType::kMatrixProductState)
             ApplyGenericToChain(qubits, gate);
         else

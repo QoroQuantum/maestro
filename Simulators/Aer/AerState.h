@@ -1470,6 +1470,7 @@ class AerState : public ISimulator
      */
     template <class Matrix> void ApplyGenericToChain(const AER::reg_t &qubits, const Matrix &gate)
     {
+        RequireGateTargets(qubits);
         const double deviation = NormDeviation(gate);
         if (deviation > kNormDeviationTolerance)
             return ApplyFilterToChain(qubits, gate);
@@ -1484,6 +1485,25 @@ class AerState : public ISimulator
                 pendingDeviation[qubit] = 0.;
                 RenormalizeFromSite(qubit);
             }
+    }
+
+    /**
+     * The targets of a generic gate are qubits of the register, each once.
+     * Aer does not check them (it reads its tables at whatever index it is
+     * given), and neither did the count kept here for each qubit of a chain.
+     * The bindings check before they call; a C++ caller is checked here.
+     */
+    void RequireGateTargets(const AER::reg_t &qubits) const
+    {
+        const size_t count = GetNumberOfQubits();
+        for (size_t k = 0; k < qubits.size(); ++k)
+        {
+            if (qubits[k] >= count)
+                throw std::invalid_argument("Generic gate target is out of range");
+            for (size_t j = 0; j < k; ++j)
+                if (qubits[j] == qubits[k])
+                    throw std::invalid_argument("Generic gate targets must be distinct");
+        }
     }
 
     /**
@@ -1518,12 +1538,13 @@ class AerState : public ISimulator
      * read without changing the chain: a refused matrix leaves the state as
      * it was, under a bond limit too.
      *
-     * Where M^dagger M is diagonal, the weight is its diagonal times the
-     * probabilities Aer has of the qubits, a sum of positive terms that is as
-     * exact for a small weight as for a large one. For one qubit otherwise,
-     * M^dagger M = V diag(h) V^dagger and the qubit is turned by V^dagger, a
-     * unitary on one site, which cuts nothing; the probabilities are read
-     * there, and M V / sqrt(w) is what remains to apply (or V, to turn back).
+     * Where the columns of M are orthogonal, the weight is their squared
+     * norms times the probabilities Aer has of the qubits, a sum of positive
+     * terms that is as exact for a small weight as for a large one. For one
+     * qubit otherwise, M = U S V^dagger and the qubit is turned by V^dagger,
+     * a unitary on one site, which cuts nothing; the probabilities are read
+     * there, weighed by the squared singular values, and U S / sqrt(w) is
+     * what remains to apply (or V, to turn back).
      * For two qubits otherwise, the weight is the sum of the Pauli expectation
      * values of the pair that M^dagger M is made of (PauliWeight).
      *
@@ -1534,15 +1555,20 @@ class AerState : public ISimulator
     template <class Matrix> void ApplyFilterToChain(const AER::reg_t &qubits, const Matrix &gate)
     {
         static constexpr char noState[] = "The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm";
-        using Hermitian = std::decay_t<decltype((gate.adjoint() * gate).eval())>;
-        const Hermitian squared = gate.adjoint() * gate;
-        const Eigen::SelfAdjointEigenSolver<Hermitian> solver(squared);
-        const Eigen::Index dimension = squared.rows();
-        const double largest = solver.info() == Eigen::Success ? solver.eigenvalues()(dimension - 1) : 0.;
+        // M = U S V^dagger. The singular values are taken from M itself: those of M^dagger M are their squares, and
+        // one below 1e-8 of the largest is lost there in the rounding of the product, so that what came out for it
+        // was noise of either sign (diag(1e-8, 1) H on |+> was scaled by a weight 27% off, and a projection onto a
+        // state orthogonal to the chain's was weighed 2.7e-17 and applied).
+        const Eigen::JacobiSVD<Matrix> decomposition(gate, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        const Eigen::Index dimension = gate.rows();
+        const double largest = decomposition.singularValues()(0) * decomposition.singularValues()(0);
         if (!(largest > 0.) || !std::isfinite(largest))
             throw std::runtime_error(noState); // the zero matrix, or one that is not finite
 
-        // Diagonal to rounding: its own diagonal weighs the probabilities Aer has, and nothing is turned.
+        // Columns that are orthogonal to rounding: M^dagger M is diagonal, the squared norms of the columns weigh
+        // the probabilities Aer has, and nothing is turned.
+        using Hermitian = std::decay_t<decltype((gate.adjoint() * gate).eval())>;
+        const Hermitian squared = gate.adjoint() * gate;
         Hermitian offDiagonal = squared;
         offDiagonal.diagonal().setZero();
         const bool diagonal = offDiagonal.cwiseAbs().maxCoeff() <= std::numeric_limits<double>::epsilon() * largest;
@@ -1564,15 +1590,17 @@ class AerState : public ISimulator
 
         // One qubit is turned where it has to be: a unitary on one site changes no bond and cuts nothing, and
         // turning back restores the tensor to rounding.
-        const Hermitian basis = diagonal ? Hermitian(Hermitian::Identity()) : Hermitian(solver.eigenvectors());
+        const Matrix basis = diagonal ? Matrix(Matrix::Identity()) : Matrix(decomposition.matrixV());
         if (!diagonal)
             state->apply_unitary(qubits, ToAerMatrix(basis.adjoint()));
         const std::vector<double> probabilities = state->probabilities(qubits);
         double weight = 0., total = 0.;
         for (Eigen::Index k = 0; k < dimension; ++k)
         {
-            const double value = diagonal ? squared(k, k).real() : solver.eigenvalues()(k);
-            weight += std::max(value, 0.) * probabilities.at(static_cast<size_t>(k));
+            // The squared norm of a column, or the squared singular value: sums of squares and squares, exact for a
+            // small one as for a large one.
+            const double value = diagonal ? gate.col(k).squaredNorm() : decomposition.singularValues()(k) * decomposition.singularValues()(k);
+            weight += value * probabilities.at(static_cast<size_t>(k));
             total += probabilities[static_cast<size_t>(k)];
         }
         if (!(weight > NoWeightBelow() * largest * total) || !std::isfinite(weight))
@@ -1581,7 +1609,9 @@ class AerState : public ISimulator
                 state->apply_unitary(qubits, ToAerMatrix(basis)); // back to the basis the state was in
             throw std::runtime_error(noState);
         }
-        state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix((gate * basis) / std::sqrt(weight))});
+        // M V = U S, taken from the factors.
+        const Matrix remaining = diagonal ? Matrix(gate) : Matrix(decomposition.matrixU() * decomposition.singularValues().asDiagonal());
+        state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix(remaining / std::sqrt(weight))});
     }
 
     /**

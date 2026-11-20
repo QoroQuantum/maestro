@@ -90,7 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     chain: a bond limit could cut the state there, and a refusal would not
     give it back). A projection onto a state that holds 9e-14 of the chain is
     applied. On the GPU the rule covers one-qubit matrices; for two-qubit
-    ones the library refuses an exact zero.
+    ones the library refuses an exact zero. The weight is taken from the
+    singular values of the matrix, not from those of its square, where a
+    small one is lost in rounding.
+  - The Aer simulator checks the targets of a generic gate (in range, each
+    once) and throws `std::invalid_argument`, as the bindings do before they
+    call: Aer itself reads its tables at whatever index it is given.
   - Matrices each within 1e-10 of unitary add up, and the chain is brought up
     to date once their sum passes that (on Aer per qubit, whatever weight the
     qubit has: `diag(1 + e, 1 - e)` shifts probabilities without moving it).
