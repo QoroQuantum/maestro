@@ -1461,12 +1461,15 @@ class AerState : public ISimulator
      *
      * A matrix that moves the norm by more than the tolerance is a filter:
      * ApplyFilterToChain. Smaller deviations add up, since many matrices each
-     * close to unitary move the state by their sum, and they add up for each
-     * qubit: once those of a qubit pass the tolerance, the tensors outside it
-     * are brought up to date from it (RenormalizeFromSite), whatever weight
-     * it has. A matrix can shift the probabilities of its qubit and leave the
+     * close to unitary move the state by their sum, on whatever qubits they
+     * act: (1 - 3e-11) I once on each of 1024 qubits left 0.99999994 of the
+     * state. They add up over the whole chain, and once they pass the
+     * tolerance the tensors are brought up to date from every qubit a matrix
+     * has met since the last time (RenormalizeFromSite), whatever weight it
+     * has. A matrix can shift the probabilities of its qubit and leave the
      * weight where it was, and the other qubits were then read from Schmidt
-     * values it had left stale.
+     * values it had left stale. Until then the count costs an addition and a
+     * mark for each gate.
      */
     template <class Matrix> void ApplyGenericToChain(const AER::reg_t &qubits, const Matrix &gate)
     {
@@ -1477,14 +1480,19 @@ class AerState : public ISimulator
         state->apply_unitary(qubits, ToAerMatrix(gate));
         if (deviation == 0.)
             return;
-        if (pendingDeviation.size() != GetNumberOfQubits())
-            pendingDeviation.assign(GetNumberOfQubits(), 0.);
+        if (pendingDeviation.touched.size() != GetNumberOfQubits())
+            pendingDeviation.touched.assign(GetNumberOfQubits(), 0);
         for (const auto qubit : qubits)
-            if ((pendingDeviation[qubit] += deviation) > kNormDeviationTolerance)
-            {
-                pendingDeviation[qubit] = 0.;
+            pendingDeviation.touched[qubit] = 1;
+        if ((pendingDeviation.total += deviation) <= kNormDeviationTolerance)
+            return;
+        // Every qubit a matrix has met since the last time: the scaled identity is exact where only that qubit has
+        // drifted, and what the others have drifted by is below the tolerance.
+        const std::vector<char> touched = std::move(pendingDeviation.touched);
+        pendingDeviation.clear();
+        for (size_t qubit = 0; qubit < touched.size(); ++qubit)
+            if (touched[qubit])
                 RenormalizeFromSite(qubit);
-            }
     }
 
     /**
@@ -1739,11 +1747,24 @@ class AerState : public ISimulator
     SimulationType simulationType = SimulationType::kStatevector;               /**< The simulation type. */
     std::unique_ptr<QiskitAerState> state = std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
     AER::Vector<complex_t> savedAmplitudes;                                     /**< The amplitudes, saved. */
-    std::vector<double> pendingDeviation;      /**< For each qubit of a matrix product state: how far the generic gates on it may have moved the state since the
-                                                  tensors outside it were last brought up to date. */
-    std::vector<double> savedPendingDeviation; /**< Its value at SaveState. */
-    bool normSaved = false;                    /**< Whether SaveState has run. */
-    AER::cmatrix_t savedDensityMatrix;         /**< The density matrix, saved. */
+
+    /** How far the generic gates may have moved a matrix product state since its tensors were last brought up to date, and the qubits they met. */
+    struct PendingDeviation
+    {
+        double total = 0.;
+        std::vector<char> touched;
+
+        void clear()
+        {
+            total = 0.;
+            touched.clear();
+        }
+    };
+
+    PendingDeviation pendingDeviation;
+    PendingDeviation savedPendingDeviation; /**< Its value at SaveState. */
+    bool normSaved = false;                 /**< Whether SaveState has run. */
+    AER::cmatrix_t savedDensityMatrix;      /**< The density matrix, saved. */
     std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
 
     bool enableMultithreading = true; /**< The multithreading flag. */

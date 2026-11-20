@@ -1048,7 +1048,7 @@ class AerSimulator : public AerState
 
         sim->SetMultithreading(enableMultithreading); /**< The multithreading flag. */
 
-        const std::vector<double> localSavedPendingDeviation = savedPendingDeviation;
+        const PendingDeviation localSavedPendingDeviation = savedPendingDeviation;
         const bool localNormSaved = normSaved;
         AER::Vector<complex_t> localSavedAmplitudes = savedAmplitudes; /**< The amplitudes, saved. */
         AER::Data localSavedState = savedState;                        /**< The saved data - here there will be the saved state of

@@ -96,10 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The Aer simulator checks the targets of a generic gate (in range, each
     once) and throws `std::invalid_argument`, as the bindings do before they
     call: Aer itself reads its tables at whatever index it is given.
-  - Matrices each within 1e-10 of unitary add up, and the chain is brought up
-    to date once their sum passes that (on Aer per qubit, whatever weight the
-    qubit has: `diag(1 + e, 1 - e)` shifts probabilities without moving it).
-    On Aer that draws once from its stream, as a channel does.
+  - Matrices each within 1e-10 of unitary add up, on whatever qubits they
+    act, and the chain is brought up to date once their sum passes that (on
+    Aer from every qubit a matrix has met since the last time, whatever
+    weight it has: `diag(1 + e, 1 - e)` shifts probabilities without moving
+    it). On Aer that draws from its stream, once for each such qubit, as a
+    channel does.
   - A GPU library that does not export `MPSReCanonicalize` refuses a matrix
     that is not unitary before the chain changes, and applies the others as
     it did.

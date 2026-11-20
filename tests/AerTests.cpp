@@ -1661,6 +1661,21 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
             }
         }
 
+        // And they add up over the qubits they act on: once on each of 1024 qubits in |0>,
+        // (1 - 3e-11) I left 0.99999994 of the only outcome there is, and diag(1 + e, 1 - e)
+        // 1.00000006, each qubit having drifted by less than the tolerance.
+        for (const bool scalar : {true, false})
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->AllocateQubits(1024);
+            sim->Initialize();
+            Eigen::Matrix2cd weak;
+            weak << (scalar ? 1. - 3e-11 : 1. + 3e-11), 0., 0., 1. - 3e-11;
+            for (size_t qubit = 0; qubit < 1024; ++qubit)
+                sim->ApplyGenericOneQubitGate(qubit, weak);
+            BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-9, "weak filters over 1024 qubits, scalar " << scalar << ": " << sim->Probability(0));
+        }
+
         // Refused matrices that are not along the basis: the state is as it was, to rounding (Aer
         // weighs them with the qubits turned, and turns them back).
         {
