@@ -238,6 +238,14 @@ extern "C"
     __declspec(dllexport)
 #endif
         double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits);
+    // Probabilities: one value per basis-state index in `qubits` (despite the name, outcomes, not qubits); an
+    // index of 2^n or more, for a register of n qubits, fails (nullptr). MarginalProbabilities: the 2^nrQubits
+    // probabilities of the listed qubits, the first listed the least significant bit (no qubits: one value, the
+    // total probability of the state; `qubits` may then be null). Free both with FreeDoubleVector.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        double *MarginalProbabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif

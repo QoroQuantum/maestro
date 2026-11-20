@@ -156,30 +156,31 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pathIntegralSimulator->Probability(outcome);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pathIntegralSimulator->AmplitudeForOutcome(outcome);
+    }
+
+    // The basis states its paths reach, summed: the threshold (path_integral_threshold) drops some, so it can be less
+    // than 1, as its probabilities are.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return pathIntegralSimulator->TotalProbability();
     }
 
     std::vector<double> AllProbabilities() override
     {
-        const size_t nrBasisStates = 1ULL << GetNumberOfQubits();
+        RequireQubits(GetNumberOfQubits());                                        // a register without qubits has no state to list
+        const size_t nrBasisStates = ListableBasisStateCount(GetNumberOfQubits()); // 1 << 64 listed one value
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)
             result[i] = pathIntegralSimulator->Probability(i);
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = pathIntegralSimulator->Probability(qubits[i]);
-        }
         return result;
     }
 
@@ -805,8 +806,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
                     return Utils::Sampling::CountCdfRange<Many>(
                         amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); }, bit, uniform, options);
                 return Utils::Sampling::CountCdfRange<Many>(
-                    amplitudes, shots, qubits.size(), [amplitudeShift](const auto &row) { return ScaledNorm(row.second, amplitudeShift); }, bit,
-                    uniform, options);
+                    amplitudes, shots, qubits.size(), [amplitudeShift](const auto &row) { return ScaledNorm(row.second, amplitudeShift); }, bit, uniform,
+                    options);
             });
             NotifyObservers(qubits);
             return result;

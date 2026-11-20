@@ -282,6 +282,7 @@ class ImmediateGpuSimulator : public ISimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         const auto ampl = Amplitude(outcome);
         return std::norm(ampl);
     }
@@ -289,19 +290,6 @@ class ImmediateGpuSimulator : public ISimulator
     std::complex<double> ProjectOnZero() override
     {
         return Amplitude(0);
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (size_t i = 0; i < qubits.size(); ++i)
-            {
-                const auto ampl = Amplitude(qubits[i]);
-                result[i] = std::norm(ampl);
-            }
-        }
-        return result;
     }
 
     std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
@@ -335,6 +323,7 @@ class ImmediateGpuSimulator : public ISimulator
 
     std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return Amplitude(outcome);
     }
 

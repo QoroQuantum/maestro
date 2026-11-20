@@ -140,6 +140,7 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         if constexpr (std::numeric_limits<size_t>::digits >= std::numeric_limits<Types::qubit_t>::digits)
         {
             return cliffordSimulator->getBasisStateProbability(static_cast<size_t>(outcome));
@@ -156,15 +157,21 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
         }
     }
 
-    std::vector<double> AllProbabilities() override
+    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    double TotalProbability() override
     {
-        return cliffordSimulator->AllProbabilities();
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
     }
 
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
+    std::vector<double> AllProbabilities() override
     {
-        throw std::runtime_error("QCSimState::Probabilities: Invalid simulation "
-                                 "type for obtaining probabilities.");
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // QCSim lists the distribution up to 32 qubits and throws its own error above: refused here first, as every
+        // reader too wide to list (std::length_error).
+        if (GetNumberOfQubits() > 32)
+            throw std::length_error("QCSim lists the distribution of a stabilizer state of at most 32 qubits, not " + std::to_string(GetNumberOfQubits()));
+        return cliffordSimulator->AllProbabilities();
     }
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override

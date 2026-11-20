@@ -23,6 +23,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Initialize() override
     {
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         RefreshRoutingSettings();
         InvalidateDummyHistory();
         if (nrQubits)
@@ -94,6 +96,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Reset() override
     {
+        normDeviation = 0.;
         if (mps)
         {
             mps->Reset();
@@ -280,6 +283,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void Clear() override
     {
+        normDeviation = 0.;
+        normSaved = false; // the chain is replaced, and its save with it
         mps = nullptr;
         nrQubits = 0;
         ClearDummySimulator();
@@ -402,6 +407,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         double real = 0.0;
         double imag = 0.0;
         {
@@ -421,10 +427,17 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         return mps->ProjectOnZero();
     }
 
+    // The chain stays normalized, at any width: unitary gates, measurements, channels and truncation keep its norm,
+    // and a generic gate whose matrix moves it is applied so that it is restored (ApplyKeepingNorm).
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (mps)
             return mps->AllProbabilities();
         if (nrQubits >= std::numeric_limits<size_t>::digits)
@@ -569,6 +582,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->SaveState())
             throw std::runtime_error("GPU MPS state save failed");
         SaveDummyState();
+        savedNormDeviation = normDeviation;
+        normSaved = true;
     }
 
     void RestoreState() override
@@ -576,28 +591,138 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         if (!mps->RestoreState())
             throw std::runtime_error("GPU MPS state restore failed");
         RestoreDummyState();
+        if (normSaved) // a restore with nothing saved leaves the state as it is
+            normDeviation = savedNormDeviation;
     }
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
         const Eigen::Matrix2cd inputFirst = gate.transpose();
-        if (!mps->ApplyOneQubitMatrix(static_cast<unsigned int>(qubit), reinterpret_cast<const double *>(inputFirst.data())))
-            throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the "
-                                     "generic one-qubit gate on the matrix product state simulator.");
+        ApplyKeepingNorm(
+            gate,
+            [&](GpuLibMPSSim &chain) {
+                return chain.ApplyOneQubitMatrix(static_cast<unsigned int>(qubit), reinterpret_cast<const double *>(inputFirst.data()));
+            },
+            "GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the generic one-qubit gate on the matrix product state simulator.",
+            [&](GpuLibMPSSim &trial) { return LeavesWeight(trial, static_cast<unsigned int>(qubit), gate); });
         NotifyObservers({qubit});
-        return;
     }
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
         const Eigen::Matrix4cd inputFirst = gate.transpose();
-        if (!mps->ApplyTwoQubitMatrix(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1),
-                                      reinterpret_cast<const double *>(inputFirst.data())))
-            throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
-                                     "generic two-qubit gate on the matrix product state simulator.");
+        const auto apply2 = [&](GpuLibMPSSim &chain) {
+            return chain.ApplyTwoQubitMatrix(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1),
+                                             reinterpret_cast<const double *>(inputFirst.data()));
+        };
+        ApplyKeepingNorm(gate, apply2,
+                         "GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the generic two-qubit gate on the matrix product state simulator.",
+                         [&](GpuLibMPSSim &trial) { return apply2(trial) && Renormalize(trial); });
         RecordExecutedTwoQubitGate(qubit0, qubit1, swapGatesRelabelQubits && IsExactSwapMatrix(gate), EffectiveSchmidtRank(gate));
         NotifyObservers({qubit0, qubit1});
-        return;
+    }
+
+    // Applies a generic gate so that the chain stays normalized and in canonical form (see IState::NormDeviation).
+    // A matrix that does not keep the norm leaves the Schmidt values of the chain stale, not only a weight, and the
+    // library went on sampling and reading one qubit from them; its two-qubit updates renormalize the chain at the
+    // bond they split only. Rebuilding the form repairs both. The deviations add up, so that many matrices each
+    // close to unitary are repaired too, once their sum passes the tolerance.
+    //
+    // A matrix can leave nothing of the state, and the library only finds that out on the chain it has changed: one
+    // that could (it is singular, or within twelve digits of it) is tried on a copy of the chain first (`leaves`),
+    // and refused there with the chain as it was. A matrix that is safely invertible leaves a state whatever it
+    // meets, and is not tried.
+    template <class Matrix, class Apply, class Leaves> void ApplyKeepingNorm(const Matrix &gate, const Apply &apply, const char *failure, const Leaves &leaves)
+    {
+        static constexpr char noState[] = "The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm";
+        const double deviation = NormDeviation(gate);
+        // Rebuilding the form needs a library that exports it; an older one does not. That is found out here, before
+        // the chain changes: such a library refuses a matrix that is not unitary, and applies the others as it
+        // always did, their rounding left where it falls.
+        const bool canRebuild = nrQubits == 1 || mps->CanReCanonicalize();
+        if (!canRebuild)
+        {
+            if (deviation > kNormDeviationTolerance)
+                throw std::runtime_error("This GPU library cannot renormalize a matrix product state after a matrix that is not unitary: a library "
+                                         "that exports MPSReCanonicalize is needed");
+            if (!apply(*mps))
+                throw std::runtime_error(failure);
+            return;
+        }
+        if (deviation > kNormDeviationTolerance && CouldLeaveNothing(gate))
+        {
+            const auto trial = mps->Clone();
+            // The copy takes the callbacks of the chain with it; they would report its bonds and its routing as
+            // this simulator's.
+            trial->ClearCallbacks();
+            if (!leaves(*trial))
+                throw std::runtime_error(noState);
+        }
+        if (!apply(*mps))
+            throw std::runtime_error(failure);
+        normDeviation += deviation;
+        if (normDeviation <= kNormDeviationTolerance)
+            return;
+        normDeviation = 0.;
+        InvalidateDummyHistory();
+        if (!Renormalize(*mps))
+            throw std::runtime_error(noState);
+    }
+
+    // Whether a one-qubit matrix M leaves a weight on a chain, read on a copy of it. The weight <psi|M^dagger M|psi>
+    // is taken as a sum of positive terms, which keeps a small one as exact as a large one: M = U S V^dagger and
+    // w = s_0^2 p_0 + s_1^2 p_1, with p the probabilities of the qubit once it is turned by V^dagger, each read as
+    // the probability of zero (of one, after an X). One within the rounding of amplitudes that cancel,
+    // (64 epsilon)^2 of what the matrix could leave, with epsilon the rounding of the precision the chain is kept
+    // in, counts as none, as on QCSim and Aer: the library itself only tells an exact zero, and normalized what
+    // rounding had left of a state (|+> projected onto |-> came back as a state).
+    bool LeavesWeight(GpuLibMPSSim &trial, unsigned int qubit, const Eigen::Matrix2cd &gate) const
+    {
+        // The singular values of M itself: see CouldLeaveNothing.
+        const Eigen::JacobiSVD<Eigen::Matrix2cd> decomposition(gate, Eigen::ComputeFullV);
+        const double largest = decomposition.singularValues()(0) * decomposition.singularValues()(0);
+        const double smallest = decomposition.singularValues()(1) * decomposition.singularValues()(1);
+        if (!(largest > 0.) || !std::isfinite(largest))
+            return false;
+        const Eigen::Matrix2cd turn = decomposition.matrixV().adjoint().transpose(); // the library takes it input first
+        Eigen::Matrix2cd flip;
+        flip << 0., 1., 1., 0.;
+        if (!trial.ApplyOneQubitMatrix(qubit, reinterpret_cast<const double *>(turn.data())))
+            return false;
+        const double zero = trial.Probability0(qubit); // along the direction the matrix keeps most of
+        if (!trial.ApplyOneQubitMatrix(qubit, reinterpret_cast<const double *>(flip.data())))
+            return false;
+        const double one = trial.Probability0(qubit);
+        const double weight = largest * zero + smallest * one;
+        const double rounding =
+            64. * (trial.IsDoublePrecision() ? std::numeric_limits<double>::epsilon() : static_cast<double>(std::numeric_limits<float>::epsilon()));
+        return std::isfinite(weight) && weight > rounding * rounding * largest;
+    }
+
+    // Whether a matrix has a direction it all but removes: its smallest singular value is below a millionth of its
+    // largest, so that what it leaves of a state can be nothing, or too little to normalize.
+    template <class Matrix> static bool CouldLeaveNothing(const Matrix &gate)
+    {
+        // The singular values of the matrix itself, not the eigenvalues of M^dagger M, which are their squares: one
+        // below 1e-8 of the largest is lost there in the rounding of the product, and what came out for it was
+        // noise of either sign (a projection onto a state orthogonal to the chain's was weighed by it and applied).
+        const Eigen::JacobiSVD<Matrix> decomposition(gate);
+        const auto &values = decomposition.singularValues(); // in decreasing order
+        return !(values(values.size() - 1) > 1e-6 * values(0));
+    }
+
+    // Rebuilds the canonical form of a chain, which normalizes it; false when nothing is left to normalize. One
+    // site has no bond to rebuild: it is scaled by its own weight, that of its two basis states.
+    bool Renormalize(GpuLibMPSSim &chain) const
+    {
+        if (nrQubits > 1)
+            return chain.ReCanonicalize();
+        const std::vector<double> both = chain.AllProbabilities();
+        const double weight = both.at(0) + both.at(1);
+        if (!(weight > 0.) || !std::isfinite(weight))
+            return false;
+        const Eigen::Matrix2cd scale = Eigen::Matrix2cd::Identity() / std::sqrt(weight);
+        return chain.ApplyOneQubitMatrix(0, reinterpret_cast<const double *>(scale.data()));
     }
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
@@ -849,6 +974,9 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     {
         auto cloned = std::make_unique<GpuMPSSimulator>();
         cloned->swapGatesRelabelQubits = swapGatesRelabelQubits;
+        cloned->normDeviation = normDeviation;
+        cloned->savedNormDeviation = savedNormDeviation;
+        cloned->normSaved = normSaved;
         cloned->nrQubits = nrQubits;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
@@ -900,6 +1028,9 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     }
 
     std::unique_ptr<GpuLibMPSSim> mps;
+    double normDeviation = 0.;      // how far the generic gates may have moved its norm since the chain was last rebuilt
+    double savedNormDeviation = 0.; // its value at SaveState
+    bool normSaved = false;         // whether the chain holds a save
 };
 } // namespace Simulators::Private
 #endif

@@ -314,6 +314,8 @@ class QuestState : public ISimulator
      */
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
+        RequireSignedIndex(outcome);
         return questLib->GetOutcomeProbability(sim, static_cast<long long int>(outcome));
     }
 
@@ -329,6 +331,8 @@ class QuestState : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
+        RequireSignedIndex(outcome);
         std::complex<double> amplitude;
         if (questLib->GetAmplitude(sim, static_cast<long long int>(outcome), amplitude))
         {
@@ -367,34 +371,14 @@ class QuestState : public ISimulator
      */
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
-        const size_t numStates = 1ULL << nrQubits;
+        RequireQubits(GetNumberOfQubits());                         // a register without qubits has no state to list
+        const size_t numStates = ListableBasisStateCount(nrQubits); // 1 << 64 listed one value
         std::vector<std::complex<double>> amplitudes(numStates);
         questLib->GetAmplitudes(sim, amplitudes);
 
         std::vector<double> result(numStates);
         for (size_t i = 0; i < numStates; ++i)
             result[i] = std::norm(amplitudes[i]);
-        return result;
-    }
-
-    /**
-     * @brief Returns the probabilities of the specified outcomes.
-     *
-     * Use it to obtain the probabilities of the specified outcomes.
-     * @sa QuestState::Probability
-     * @sa QuestState::Amplitude
-     *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
-     */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        for (size_t i = 0; i < qubits.size(); ++i)
-            result[i] = questLib->GetOutcomeProbability(sim, static_cast<long long int>(qubits[i]));
         return result;
     }
 
@@ -778,6 +762,14 @@ class QuestState : public ISimulator
     }
 
   protected:
+    // QuEST takes a basis-state index as a signed 64-bit integer. An index past its range needs a register of 64
+    // qubits or more, which QuEST cannot hold (2^64 amplitudes), but a cast of one would be negative: refuse it.
+    static void RequireSignedIndex(Types::qubit_t outcome)
+    {
+        if (outcome > static_cast<Types::qubit_t>(std::numeric_limits<long long int>::max()))
+            throw std::out_of_range("Basis state " + std::to_string(outcome) + " is past the signed 64-bit indices of QuEST");
+    }
+
     std::shared_ptr<QuestLibSim> questLib; /**< The quest library. */
     unsigned long int simHandle = 0;       /**< The simulator handle. */
     void *sim = nullptr;                   /**< The simulator pointer. */

@@ -24,8 +24,10 @@
 #include "BaseContractor.h"
 
 #include <cmath>
+#include <iterator>
 #include <list>
 #include <queue>
+#include <unordered_map>
 
 namespace TensorNetworks
 {
@@ -35,6 +37,10 @@ namespace TensorNetworks
 class ForestContractor : public BaseContractor
 {
   public:
+    ForestContractor() = default;
+    // The plan cache indexes its own list (planIndex, preparedOrder): Clone() gives an independent contractor.
+    ForestContractor(const ForestContractor &) = delete;
+    ForestContractor &operator=(const ForestContractor &) = delete;
     virtual ~ForestContractor() = default;
 
     double Contract(const TensorNetwork &network, Types::qubit_t qubit) override
@@ -42,20 +48,29 @@ class ForestContractor : public BaseContractor
         CachedPlan plan;
         const auto &original = network.GetTensors();
         const auto &group = network.GetQubitGroup(qubit);
-        for (size_t i = 0; i < original.size(); ++i)
-            if (original[i] && !original[i]->qubits.empty() && group.count(original[i]->qubits[0]))
-                plan.inputs.push_back(i);
+        if (const auto *gathered = network.GetGatheredGroupTensors(qubit))
+            plan.inputs = *gathered; // the network is contracting every group and has found the tensors of each
+        else
+            for (size_t i = 0; i < original.size(); ++i)
+                if (original[i] && !original[i]->qubits.empty() && group.count(original[i]->qubits[0]))
+                    plan.inputs.push_back(i);
         if (plan.inputs.empty())
             throw std::invalid_argument("Cannot contract an empty tensor network");
 
         bool cacheable = MakeSignature(network, qubit, plan);
         if (cacheable)
         {
-            for (auto it = plans.begin(); it != plans.end(); ++it)
+            // By fingerprint: a network of many groups keeps a plan for each, and going through them all for every
+            // group made its contraction quadratic in their number.
+            const auto candidates = planIndex.equal_range(plan.fingerprint);
+            for (auto entry = candidates.first; entry != candidates.second; ++entry)
             {
-                if (it->fingerprint == plan.fingerprint && it->signature == plan.signature)
+                const auto it = entry->second;
+                if (it->signature == plan.signature)
                 {
-                    plans.splice(plans.begin(), plans, it);
+                    plans.splice(plans.begin(), plans, it); // the iterator stays that of the plan
+                    if (it->prepared)
+                        preparedOrder.splice(preparedOrder.begin(), preparedOrder, it->preparedAt);
                     ++planCacheHits;
                     if (!plans.front().preparationAttempted)
                         PreparePlan(network, plans.front());
@@ -149,6 +164,7 @@ class ForestContractor : public BaseContractor
                         EvictLastPlan();
                 cachedBytes += plan.bytes;
                 plans.push_front(std::move(plan));
+                planIndex.emplace(plans.front().fingerprint, plans.begin());
             }
         }
         return result;
@@ -216,7 +232,10 @@ class ForestContractor : public BaseContractor
     void ClearPlanCache()
     {
         plans.clear();
+        planIndex.clear();
+        preparedOrder.clear();
         cachedBytes = 0;
+        preparedBytes = 0;
         planCacheHits = 0;
         ClearWorkspace();
     }
@@ -263,6 +282,8 @@ class ForestContractor : public BaseContractor
         // Immutable after construction, including when the contractor is copied.
         std::shared_ptr<const PreparedPlan> prepared;
         bool preparationAttempted = false;
+        // Where the plan is among the prepared ones (preparedOrder), while it is prepared.
+        std::list<CachedPlan *>::iterator preparedAt;
     };
 
     struct Candidate
@@ -396,10 +417,7 @@ class ForestContractor : public BaseContractor
         plan.preparationAttempted = true;
         // Prepared metadata may replace older prepared metadata, but must not
         // evict contraction orders. This protects multi-qubit query workloads.
-        size_t limit = planCacheByteLimit - cachedBytes;
-        for (const auto &cached : plans)
-            if (cached.prepared)
-                limit += cached.prepared->bytes;
+        const size_t limit = planCacheByteLimit - cachedBytes + preparedBytes;
         size_t bytes = sizeof(PreparedPlan) + 2 * sizeof(void *);
         if (!Utils::detail::TensorAddBytes(bytes, plan.steps.size(), sizeof(PreparedStep), limit))
             return;
@@ -486,6 +504,9 @@ class ForestContractor : public BaseContractor
         plan.prepared = std::move(prepared);
         plan.bytes += bytes;
         cachedBytes += bytes;
+        preparedBytes += bytes;
+        preparedOrder.push_front(&plan); // it is the plan in use, at the front of the plans
+        plan.preparedAt = preparedOrder.begin();
     }
 
     bool PrepareWorkspace(size_t size)
@@ -557,30 +578,48 @@ class ForestContractor : public BaseContractor
 
     void EvictLastPlan()
     {
-        cachedBytes -= plans.back().bytes;
+        const auto last = std::prev(plans.end());
+        cachedBytes -= last->bytes;
+        if (last->prepared)
+        {
+            preparedBytes -= last->prepared->bytes;
+            preparedOrder.erase(last->preparedAt);
+        }
+        const auto entries = planIndex.equal_range(last->fingerprint);
+        for (auto entry = entries.first; entry != entries.second; ++entry)
+            if (entry->second == last)
+            {
+                planIndex.erase(entry);
+                break;
+            }
         plans.pop_back();
     }
 
+    // Drops what the least recently used of the prepared plans holds prepared. It is found without going through
+    // the plans: once per plan to make room for, that was quadratic in their number at a full cache.
     bool DropLastPreparedPlan()
     {
-        for (auto it = plans.rbegin(); it != plans.rend(); ++it)
-            if (it->prepared)
-            {
-                cachedBytes -= it->prepared->bytes;
-                it->bytes -= it->prepared->bytes;
-                it->prepared.reset();
-                // Do not repeatedly promote/demote the same plan at a tight budget.
-                // A budget change or a new order-cache entry allows another attempt.
-                return true;
-            }
-        return false;
+        if (preparedOrder.empty())
+            return false;
+        CachedPlan &plan = *preparedOrder.back();
+        preparedOrder.pop_back();
+        cachedBytes -= plan.prepared->bytes;
+        preparedBytes -= plan.prepared->bytes;
+        plan.bytes -= plan.prepared->bytes;
+        plan.prepared.reset();
+        // Do not repeatedly promote/demote the same plan at a tight budget.
+        // A budget change or a new order-cache entry allows another attempt.
+        return true;
     }
 
     size_t planCacheByteLimit = 8 * 1024 * 1024;
     size_t cachedBytes = 0, planCacheHits = 0;
+    size_t preparedBytes = 0; // the part of cachedBytes that prepared plans hold
     size_t workspaceByteLimit = 16 * 1024 * 1024;
     std::vector<Complex> workspace;
     std::list<CachedPlan> plans;
+    std::unordered_multimap<size_t, std::list<CachedPlan>::iterator> planIndex; // the plans by fingerprint
+    std::list<CachedPlan *> preparedOrder;                                      // the prepared plans, in the order they have in `plans`
 };
 
 } // namespace TensorNetworks

@@ -190,11 +190,13 @@ class DistributedGpuState : public ISimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return Native().BasisStateProbability(outcome);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         double real, imag;
         Native().Amplitude(outcome, &real, &imag);
         return {real, imag};
@@ -212,16 +214,9 @@ class DistributedGpuState : public ISimulator
 
     std::vector<double> AllProbabilities() override
     {
-        std::vector<double> values(size_t{1} << nrQubits);
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        std::vector<double> values(ListableBasisStateCount(nrQubits));
         Native().AllProbabilities(values.data());
-        return values;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &outcomes) override
-    {
-        std::vector<double> values;
-        for (auto outcome : outcomes)
-            values.push_back(Probability(outcome));
         return values;
     }
 

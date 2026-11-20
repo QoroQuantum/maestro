@@ -664,8 +664,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
-        if (nrQubits < sizeof(Types::qubit_t) * 8 && outcome >= (Types::qubit_t{1} << nrQubits))
-            throw std::out_of_range("GPU MPO basis state is out of range");
+        RequireBasisState(outcome);
         std::vector<bool> bits(nrQubits);
         for (size_t q = 0; q < std::min(nrQubits, sizeof(Types::qubit_t) * 8); ++q)
             bits[q] = ((outcome >> q) & 1) != 0;
@@ -678,26 +677,25 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
                                  "product operators.");
     }
 
+    // The operator reports its probabilities normalized by its trace (ApplyOperator without normalize leaves the
+    // trace where it falls), so they total 1 wherever they are defined. Where the trace cannot normalize them they
+    // all throw, and so does this: it asks the probability of |0...0>, one contraction at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        (void)Probability(0);
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (nrQubits >= std::numeric_limits<size_t>::digits || (mpo && nrQubits >= 63))
             throw std::length_error("Full probability enumeration exceeds the basis-index API; query "
                                     "selected bit vectors");
         const size_t numStates = size_t{1} << nrQubits;
         std::vector<double> result(numStates);
         mpo->AllProbabilities(result.data());
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (size_t i = 0; i < qubits.size(); ++i)
-                result[i] = Probability(qubits[i]);
-        }
         return result;
     }
 

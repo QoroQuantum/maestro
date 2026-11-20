@@ -60,13 +60,11 @@ class AerSimulator : public AerState
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
         const AER::reg_t qubits = {qubit};
-        AER::cmatrix_t gate_matrix(2, 2);
-        gate_matrix(0, 0) = gate(0, 0);
-        gate_matrix(0, 1) = gate(0, 1);
-        gate_matrix(1, 0) = gate(1, 0);
-        gate_matrix(1, 1) = gate(1, 1);
-
-        state->apply_unitary(qubits, gate_matrix);
+        RequireGateTargets(qubits);
+        if (simulationType == SimulationType::kMatrixProductState)
+            ApplyGenericToChain(qubits, gate); // the chain stays normalized: see there
+        else
+            state->apply_unitary(qubits, ToAerMatrix(gate));
         NotifyObservers(qubits);
     }
 
@@ -80,12 +78,11 @@ class AerSimulator : public AerState
     {
         // Aer, like QCSim, maps the first entry to local matrix bit zero.
         const AER::reg_t qubits = {qubit0, qubit1};
-        AER::cmatrix_t gate_matrix(4, 4);
-        for (size_t i = 0; i < 4; ++i)
-            for (size_t j = 0; j < 4; ++j)
-                gate_matrix(i, j) = gate(i, j);
-
-        state->apply_unitary(qubits, gate_matrix);
+        RequireGateTargets(qubits);
+        if (simulationType == SimulationType::kMatrixProductState)
+            ApplyGenericToChain(qubits, gate);
+        else
+            state->apply_unitary(qubits, ToAerMatrix(gate));
         NotifyObservers(qubits);
     }
 
@@ -1051,6 +1048,8 @@ class AerSimulator : public AerState
 
         sim->SetMultithreading(enableMultithreading); /**< The multithreading flag. */
 
+        const PendingDeviation localSavedPendingDeviation = savedPendingDeviation;
+        const bool localNormSaved = normSaved;
         AER::Vector<complex_t> localSavedAmplitudes = savedAmplitudes; /**< The amplitudes, saved. */
         AER::Data localSavedState = savedState;                        /**< The saved data - here there will be the saved state of
                                                                           the simulator */
@@ -1101,6 +1100,12 @@ class AerSimulator : public AerState
         if (configuration.IsSet("seed"))
             sim->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
 
+        // The mark of the state, and the one saved with it (SaveState above wrote this simulator's).
+        sim->pendingDeviation = pendingDeviation;
+        sim->savedPendingDeviation = localSavedPendingDeviation;
+        sim->normSaved = localNormSaved;
+        savedPendingDeviation = localSavedPendingDeviation;
+        normSaved = localNormSaved;
         return sim;
     }
 };

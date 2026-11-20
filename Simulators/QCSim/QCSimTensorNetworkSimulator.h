@@ -140,6 +140,7 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return tensorNetwork->getBasisStateProbability(outcome);
     }
 
@@ -149,16 +150,18 @@ class QCSimTensorNetworkSimulator : public QCSimGateSimulator
                                  "tensor network simulator.");
     }
 
-    std::vector<double> AllProbabilities() override
+    // Two contractions per independent group of qubits, at any width (the default would contract once per basis state).
+    double TotalProbability() override
     {
-        throw std::runtime_error("QCSimState::AllProbabilities: Invalid "
-                                 "simulation type for obtaining probabilities.");
+        RequireQubits(GetNumberOfQubits());
+        return tensorNetwork->TotalProbability();
     }
 
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
+    std::vector<double> AllProbabilities() override
     {
-        throw std::runtime_error("QCSimState::Probabilities: Not implemented yet "
-                                 "for the tensor network simulator.");
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        throw std::runtime_error("QCSimState::AllProbabilities: Invalid "
+                                 "simulation type for obtaining probabilities.");
     }
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override

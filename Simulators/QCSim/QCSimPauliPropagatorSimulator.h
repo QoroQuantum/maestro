@@ -220,25 +220,24 @@ class QCSimPauliPropagatorSimulator : public ImmediateQCSimSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         return pp->Probability(outcome);
+    }
+
+    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
     }
 
     std::vector<double> AllProbabilities() override
     {
-        const size_t nrBasisStates = 1ULL << GetNumberOfQubits();
+        RequireQubits(GetNumberOfQubits());                                        // a register without qubits has no state to list
+        const size_t nrBasisStates = ListableBasisStateCount(GetNumberOfQubits()); // 1 << 64 listed one value
         std::vector<double> result(nrBasisStates);
         for (size_t i = 0; i < nrBasisStates; ++i)
             result[i] = pp->Probability(i);
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = pp->Probability(qubits[i]);
-        }
         return result;
     }
 

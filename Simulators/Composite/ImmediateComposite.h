@@ -361,6 +361,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         std::complex<double> res = 1.0;
 
         for (auto &[id, simulator] : simulators)
@@ -476,6 +477,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         std::complex<double> res = 1.0;
 
         for (auto &[id, simulator] : simulators)
@@ -514,33 +516,24 @@ class ImmediateCompositeSimulator : public ISimulator
      *
      * @return A vector with the probabilities of all possible outcomes.
      */
-    std::vector<double> AllProbabilities() override
+    // The components hold independent factors of the state: its weight is the product of theirs, at any width.
+    double TotalProbability() override
     {
-        const size_t nrBasisStates = 1ULL << nrQubits;
-        std::vector<double> result;
-
-        for (size_t i = 0; i < nrBasisStates; ++i)
-            result.emplace_back(Probability(i));
-
-        return result;
+        RequireQubits(GetNumberOfQubits());
+        double total = 1.;
+        for (auto &[id, simulator] : simulators)
+            total *= simulator->TotalProbability();
+        return total;
     }
 
-    /**
-     * @brief Returns the probabilities of the specified outcomes.
-     *
-     * Use it to obtain the probabilities of the specified outcomes.
-     *
-     * @param qubits A vector with the qubits configuration outcomes.
-     * @return A vector with the probabilities for the specified qubit
-     * configurations.
-     */
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
+    std::vector<double> AllProbabilities() override
     {
-        std::vector<double> result;
-
-        for (size_t i = 0; i < qubits.size(); ++i)
-            result.emplace_back(Probability(qubits[i]));
-
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
+        // Allocated at once, after the count is checked: appending grew the list without end where it cannot exist
+        // (2^63 values at 63 qubits), and 1 << 64 listed one value.
+        std::vector<double> result(ListableBasisStateCount(nrQubits));
+        for (size_t i = 0; i < result.size(); ++i)
+            result[i] = Probability(i);
         return result;
     }
 

@@ -191,6 +191,170 @@ BOOST_AUTO_TEST_CASE(basis_state_initialization_matches)
     }
 }
 
+// A generic gate whose matrix is not unitary: both chains stay normalized, and what is read or
+// sampled after it follows the state (the Schmidt values of the other bonds were left stale: a
+// qubit of a Bell pair whose other qubit had been projected was sampled as one half the time).
+BOOST_AUTO_TEST_CASE(matrix_that_is_not_unitary_leaves_both_chains_normalized)
+{
+    if (!MakeGpuMPS())
+    {
+        BOOST_TEST_MESSAGE("GPU MPS library is unavailable; skipping");
+        return;
+    }
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero(), damping;
+    projector(0, 0) = 1.;
+    damping << 1., 0., 0., .5;
+    Eigen::Matrix4cd pairFilter = Eigen::Matrix4cd::Zero();
+    pairFilter.diagonal() << 1., .5, .5, .25;
+    pairFilter(0, 3) = std::complex<double>(.2, .1);
+    for (int operation = 0; operation < 4; ++operation)
+    {
+        std::vector<std::vector<double>> distributions;
+        for (auto sim : {MakeGpuMPS(), MakeQCSimMPS()})
+        {
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyCX(1, 2);
+            sim->ApplyRy(2, .7);
+            sim->ApplyCX(2, 3);
+            if (operation == 0)
+                sim->ApplyGenericOneQubitGate(0, damping);
+            else if (operation == 1)
+                sim->ApplyGenericOneQubitGate(2, projector);
+            else if (operation == 2)
+                sim->ApplyGenericTwoQubitGate(1, 2, pairFilter);
+            else
+                sim->ApplyGenericTwoQubitGate(3, 0, pairFilter);
+            sim->ApplyH(1);
+            sim->ApplyCX(3, 1);
+            const std::vector<double> all = sim->AllProbabilities();
+            BOOST_TEST(std::abs(std::accumulate(all.begin(), all.end(), 0.) - 1.) < kTolerance, "operation " << operation);
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - 1.) < 1e-12, "operation " << operation);
+            for (const size_t qubit : {0, 1, 2, 3})
+            {
+                double one = 0.;
+                for (size_t index = 0; index < all.size(); ++index)
+                    if ((index >> qubit) & 1)
+                        one += all[index];
+                const size_t shots = 20000;
+                auto counts = sim->SampleCounts({qubit}, shots);
+                BOOST_TEST(std::abs(static_cast<double>(counts[1]) / shots - one) < 5. * std::sqrt(.25 / shots),
+                           "operation " << operation << ", sampled qubit " << qubit);
+            }
+            distributions.push_back(all);
+        }
+        CheckAllClose(distributions[0], distributions[1]);
+    }
+    for (auto sim : {MakeGpuMPS(2), MakeQCSimMPS(2)})
+    {
+        sim->ApplyH(0);
+        sim->ApplyCX(0, 1);
+        sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * std::sqrt(2.)));
+        auto counts = sim->SampleCounts({1}, 128);
+        BOOST_TEST(counts[0] == 128u);
+        // Nothing is left of the state after a second projection, onto one: refused.
+        Eigen::Matrix2cd other = Eigen::Matrix2cd::Zero();
+        other(1, 1) = 1.;
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(1, other), std::runtime_error);
+    }
+    // A refused matrix leaves the chain as it was: the library only finds a state gone on the chain
+    // it has changed (|1> projected onto |0> threw and left all zeros behind a total of 1), so a
+    // matrix that could leave nothing is tried on a copy first. One whose result is only what
+    // rounding left of amplitudes that cancel, |+> onto |->, is refused too (it came back as a
+    // state). In single precision and in double.
+    for (const bool doublePrecision : {false, true})
+        for (const size_t qubits : {size_t(1), size_t(2), size_t(3)})
+        {
+            Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+            sim->Configure("use_double_precision", doublePrecision ? "true" : "false");
+            sim->AllocateQubits(qubits);
+            sim->Initialize();
+            sim->ApplyX(0);
+            for (size_t qubit = 1; qubit < qubits; ++qubit)
+                sim->ApplyCX(qubit - 1, qubit);
+            if (qubits > 1)
+                sim->ApplyH(qubits - 1); // |1...1> with the last qubit in |->
+            const std::vector<double> before = sim->AllProbabilities();
+            Eigen::Matrix2cd plus;
+            plus << .5, .5, .5, .5; // onto |+>
+            BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, projector), std::runtime_error);
+            if (qubits > 1)
+                BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(qubits - 1, plus), std::runtime_error);
+            const std::vector<double> after = sim->AllProbabilities();
+            BOOST_REQUIRE_EQUAL(after.size(), before.size());
+            for (size_t index = 0; index < before.size(); ++index)
+                BOOST_TEST(std::abs(after[index] - before[index]) < kTolerance,
+                           "double " << doublePrecision << ", " << qubits << " qubits, basis state " << index);
+            BOOST_TEST(std::abs(std::accumulate(after.begin(), after.end(), 0.) - 1.) < kTolerance);
+        }
+    // The weight is read from the singular values of the matrix, not from the eigenvalues of
+    // M^dagger M, their squares, of which a small one is lost in rounding: a projection onto a state
+    // orthogonal to the chain's was weighed by the noise that came out for zero, and of 59 such
+    // pairs the GPU chain applied 21 and returned a state. All are refused, and
+    // diag(1e-8, 1) H on |+> is |0>.
+    for (int k = 1; k < 60; ++k)
+    {
+        const double c = k == 1 ? .8 : std::cos(.05 * k), s = k == 1 ? .6 : std::sin(.05 * k);
+        Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+        sim->Configure("use_double_precision", "true");
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        Eigen::Matrix2cd prepare, onto;
+        prepare << c, s, -s, c;             // |0> -> c|0> - s|1>
+        onto << s * s, s * c, s * c, c * c; // onto s|0> + c|1>
+        sim->ApplyGenericOneQubitGate(0, prepare);
+        sim->ApplyH(1);
+        const std::vector<double> before = sim->AllProbabilities();
+        BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, onto), std::runtime_error);
+        const std::vector<double> after = sim->AllProbabilities();
+        for (size_t index = 0; index < before.size(); ++index)
+            BOOST_TEST(std::abs(after[index] - before[index]) < 1e-9, "orthogonal pair " << k);
+    }
+    {
+        auto sim = MakeGpuMPS(2);
+        sim->ApplyH(0);
+        Eigen::Matrix2cd filter;
+        filter << 1e-8, 1e-8, 1., -1.;
+        filter /= std::sqrt(2.);
+        sim->ApplyGenericOneQubitGate(0, filter);
+        BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-9);
+    }
+    // A small weight is a weight, down to the rounding of amplitudes that cancel in the precision
+    // the chain is kept in: P(1) = 9e-14 projects onto |1> in double precision, and is below what
+    // single precision can tell from rounding, (64 epsilon)^2 or about 6e-11, where 1e-9 is not.
+    for (const bool doublePrecision : {false, true})
+        for (const double probability : {1e-9, 9e-14})
+        {
+            Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+            sim->Configure("use_double_precision", doublePrecision ? "true" : "false");
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            sim->ApplyRy(0, 2. * std::asin(std::sqrt(probability)));
+            sim->ApplyCX(0, 1);
+            Eigen::Matrix2cd one = Eigen::Matrix2cd::Zero();
+            one(1, 1) = 1.;
+            if (!doublePrecision && probability < 1e-11)
+            {
+                BOOST_CHECK_THROW(sim->ApplyGenericOneQubitGate(0, one), std::runtime_error);
+                BOOST_TEST(std::abs(sim->Probability(0) - 1.) < kTolerance);
+            }
+            else
+            {
+                sim->ApplyGenericOneQubitGate(0, one);
+                BOOST_TEST(std::abs(sim->Probability(3) - 1.) < kTolerance, "double " << doublePrecision << ", P(1) " << probability);
+            }
+        }
+    for (auto sim : {MakeGpuMPS(1), MakeQCSimMPS(1)}) // one qubit: no bond to renormalize at
+    {
+        sim->ApplyH(0);
+        sim->ApplyGenericOneQubitGate(0, Eigen::Matrix2cd(projector * .25));
+        BOOST_TEST(std::abs(sim->Probability(0) - 1.) < kTolerance);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(mixture_of_basis_states_is_rejected_by_both_backends)
 {
     auto gpuMPS = MakeGpuMPS(2);

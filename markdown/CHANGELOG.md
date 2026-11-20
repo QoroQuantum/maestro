@@ -9,6 +9,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Probabilities(outcomes)` takes basis-state indices and returns one
+  probability per index on every backend, as documented. On the Qiskit Aer
+  statevector, MPS and stabilizer it returned Aer's marginal distribution of
+  the indices read as qubits: 2^k values, and a read past the state or a crash
+  for an index of the qubit count or more. The marginal of some qubits is
+  `MarginalProbabilities(qubits)`, new on every backend (C++, Python, C API):
+  2^k values, the first listed qubit the least significant bit, computed
+  directly by Aer and from the whole distribution elsewhere (on a tensor
+  network, one basis state at a time).
+- `Probability`, `Amplitude` and `Probabilities` throw `std::out_of_range`
+  (Python `IndexError`) for a basis state of 2^n or more on every backend.
+  It was 0 on some, the probability of the index's low bits on others (QCSim
+  MPS and path integral, Aer MPS and stabilizer), and a read past the state
+  on the QCSim statevector. `Probability` and `Amplitude` on the QCSim
+  statevector and MPS no longer cut the index to 32 bits, which on an MPS of
+  more than 32 qubits read another basis state.
+- `Probabilities` now works on the QCSim stabilizer and tensor network, from
+  their `Probability`; the composite simulator's components no longer read
+  the outcomes as qubits.
+- Basis-state queries at the edges of the register: a register without
+  qubits throws `std::runtime_error` (`RuntimeError` in Python), where most
+  backends read a state that was never created; a full distribution too
+  wide to list throws `std::length_error` before it is listed (QCSim MPS at
+  32 qubits returned nothing; the path integral, Pauli propagator, composite
+  and Aer stabilizer one value at 64; the composite at 63 grew its list
+  without end; QCSim's MPS past 31 and stabilizer past 32 qubits refuse
+  before QCSim throws its own error), so a marginal no longer sums it to
+  zero; an empty marginal is the total probability of the state, which a
+  generic gate with a non-unitary matrix can leave below 1, read at any
+  width where the backend has it (Aer's dense methods, the tensor network
+  over each of its independent groups of qubits, the path integral over the
+  paths its threshold keeps, the composite as the product of its
+  components; 1 on the MPOs, which normalize by the trace and throw where it
+  cannot, where the state cannot be left unnormalized, and on a matrix
+  product state, see below); a statevector given to Aer must hold the
+  register's amplitudes (a shorter one was read past its end);
+  `Probabilities`
+  with no outcomes throws on a register without qubits too; an index on 65
+  qubits or more no longer reads qubit 64 as qubit 0 (Aer MPS, through the
+  pin, and the path integral read basis state 1 as 0); QuEST refuses an
+  index past its signed 64-bit range; `Amplitude` on a method without
+  amplitudes throws
+  `std::runtime_error` before the index is checked, on every backend; and the
+  QCSim MPS reads an index through its bits, never cutting it to `size_t`;
+  the Aer extended stabilizer's `Amplitude` refuses a statevector too large
+  to allocate, where from 60 qubits Aer's byte count wrapped and it wrote
+  past its buffer.
+  `AllProbabilities` on a register without qubits throws too, on every
+  backend, and `AllocateQubits(0)` on Aer no longer reads past an empty list
+  of qubit ids.
+- A matrix product state stays normalized after a generic gate whose matrix
+  is not unitary (QCSim, Aer, GPU). Such a matrix left the Schmidt values of
+  the chain's other bonds stale, not only a weight: a qubit of a Bell pair
+  whose other qubit had been projected onto zero was read, by Aer, and
+  sampled, by Aer and QCSim, as one half the time; Aer's `SaveState` and
+  `Clone`, which sort the qubits with swaps, renormalized the live state;
+  and the weight a one-qubit matrix left lasted only until the next
+  two-qubit update on its site. The matrix is now applied as the one operator
+  of a channel: the chain is renormalized and its reads, samples and saves
+  follow the state, so the total probability of an MPS is 1 at any width and
+  Aer's MPS reads the marginal of a qubit at any width (QCSim does it
+  through the environments it keeps after a Kraus operator, QCSim b96ca88; Aer
+  through the sweep it does after one, the matrix scaled by the weight it
+  leaves, read as a sum of positive terms so that a small one is as exact as
+  a large one; the GPU library rebuilds its canonical form). Dense backends
+  are unchanged: they keep the weight the matrix leaves.
+  - A matrix that leaves nothing of the state throws `std::runtime_error`
+    and the state is as it was, on the three of them (the GPU tries a matrix
+    that could on a copy of the chain first; Aer's chain could not be split
+    and crashed). "Nothing" is a weight the chain cannot tell from none:
+    within the rounding of amplitudes that cancel, (64 epsilon)^2 of what the
+    matrix could leave (2e-28 in double precision, 6e-11 on a GPU chain kept
+    in single precision), and on an Aer chain of two qubits or more, which
+    drops Schmidt weights below 1e-16 at every update (and below a larger
+    `matrix_product_state_truncation_threshold` when one is set), within 16
+    times that (1.6e-15 by default; 1.4e-14, the rounding of the Pauli
+    expectation values it is read from, for a two-qubit matrix that is not
+    along the basis, which is not weighed by turning the pair on the live
+    chain: a bond limit could cut the state there, and a refusal would not
+    give it back). A projection onto a state that holds 9e-14 of the chain is
+    applied. On the GPU the rule covers one-qubit matrices; for two-qubit
+    ones the library refuses an exact zero. The weight is taken from the
+    singular values of the matrix, not from those of its square, where a
+    small one is lost in rounding.
+  - The Aer simulator checks the targets of a generic gate (in range, each
+    once) and throws `std::invalid_argument`, as the bindings do before they
+    call: Aer itself reads its tables at whatever index it is given.
+  - Matrices each within 1e-10 of unitary add up, on whatever qubits they
+    act, and the chain is brought up to date once their sum passes that (on
+    Aer from every qubit a matrix has met since the last time, whatever
+    weight it has: `diag(1 + e, 1 - e)` shifts probabilities without moving
+    it). On Aer that draws from its stream, once for each such qubit, as a
+    channel does.
+  - A GPU library that does not export `MPSReCanonicalize` refuses a matrix
+    that is not unitary before the chain changes, and applies the others as
+    it did.
+- `InitializeState` (a list of amplitudes) on the Aer matrix product state
+  and stabilizers throws `std::runtime_error` and keeps the state, as on
+  QCSim and the GPU. Aer's initializer builds a dense statevector whatever
+  the method, so such a simulator went on as a dense state under its own
+  name, without its bond limit.
+- The tensor network's total probability is one contraction of each
+  independent group of qubits after one pass over the network, and the
+  contractor finds a cached plan by its fingerprint: both went through the
+  whole network (or the whole cache) once per group, quadratic in the number
+  of qubits that no gate connects (seconds at 8192 qubits, now milliseconds).
+- On the Aer extended stabilizer, `Probabilities` is one `Probability` per
+  index, Aer's estimate (the exact amplitude of the decomposition over a
+  sampled estimate of its norm); it read the statevector of the
+  decomposition, normalized exactly as `AllProbabilities` is, and so
+  disagreed with `Probability`.
+
 - Noisy trajectories on the Qiskit Aer statevector and matrix product state
   run on realization workers, as on QCSim, from the Python noisy functions,
   C++ callers (`ExecuteNoisy`, `EstimateNoisy`) and native requests. They ran
@@ -92,7 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache alone: an upper bound on what overlaps, so two realizations report
   1. A noisy fidelity still runs its
   realizations one after another and reports 1.
-- QCSim is pinned to QoroQuantum/QCSim ca45267. On its density matrix, a
+- QCSim is pinned to QoroQuantum/QCSim b96ca88. On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
   one pass over the matrix instead of two, from 11 qubits for dense gates
   (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y
@@ -100,7 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are faster there. With gate fusion, which hands the density matrix fused
   two-qubit blocks, run times do not change; with `gate_fusion` off they
   were 5-15% shorter (random 13 qubits: 45.7 s -> 39.1 s).
-- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 23faa5b, and the wheel
+- Qiskit Aer is pinned to QoroQuantum/qiskit-aer 0acd866, and the wheel
   builds and `build.sh` check out that revision too, where they cloned Aer's
   default branch. It fixes the MPS SVD (`csvd`) looping forever on a zero
   matrix; noisy MPS runs could reach one while renormalizing the chain, and
@@ -116,8 +228,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a Kraus operation on qubits apart weighs and applies its operator on the
   state after the qubits are moved together (it could pick an operator the
   truncated state gave no weight, and crash), and a gate on three qubits
-  stays within the limit. It inlines the
-  statevector index helpers, which the compiler had left out of line in
+  stays within the limit, and a basis state with qubit 63 set is read as
+  itself (on 64 qubits its probability and amplitude read as 0), as is one on
+  65 qubits or more (basis state 1 read as 0; several amplitudes read at once
+  also shared one string between threads). It inlines
+  the statevector index helpers, which the compiler had left out of line in
   Maestro's build (a CX took about 5x the kernel's time), and runs diagonal
   gates on up to five qubits on the scalar kernels, which beat the AVX2 one
   there (3.7x on one qubit). Maestro -> Aer statevector trajectories, 200

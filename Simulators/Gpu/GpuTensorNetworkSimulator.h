@@ -261,6 +261,7 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
+        RequireBasisState(outcome);
         double real = 0.0;
         double imag = 0.0;
         {
@@ -272,10 +273,16 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
         return std::complex<double>(real, imag);
     }
 
+    // The state cannot be left unnormalized here (it takes no generic gate), so its total probability is 1 at any width.
+    double TotalProbability() override
+    {
+        RequireQubits(GetNumberOfQubits());
+        return 1.;
+    }
+
     std::vector<double> AllProbabilities() override
     {
-        if (nrQubits == 0)
-            return {};
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         if (nrQubits >= std::numeric_limits<size_t>::digits)
             throw std::length_error("Full probability enumeration exceeds the basis-index API; query "
                                     "selected bit vectors");

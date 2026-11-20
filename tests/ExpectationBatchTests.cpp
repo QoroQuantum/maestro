@@ -194,6 +194,44 @@ struct QueryNetwork : Net
     }
 };
 
+// The C API's state queries: Probabilities takes basis-state indices (nullptr past the register),
+// MarginalProbabilities qubits, including none, whose one value is the total probability.
+void ProbabilityQueriesInC()
+{
+    auto sim = Make(Method::kStatevector, 3);
+    sim->ApplyH(0);
+    sim->ApplyCX(0, 1);
+    const unsigned long long outcomes[]{3, 0, 1, 7};
+    double *probabilities = Probabilities(sim.get(), outcomes, 4);
+    Check(probabilities != nullptr, "C Probabilities failed");
+    Near(probabilities[0], 0.5);
+    Near(probabilities[1], 0.5);
+    Near(probabilities[2], 0.);
+    Near(probabilities[3], 0.);
+    FreeDoubleVector(probabilities);
+    const unsigned long long outside[]{0, 8};
+    Check(Probabilities(sim.get(), outside, 2) == nullptr, "C Probabilities accepted a basis state past the register");
+    const unsigned long long qubits[]{0, 1};
+    double *marginal = MarginalProbabilities(sim.get(), qubits, 2);
+    Check(marginal != nullptr, "C MarginalProbabilities failed");
+    Near(marginal[0], 0.5);
+    Near(marginal[1], 0.);
+    Near(marginal[2], 0.);
+    Near(marginal[3], 0.5);
+    FreeDoubleVector(marginal);
+    for (const unsigned long long *none : {static_cast<const unsigned long long *>(nullptr), qubits})
+    {
+        double *total = MarginalProbabilities(sim.get(), none, 0);
+        Check(total != nullptr, "C MarginalProbabilities rejected an empty selection");
+        Near(total[0], 1.);
+        FreeDoubleVector(total);
+    }
+    const unsigned long long repeated[]{1, 1}, past[]{3};
+    Check(MarginalProbabilities(sim.get(), repeated, 2) == nullptr, "C MarginalProbabilities accepted a repeated qubit");
+    Check(MarginalProbabilities(sim.get(), past, 1) == nullptr, "C MarginalProbabilities accepted a qubit past the register");
+    Check(MarginalProbabilities(sim.get(), nullptr, 1) == nullptr, "C MarginalProbabilities accepted null qubits");
+}
+
 void NetworkDispatch()
 {
     auto record = std::make_shared<Recording>(Make(Method::kMatrixProductState));
@@ -591,6 +629,7 @@ int main(int argc, char **argv)
 #endif
         RealBatches();
         ComplexAndC();
+        ProbabilityQueriesInC();
         NetworkDispatch();
         JsonBatches();
         TensorQueries();

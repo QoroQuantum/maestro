@@ -411,7 +411,7 @@ while its handle is alive.
 |----------|---------|
 | Lifecycle | `AllocateQubits`, `GetNumberOfQubits`, `InitializeSimulator`, `ResetSimulator`, `ClearSimulator`, `FlushSimulator` |
 | Configuration | `ConfigureSimulator`, `GetConfiguration`, `GetSimulatorType`, `GetSimulationType`, `SetMultithreading`, `GetMultithreading`, `IsQcsim` |
-| Measurement and state queries | `Measure`, `MeasureNoCollapse`, `ApplyReset`, `Probability`, `Amplitude`, `AllProbabilities`, `Probabilities`, `SampleCounts` |
+| Measurement and state queries | `Measure`, `MeasureNoCollapse`, `ApplyReset`, `Probability`, `Amplitude`, `AllProbabilities`, `Probabilities`, `MarginalProbabilities`, `SampleCounts` |
 | Saved state | `SaveState`, `RestoreState`, `SaveStateToInternalDestructive`, `RestoreInternalDestructiveSavedState` |
 | Single-qubit gates | `ApplyX`, `ApplyY`, `ApplyZ`, `ApplyH`, `ApplyS`, `ApplySDG`, `ApplyT`, `ApplyTDG`, `ApplySX`, `ApplySXDG`, `ApplyK`, `ApplyP`, `ApplyRx`, `ApplyRy`, `ApplyRz`, `ApplyU` |
 | Controlled gates | `ApplyCX`, `ApplyCY`, `ApplyCZ`, `ApplyCH`, `ApplyCSX`, `ApplyCSXDG`, `ApplyCP`, `ApplyCRx`, `ApplyCRy`, `ApplyCRz`, `ApplyCU`, `ApplyCCX` |
@@ -419,10 +419,33 @@ while its handle is alive.
 
 `Initialize`, `Reset`, `Configure`, `Clear` and `Flush` are shorter aliases for
 the methods ending in `Simulator`. Pass Python sequences for qubits or outcomes.
-`Amplitude` returns a complex number, `AllProbabilities` and `Probabilities`
-return lists, and `SampleCounts` returns a dictionary from integer outcomes to
-counts (`shots=1000` by default). `Probabilities` takes basis-state indices,
-while `Measure`, `ApplyReset` and `SampleCounts` take qubit indices. Packed
+`Amplitude` returns a complex number, `AllProbabilities`, `Probabilities` and
+`MarginalProbabilities` return lists, and `SampleCounts` returns a dictionary
+from integer outcomes to counts (`shots=1000` by default). `Probability`,
+`Amplitude` and `Probabilities` take basis-state indices, one value per index,
+and raise `IndexError` for an index of `2**num_qubits` or more on every backend
+where they are defined. `Amplitude` raises `RuntimeError` on methods without
+amplitudes (density matrix, MPO, stabilizer, Pauli propagator, and QCSim's
+extended stabilizer and tensor network; the GPU tensor network and the Aer
+extended stabilizer have them), whatever the index; an index that does not
+fit in 64 bits raises `TypeError` before it reaches Maestro; and a register
+without qubits raises `RuntimeError`, having no state to query.
+`MarginalProbabilities`, `Measure`, `ApplyReset` and `SampleCounts` take
+qubit indices; `MarginalProbabilities` returns the `2**k` probabilities of the
+listed qubits (for none, one value, the total probability of the state: 1
+when it is normalized, less after a generic gate with a non-unitary matrix,
+which nothing renormalizes, or where the path integral's threshold drops
+paths; the MPOs normalize their probabilities by the trace, so theirs is 1
+where they are defined; an MPS renormalizes after such a matrix, so that its
+reads and samples follow the state, and its total is 1, while a matrix that
+leaves nothing of the state, or a weight the chain cannot tell from none,
+raises `RuntimeError` and leaves the state as it was), and raises `ValueError`
+where the register is too
+wide to list its basis states, rather than returning zeros. On the Aer extended
+stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact
+amplitude of its decomposition over a sampled estimate of the norm, the same
+on every call for a given state), while `AllProbabilities` divides by the
+exact norm. Packed
 outcomes use the first listed qubit as the least significant bit; for
 `MeasureNoCollapse`, qubit 0 is the least significant bit. `ApplyU` and
 `ApplyCU` take `theta`, `phi`, `lambda_` and an optional `gamma=0.0`.

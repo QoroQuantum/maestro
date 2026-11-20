@@ -660,31 +660,23 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     double Probability(Types::qubit_t outcome) override
     {
-        return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
+        RequireBasisState(outcome);
+        return state->getBasisStateProbability(static_cast<size_t>(outcome));
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
-        return state->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
+        RequireBasisState(outcome);
+        return state->getBasisStateAmplitude(static_cast<size_t>(outcome));
     }
 
     std::vector<double> AllProbabilities() override
     {
+        RequireQubits(GetNumberOfQubits()); // a register without qubits has no state to list
         const Eigen::VectorXcd probs = state->getRegisterStorage().cwiseAbs2();
-        std::vector<double> result(probs.size());
-        for (int i = 0; i < probs.size(); ++i)
-            result[i] = probs[i].real();
-        return result;
-    }
-
-    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
-    {
-        std::vector<double> result(qubits.size());
-        {
-            const Eigen::VectorXcd &reg = state->getRegisterStorage();
-            for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-                result[i] = std::norm(reg[qubits[i]]);
-        }
+        std::vector<double> result(static_cast<size_t>(probs.size()));
+        for (Eigen::Index i = 0; i < probs.size(); ++i)
+            result[static_cast<size_t>(i)] = probs[i].real();
         return result;
     }
 

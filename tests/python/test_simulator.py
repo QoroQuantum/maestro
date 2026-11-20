@@ -183,6 +183,150 @@ def test_save_restore_and_flush(simulator):
     assert simulator.Probability(4) == pytest.approx(0)
 
 
+@pytest.mark.parametrize("backend_name, method_name", [
+    ("QCSim", "Statevector"), ("QCSim", "MatrixProductState"),
+    ("QiskitAer", "Statevector"), ("QiskitAer", "MatrixProductState")])
+def test_probabilities_take_basis_states_on_every_backend(backend_name, method_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    getattr(maestro.SimulationType, method_name))
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(3)
+        sim.InitializeSimulator()
+        sim.ApplyH(0)
+        sim.ApplyCX(0, 1)
+        sim.FlushSimulator()
+        # Basis-state indices, one value each (Aer's statevector and MPS used to return the
+        # marginal of the indices read as qubits, and crashed for an index of 3 or more).
+        assert sim.Probabilities([3, 0, 1, 7]) == pytest.approx([0.5, 0.5, 0, 0])
+        with pytest.raises(IndexError):
+            sim.Probabilities([0, 8])
+        with pytest.raises(IndexError):
+            sim.Probability(8)
+        # An index that does not fit 64 bits is refused by the argument conversion.
+        with pytest.raises(TypeError):
+            sim.Probabilities([2**64])
+        # The distribution of qubits: the first listed the least significant bit.
+        assert sim.MarginalProbabilities([1, 2]) == pytest.approx([0.5, 0.5, 0, 0])
+        assert sim.MarginalProbabilities([0, 1]) == pytest.approx([0.5, 0, 0, 0.5])
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_empty_marginal_is_the_total_probability(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    maestro.SimulationType.Statevector)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(2)
+        sim.InitializeSimulator()
+        sim.ApplyH(0)
+        # A projection onto |0> leaves half the weight, and nothing renormalizes the state.
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sum(sim.AllProbabilities()) == pytest.approx(0.5)
+        assert sim.MarginalProbabilities([]) == pytest.approx([0.5])
+        assert sum(sim.MarginalProbabilities([1])) == pytest.approx(0.5)
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_matrix_product_state_stays_normalized_after_a_non_unitary_matrix(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    backend = getattr(maestro.SimulatorType, backend_name)
+
+    def make(qubits):
+        handle = owner.create_simulator(backend, maestro.SimulationType.MatrixProductState)
+        sim = owner.get_simulator(handle)
+        sim.AllocateQubits(qubits)
+        sim.InitializeSimulator()
+        return handle, sim
+
+    handle, sim = make(2)
+    try:
+        sim.ApplyH(0)
+        sim.ApplyCX(0, 1)
+        # Half of the Bell pair is projected away: the chain is renormalized, and the other qubit
+        # is zero in every read and in every shot (it was sampled as one half the time).
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sim.AllProbabilities() == pytest.approx([1, 0, 0, 0])
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+        assert sim.MarginalProbabilities([1]) == pytest.approx([1.0, 0.0])
+        assert dict(sim.SampleCounts([1], 128)) == {0: 128}
+        # A save leaves the state as it is.
+        sim.SaveState()
+        assert sim.Probability(0) == pytest.approx(1.0)
+        sim.RestoreState()
+        assert sim.Probability(0) == pytest.approx(1.0)
+        # Nothing is left of |00> projected onto |1>: refused, and the state is as it was.
+        with pytest.raises(RuntimeError):
+            sim.ApplyGenericOneQubitGate(1, [[0, 0], [0, 1]])
+        assert sim.AllProbabilities() == pytest.approx([1, 0, 0, 0])
+    finally:
+        owner.destroy_simulator(handle)
+
+    # A register too wide to list keeps its total, and Aer its marginals of a qubit.
+    handle, sim = make(40 if backend_name == "QCSim" else 70)
+    try:
+        sim.ApplyX(5)
+        sim.ApplyGenericOneQubitGate(0, [[1, 0], [0, 0]])
+        assert sim.Probability(32) == pytest.approx(1.0)
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+        if backend_name == "QiskitAer":
+            assert sim.MarginalProbabilities([5]) == pytest.approx([0.0, 1.0])
+    finally:
+        owner.destroy_simulator(handle)
+
+
+def test_marginal_too_wide_to_list_raises_value_error():
+    # QCSim is always compiled in (the simulator fixture above relies on it); skipped as the
+    # parametrized tests are, should that change.
+    if not hasattr(maestro.SimulatorType, "QCSim"):
+        pytest.skip("QCSim is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(maestro.SimulatorType.QCSim, maestro.SimulationType.MatrixProductState)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(40)
+        sim.InitializeSimulator()
+        with pytest.raises(ValueError):
+            sim.MarginalProbabilities([0])
+        assert sim.MarginalProbabilities([]) == pytest.approx([1.0])
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
+def test_amplitude_on_a_method_without_amplitudes(backend_name):
+    if not hasattr(maestro.SimulatorType, backend_name):
+        pytest.skip(f"{backend_name} is not compiled in")
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(getattr(maestro.SimulatorType, backend_name),
+                                    maestro.SimulationType.DensityMatrix)
+    sim = owner.get_simulator(handle)
+    try:
+        sim.AllocateQubits(3)
+        sim.InitializeSimulator()
+        sim.FlushSimulator()
+        # The method has no amplitudes: RuntimeError, whatever the index, on every backend.
+        for index in (0, 8):
+            with pytest.raises(RuntimeError):
+                sim.Amplitude(index)
+        with pytest.raises(IndexError):
+            sim.Probability(8)
+    finally:
+        owner.destroy_simulator(handle)
+
+
 @pytest.mark.parametrize("backend_name", ["QCSim", "QiskitAer"])
 def test_internal_state_save_restore(backend_name):
     if not hasattr(maestro.SimulatorType, backend_name):
