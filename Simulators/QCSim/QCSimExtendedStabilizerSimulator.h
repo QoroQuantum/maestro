@@ -5,7 +5,11 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
+#include <cmath>
+#include <exception>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 namespace Simulators::Private
@@ -55,6 +59,9 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             configuration.SetConfiguration(key, value);
             return;
         }
+        const bool approximation = std::string(key) == kToleranceKey || std::string(key) == kMaxComponentsKey;
+        if (approximation)
+            ValidateApproximationSetting(key, value);
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
         if (std::string("seed") == key)
@@ -68,6 +75,24 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             if (workers > 1024)
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
+        // Initialize replays every setting once the state exists, so a policy
+        // set before allocation applies from the first gate.
+        if (approximation && extendedStabilizer)
+            extendedStabilizer->SetApproximationPolicy(ApproximationPolicy());
+    }
+
+    // The pruning the configuration asks for: exact unless a tolerance or a
+    // component cap is set (extended_stabilizer_amplitude_tolerance,
+    // extended_stabilizer_max_components).
+    QC::ExtendedStabilizerApproximationPolicy ApproximationPolicy() const
+    {
+        const bool tolerance = configuration.IsSet(kToleranceKey);
+        const bool cap = configuration.IsSet(kMaxComponentsKey);
+        if (!tolerance && !cap)
+            return QC::ExtendedStabilizerApproximationPolicy::Exact();
+        return QC::ExtendedStabilizerApproximationPolicy::Approximate(
+            tolerance ? configuration.GetConfigurationAsDouble(kToleranceKey) : 0.0,
+            cap ? static_cast<size_t>(configuration.GetConfigurationAsUnsigned(kMaxComponentsKey)) : 0);
     }
 
     void SeedForExecution(uint64_t seed) override
@@ -490,6 +515,33 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     }
 
   protected:
+    static constexpr const char *kToleranceKey = "extended_stabilizer_amplitude_tolerance";
+    static constexpr const char *kMaxComponentsKey = "extended_stabilizer_max_components";
+
+    // Checks a pruning setting before it is stored, so a rejected value never
+    // reaches the configuration that Initialize and Clone replay.
+    static void ValidateApproximationSetting(const char *key, const char *value)
+    {
+        size_t used = 0;
+        const std::string text(value ? value : "");
+        try
+        {
+            if (std::string(key) == kToleranceKey)
+            {
+                const double tolerance = std::stod(text, &used);
+                if (used == text.size() && std::isfinite(tolerance) && tolerance >= 0 && tolerance < 1)
+                    return;
+            }
+            else if (!text.empty() && text[0] != '-' && std::stoull(text, &used) > 0 && used == text.size())
+                return;
+        }
+        catch (const std::exception &)
+        {
+        }
+        throw std::invalid_argument(std::string(key) == kToleranceKey ? "extended_stabilizer_amplitude_tolerance must be finite and in [0, 1)"
+                                                                      : "extended_stabilizer_max_components must be a positive integer");
+    }
+
     template <bool Many> bool TryMarginalCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &counts)
     {
         using namespace Utils::Sampling;

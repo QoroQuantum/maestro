@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SimulatorConfig.extended_stabilizer_amplitude_tolerance` and
+  `extended_stabilizer_max_components` (Python, C++ and the native request
+  API) select QCSim's approximate extended stabilizer, which until now no
+  caller could reach. After each non-Clifford gate and measurement it drops the
+  components whose amplitude is at most the tolerance times the state's norm,
+  then keeps at most the cap of the largest. Unset, the extended stabilizer
+  runs exactly, as before, and a tolerance of 0 drops nothing. Batched
+  extended frames run exactly, so a request with a positive tolerance or a
+  cap keeps scalar trajectories: `compile_reference_sampler` returns `None`
+  for one, and `MaestroCreateReferenceFrameSampler` refuses it. Aer's extended
+  stabilizer has its own approximation, so a configuration that sets either
+  field for it is rejected rather than ignored. Pruning drops error branches,
+  so it lowers error rates; check a result by tightening the tolerance.
+  Small coherent errors on a QEC circuit are where it pays: exactly, a
+  rotated d=3 surface code with coherent over-rotations fills all 2^17
+  components; at a tolerance of 1e-4 it holds about 20,000 and matches the
+  exact detection rate.
+
 ### Changed
 
 - `Probabilities(outcomes)` takes basis-state indices and returns one

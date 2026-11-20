@@ -1235,6 +1235,88 @@ class TestExtendedStabilizerSimulation:
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
 
+class TestExtendedStabilizerApproximation:
+    """extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components
+    prune the QCSim extended stabilizer; unset, it runs exactly."""
+
+    # ry(0.2)|0> = cos(0.1)|0> + sin(0.1)|1>: the |1> component has amplitude
+    # 0.0998, so 1 comes up with probability 0.00997 (about 199 in 20,000).
+    QASM = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[1];
+creg c[1];
+ry(0.2) q[0];
+measure q[0] -> c[0];
+"""
+    SHOTS = 20_000
+
+    def ones(self, **pruning):
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.ExtendedStabilizer,
+            fixed_backend=True, seed=7, **pruning)
+        result = maestro.simple_execute(self.QASM, shots=self.SHOTS, config=config)
+        assert result['method'] == maestro.SimulationType.ExtendedStabilizer.value
+        return result['counts'].get('1', 0)
+
+    def test_exact_by_default(self):
+        assert 120 < self.ones() < 280
+
+    def test_tolerance_below_the_amplitude_keeps_it(self):
+        assert 120 < self.ones(extended_stabilizer_amplitude_tolerance=0.05) < 280
+
+    def test_tolerance_above_the_amplitude_drops_it(self):
+        assert self.ones(extended_stabilizer_amplitude_tolerance=0.2) == 0
+
+    def test_component_cap_keeps_the_largest(self):
+        assert self.ones(extended_stabilizer_max_components=1) == 0
+        assert 120 < self.ones(extended_stabilizer_max_components=2) < 280
+
+    def test_pruned_noisy_run_keeps_scalar_trajectories(self):
+        # Batched extended frames are exact only: a pruned run with Pauli noise
+        # falls back to trajectories and still prunes.
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.ry(0, 0.2)
+        qc.measure_all()
+        noise = maestro.NoiseModel()
+        noise.set_depolarizing(0, 1e-9)
+
+        def ones(**pruning):
+            config = maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                fixed_backend=True, seed=7, **pruning)
+            result = maestro.noisy_execute(qc, noise, config=config, shots=self.SHOTS)
+            return result['counts'].get('1', 0)
+
+        assert 120 < ones() < 280
+        assert ones(extended_stabilizer_amplitude_tolerance=0.2) == 0
+
+    @pytest.mark.parametrize("field,value", [
+        ("extended_stabilizer_amplitude_tolerance", -1e-3),
+        ("extended_stabilizer_amplitude_tolerance", 1.0),
+        ("extended_stabilizer_amplitude_tolerance", float("nan")),
+        ("extended_stabilizer_max_components", 0),
+    ])
+    def test_rejects_invalid_value(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            maestro.SimulatorConfig(**{field: value})
+        config = maestro.SimulatorConfig()
+        with pytest.raises(ValueError, match=field):
+            setattr(config, field, value)
+        assert getattr(config, field) is None
+
+    @pytest.mark.skipif(not hasattr(maestro.SimulatorType, "QiskitAer"), reason="built without Aer")
+    def test_aer_extended_stabilizer_rejects_the_settings(self):
+        # Aer's extended stabilizer has its own approximation and would ignore them.
+        with pytest.raises(ValueError, match="QCSim extended stabilizer only"):
+            maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QiskitAer,
+                                    simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                                    extended_stabilizer_amplitude_tolerance=1e-3)
+
+
 class TestSimulatorTypeIsHonored:
     """Regression tests: verify the requested simulator/method is actually used.
 
@@ -5829,6 +5911,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "pp_memory_limit_bytes": 1 << 30,
     "pp_sampling_cache_nodes": 1024,
     "path_integral_threshold": 1e-9,
+    "extended_stabilizer_amplitude_tolerance": 1e-4,
+    "extended_stabilizer_max_components": 4096,
     "gate_fusion": False,
     "enable_causal_cone_reduction": False,
     "enable_observable_clustering": False,

@@ -60,6 +60,8 @@ The constructor takes every option by keyword only.
 | `pp_memory_limit_bytes` | `int` or `None` | `None` | GPU Pauli propagation: positive device memory budget in bytes. `None` uses 90% of available memory. (GPU access only) |
 | `pp_sampling_cache_nodes` | `int` or `None` | `None` | Pauli propagation: most nodes in the shot-sampling cache; 0 disables caching. `None` uses the backend default (8192 on the GPU). |
 | `path_integral_threshold` | `float` or `None` | `None` | PathIntegral trim threshold |
+| `extended_stabilizer_amplitude_tolerance` | `float` or `None` | `None` | QCSim ExtendedStabilizer: after each non-Clifford gate and measurement, drop components whose amplitude is at most this fraction of the state's norm, in [0, 1). With `extended_stabilizer_max_components` also `None` the simulation is exact. Pruned runs use scalar trajectories, not batched extended frames. |
+| `extended_stabilizer_max_components` | `int` or `None` | `None` | QCSim ExtendedStabilizer: keep at most this many of the largest components after each non-Clifford gate and measurement. Must be positive. |
 | `enable_causal_cone_reduction` | `bool` | `True` | Drop gates and idle qubits outside the backward lightcone of the requested observables |
 | `enable_observable_clustering` | `bool` | `True` | Simulate groups of observables with disjoint lightcones separately, each on its own register |
 | `max_cluster_qubits` | `int` or `None` | `None` | Also split overlapping lightcones into groups of at most this many qubits; see {ref}`py_circuits_cluster_budget` |

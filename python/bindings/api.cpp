@@ -170,9 +170,11 @@ void bind_api(nb::module_ &m)
             return nb::none();
         const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
         const size_t width = ClassicalWidth(circuit);
-        // The QCSim extended stabilizer runs its whole gate set on batched frames.
+        // The QCSim extended stabilizer runs its whole gate set on batched
+        // frames, exactly: a pruned one keeps scalar trajectories.
         if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
-            !MaestroExecution::HasCandidateList(config) && !config.enable_sampling_reduction)
+            !MaestroExecution::HasCandidateList(config) && !config.enable_sampling_reduction &&
+            !MaestroExecution::SetsExtendedStabilizerApproximation(config))
         {
             std::optional<MaestroExecution::ExtendedFrameSampler> plan;
             {

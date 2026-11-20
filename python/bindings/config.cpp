@@ -70,6 +70,8 @@ const char *const kConfigFields[] = {
     "pp_memory_limit_bytes",
     "pp_sampling_cache_nodes",
     "path_integral_threshold",
+    "extended_stabilizer_amplitude_tolerance",
+    "extended_stabilizer_max_components",
     "gate_fusion",
     "enable_causal_cone_reduction",
     "enable_observable_clustering",
@@ -135,6 +137,7 @@ void bind_config(nb::module_ &m)
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<uint64_t> pp_workers, std::optional<uint64_t> pp_max_fused_gates,
            std::optional<uint64_t> pp_memory_limit_bytes, std::optional<uint64_t> pp_sampling_cache_nodes, std::optional<double> path_integral_threshold,
+           std::optional<double> extended_stabilizer_amplitude_tolerance, std::optional<uint64_t> extended_stabilizer_max_components,
            std::optional<bool> gate_fusion, bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits,
            bool auto_reduce, std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
            std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy,
@@ -171,6 +174,8 @@ void bind_config(nb::module_ &m)
             config.pp_memory_limit_bytes = pp_memory_limit_bytes;
             config.pp_sampling_cache_nodes = pp_sampling_cache_nodes;
             config.path_integral_threshold = path_integral_threshold;
+            config.extended_stabilizer_amplitude_tolerance = extended_stabilizer_amplitude_tolerance;
+            config.extended_stabilizer_max_components = extended_stabilizer_max_components;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
             config.enable_observable_clustering = enable_observable_clustering;
@@ -199,7 +204,8 @@ void bind_config(nb::module_ &m)
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
         "pp_workers"_a.noconvert() = nb::none(), "pp_max_fused_gates"_a.noconvert() = nb::none(), "pp_memory_limit_bytes"_a.noconvert() = nb::none(),
-        "pp_sampling_cache_nodes"_a.noconvert() = nb::none(), "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(),
+        "pp_sampling_cache_nodes"_a.noconvert() = nb::none(), "path_integral_threshold"_a = nb::none(),
+        "extended_stabilizer_amplitude_tolerance"_a = nb::none(), "extended_stabilizer_max_components"_a.noconvert() = nb::none(), "gate_fusion"_a = nb::none(),
         "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction, "enable_observable_clustering"_a = defaults.enable_observable_clustering,
         "max_cluster_qubits"_a.noconvert() = nb::none(), "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(),
         "trajectory_max_memory_mb"_a.noconvert() = nb::none(), "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(),
@@ -361,6 +367,14 @@ void bind_config(nb::module_ &m)
     BindConfigField<false>(config_class, "pp_sampling_cache_nodes", &SimulatorConfig::pp_sampling_cache_nodes,
                            "Pauli propagation: the most nodes kept in the shot-sampling cache; 0 "
                            "disables caching. None uses the backend default (8192 on the GPU).");
+    BindConfigField(config_class, "extended_stabilizer_amplitude_tolerance", &SimulatorConfig::extended_stabilizer_amplitude_tolerance,
+                    "QCSim ExtendedStabilizer: after each non-Clifford gate and measurement, drop the components "
+                    "whose amplitude is at most this fraction of the state's norm, in [0, 1). None (with "
+                    "extended_stabilizer_max_components None) runs exactly. Pruned runs keep scalar trajectories, "
+                    "not batched extended frames.");
+    BindConfigField<false>(config_class, "extended_stabilizer_max_components", &SimulatorConfig::extended_stabilizer_max_components,
+                           "QCSim ExtendedStabilizer: keep at most this many of the largest components after each "
+                           "non-Clifford gate and measurement. Must be positive; None sets no cap.");
     BindConfigField(config_class, "path_integral_threshold", &SimulatorConfig::path_integral_threshold,
                     "Trim threshold for PathIntegral simulation; None disables "
                     "trimming.");

@@ -7,6 +7,7 @@
 #include "../maestrolib/Maestro.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <limits>
@@ -155,6 +156,13 @@ struct SimulatorConfig
 
     // path integral parameters
     std::optional<double> path_integral_threshold = std::nullopt;
+    // QCSim extended stabilizer pruning. Unset (both) runs exactly. A
+    // tolerance drops the components whose amplitude is at most this fraction
+    // of the state's norm after each non-Clifford gate and measurement; a cap
+    // then keeps at most this many of the largest. Either one selects
+    // approximate mode, which batched extended frames cannot run.
+    std::optional<double> extended_stabilizer_amplitude_tolerance = std::nullopt;
+    std::optional<uint64_t> extended_stabilizer_max_components = std::nullopt;
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
     bool enable_causal_cone_reduction = true;
@@ -226,6 +234,20 @@ struct SimulatorConfig
             throw std::invalid_argument("observable_error_tolerance must be finite and in (0, 1]");
         if (max_simulators && (!*max_simulators || *max_simulators > 1024))
             throw std::invalid_argument("max_simulators must be between 1 and 1024");
+        if (extended_stabilizer_amplitude_tolerance &&
+            (!std::isfinite(*extended_stabilizer_amplitude_tolerance) || *extended_stabilizer_amplitude_tolerance < 0 ||
+             *extended_stabilizer_amplitude_tolerance >= 1))
+            throw std::invalid_argument("extended_stabilizer_amplitude_tolerance must be finite and in [0, 1)");
+        if (extended_stabilizer_max_components && !*extended_stabilizer_max_components)
+            throw std::invalid_argument("extended_stabilizer_max_components must be positive");
+#ifndef NO_QISKIT_AER
+        // Aer's extended stabilizer approximates by its own options and would
+        // ignore these silently; the native API rejects the pair too (Options.h).
+        if ((extended_stabilizer_amplitude_tolerance || extended_stabilizer_max_components) && simulator_type == Simulators::SimulatorType::kQiskitAer &&
+            simulation_type == Simulators::SimulationType::kExtendedStabilizer)
+            throw std::invalid_argument("extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components apply to the QCSim "
+                                        "extended stabilizer only");
+#endif
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
         RequireOneOf(precision, Precisions(), "precision");
         RequireOneOf(mps_sampling, MpsSamplingModes(), "mps_sampling");
@@ -474,6 +496,18 @@ inline bool AdmitsReferenceFrames(const SimulatorConfig &config)
         return CandidateListAdmitsStabilizer(config);
     return config.simulator_type == Simulators::SimulatorType::kQCSim &&
            (config.simulation_type == Simulators::SimulationType::kStabilizer || !config.fixed_backend);
+}
+
+// Whether the configuration prunes the QCSim extended stabilizer, through the
+// typed fields or their native keys: a positive tolerance or any component cap.
+// Batched extended frames run exactly, so such a request keeps scalar
+// trajectories. A zero tolerance drops nothing, so frames still apply.
+inline bool SetsExtendedStabilizerApproximation(const SimulatorConfig &config)
+{
+    const auto native = config.native_options.find("extended_stabilizer_amplitude_tolerance");
+    const bool tolerance = (config.extended_stabilizer_amplitude_tolerance && *config.extended_stabilizer_amplitude_tolerance > 0) ||
+                           (native != config.native_options.end() && std::strtod(native->second.c_str(), nullptr) > 0);
+    return tolerance || config.extended_stabilizer_max_components || config.native_options.count("extended_stabilizer_max_components");
 }
 
 // ConfigureNetwork applies native counts_policy after the typed option.
@@ -763,6 +797,14 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
         auto val = oss.str();
         network->Configure("path_integral_threshold", val.c_str());
     }
+    if (config.extended_stabilizer_amplitude_tolerance)
+    {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10) << *config.extended_stabilizer_amplitude_tolerance;
+        network->Configure("extended_stabilizer_amplitude_tolerance", oss.str().c_str());
+    }
+    if (config.extended_stabilizer_max_components)
+        network->Configure("extended_stabilizer_max_components", std::to_string(*config.extended_stabilizer_max_components).c_str());
 
     // A backend placeholder: the network executes on a register of its own.
     const size_t placeholderQubits = Network::INetwork<double>::kBackendPlaceholderQubits;

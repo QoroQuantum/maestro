@@ -445,6 +445,8 @@ are rejected. Small floating-point thresholds retain their precision.
 | `pp_gates_between_trims` | `pauli_propagator_steps_between_trims` | positive_integer | pp |
 | `pp_gates_between_deduplications` | `pauli_propagator_num_gates_between_deduplications` | positive_integer | pp |
 | `path_integral_threshold` | `path_integral_threshold` | nonnegative | path |
+| `extended_stabilizer_amplitude_tolerance` | `extended_stabilizer_amplitude_tolerance` | nonnegative, below 1 | cpu_extended_stabilizer |
+| `extended_stabilizer_max_components` | `extended_stabilizer_max_components` | positive_integer | cpu_extended_stabilizer |
 
 Tensor options apply to MPS/MPO/TN; GPU solver selectors require their named
 GPU method. Precision is `single` or `double` and applies to Aer and the GPU

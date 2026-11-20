@@ -131,6 +131,8 @@ inline json::object OptionCapability(const Option &option)
     }
     if (name == "max_simulators" || name == "pp_workers")
         result["maximum"] = 1024;
+    if (name == "extended_stabilizer_amplitude_tolerance")
+        result["exclusiveMaximum"] = 1;
     if (name == "pp_workers")
         result["constraints"] = json::array{json::object{{"backend", "gpu"}, {"minimum", 1}, {"maximum", 64}}};
     if (name == "pp_max_fused_gates")
