@@ -438,7 +438,8 @@ which nothing renormalizes, or where the path integral's threshold drops
 paths; the MPOs normalize their probabilities by the trace, so theirs is 1
 where they are defined; an MPS renormalizes after such a matrix, so that its
 reads and samples follow the state, and its total is 1, while a matrix that
-leaves nothing of the state raises `RuntimeError`), and raises `ValueError`
+leaves nothing of the state, or a weight the chain cannot tell from none,
+raises `RuntimeError` and leaves the state as it was), and raises `ValueError`
 where the register is too
 wide to list its basis states, rather than returning zeros. On the Aer extended
 stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact

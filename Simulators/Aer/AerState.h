@@ -79,7 +79,7 @@ class AerState : public ISimulator
      */
     void Initialize() override
     {
-        normDeviation = 0.;
+        pendingDeviation.clear();
         SetMultithreading(enableMultithreading);
         if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
             Configure("mps_sample_measure_algorithm", "mps_probabilities");
@@ -107,7 +107,8 @@ class AerState : public ISimulator
      *
      * This function is called when the simulator is initialized.
      * Call it only on a non-initialized state.
-     * This works only for 'statevector' method.
+     * This works only for the 'statevector' and 'density_matrix' methods: the
+     * others throw std::runtime_error and keep their state.
      *
      * @param num_qubits The number of qubits to initialize the state with.
      * @param amplitudes A vector with the amplitudes to initialize the state
@@ -115,6 +116,8 @@ class AerState : public ISimulator
      */
     void InitializeState(size_t num_qubits, std::vector<std::complex<double>> &amplitudes) override
     {
+        if (simulationType != SimulationType::kDensityMatrix)
+            RequireStatevectorMethod(); // before anything is cleared: the state is as it was when this is refused
         RequireStatevectorLength(num_qubits, static_cast<size_t>(amplitudes.size()));
         Clear();
         if (simulationType == SimulationType::kDensityMatrix)
@@ -128,7 +131,8 @@ class AerState : public ISimulator
      *
      * This function is called when the simulator is initialized.
      * Call it only on a non-initialized state.
-     * This works only for 'statevector' method.
+     * This works only for the 'statevector' and 'density_matrix' methods: the
+     * others throw std::runtime_error and keep their state.
      *
      * @param num_qubits The number of qubits to initialize the state with.
      * @param amplitudes A vector with the amplitudes to initialize the state
@@ -148,7 +152,8 @@ class AerState : public ISimulator
      *
      * This function is called when the simulator is initialized.
      * Call it only on a non-initialized state.
-     * This works only for 'statevector' method.
+     * This works only for the 'statevector' and 'density_matrix' methods: the
+     * others throw std::runtime_error and keep their state.
      *
      * @param num_qubits The number of qubits to initialize the state with.
      * @param amplitudes A vector with the amplitudes to initialize the state
@@ -156,6 +161,8 @@ class AerState : public ISimulator
      */
     void InitializeState(size_t num_qubits, AER::Vector<std::complex<double>> &amplitudes) override
     {
+        if (simulationType != SimulationType::kDensityMatrix)
+            RequireStatevectorMethod(); // before anything is cleared: the state is as it was when this is refused
         RequireStatevectorLength(num_qubits, static_cast<size_t>(amplitudes.size()));
         Clear();
         if (simulationType == SimulationType::kDensityMatrix)
@@ -169,7 +176,8 @@ class AerState : public ISimulator
      *
      * This function is called when the simulator is initialized.
      * Call it only on a non-initialized state.
-     * This works only for 'statevector' method.
+     * This works only for the 'statevector' and 'density_matrix' methods: the
+     * others throw std::runtime_error and keep their state.
      *
      * @param num_qubits The number of qubits to initialize the state with.
      * @param amplitudes A vector with the amplitudes to initialize the state
@@ -177,6 +185,8 @@ class AerState : public ISimulator
      */
     void InitializeState(size_t num_qubits, Eigen::VectorXcd &amplitudes) override
     {
+        if (simulationType != SimulationType::kDensityMatrix)
+            RequireStatevectorMethod(); // before anything is cleared: the state is as it was when this is refused
         RequireStatevectorLength(num_qubits, static_cast<size_t>(amplitudes.size()));
         Clear();
         if (simulationType == SimulationType::kDensityMatrix)
@@ -367,7 +377,7 @@ class AerState : public ISimulator
      */
     void Clear() override
     {
-        normDeviation = 0.;
+        pendingDeviation.clear();
         state->clear();
         SetMultithreading(enableMultithreading);
 
@@ -813,7 +823,7 @@ class AerState : public ISimulator
      * state stays normalized and its total is 1; it also could not be summed
      * from the extended stabilizer's statevector past a few dozen qubits. The
      * matrix product state stays normalized too: a generic gate whose matrix
-     * moves its norm is followed by RestoreChainNorm.
+     * moves its norm is applied so that it is restored (ApplyGenericToChain).
      */
     double TotalProbability() override
     {
@@ -838,7 +848,7 @@ class AerState : public ISimulator
     {
         RequireMarginalQubits(qubits);
         // No qubits: the total probability (TotalProbability above, through IState::MarginalProbabilities). Aer reads
-        // the qubits of a matrix product state from its canonical form, at any width: RestoreChainNorm keeps it valid
+        // the qubits of a matrix product state from its canonical form, at any width: ApplyGenericToChain keeps it valid
         // after a generic gate whose matrix moves the norm (a qubit of a projected Bell pair read [0.5, 0.5]).
         if (qubits.empty() || simulationType == SimulationType::kExtendedStabilizer)
             return IState::MarginalProbabilities(qubits);
@@ -1053,7 +1063,7 @@ class AerState : public ISimulator
     {
         if (!state)
             return;
-        savedNormDeviation = normDeviation;
+        savedPendingDeviation = pendingDeviation;
         normSaved = true;
 
         const auto numQubits = GetNumberOfQubits();
@@ -1134,7 +1144,7 @@ class AerState : public ISimulator
         // Restoring may reinitialize the state, which clears the mark: it is set from the saved one after.
         RestoreSavedStateOfMethod();
         if (normSaved) // a restore with nothing saved leaves the mark as it is
-            normDeviation = savedNormDeviation;
+            pendingDeviation = savedPendingDeviation;
     }
 
     void RestoreSavedStateOfMethod()
@@ -1403,30 +1413,11 @@ class AerState : public ISimulator
   protected:
     void InitializeStatevectorBuffer(size_t numQubits, std::complex<double> *amplitudes)
     {
+        RequireStatevectorMethod();
         const size_t dimension = ListableBasisStateCount<std::complex<double>>(numQubits);
-        // The amplitudes given need not be normalized. The statevector keeps what they hold; the matrix product state
-        // is a normalized chain (see RestoreChainNorm), and takes them normalized.
-        std::vector<std::complex<double>> normalized;
-        if (simulationType == SimulationType::kMatrixProductState)
-        {
-            double normSquared = 0.;
-            for (size_t i = 0; i < dimension; ++i)
-                normSquared += std::norm(amplitudes[i]);
-            if (!(normSquared > 0.) || !std::isfinite(normSquared))
-                throw std::invalid_argument("The amplitudes given to a matrix product state have no norm to normalize them by");
-            if (std::abs(normSquared - 1.) > kNormDeviationTolerance)
-            {
-                const double scale = 1. / std::sqrt(normSquared);
-                normalized.assign(amplitudes, amplitudes + dimension);
-                for (std::complex<double> &amplitude : normalized)
-                    amplitude *= scale;
-                amplitudes = normalized.data();
-            }
-        }
         if (GetConfiguration("precision") == "double")
         {
             state->initialize_statevector(numQubits, amplitudes, true);
-            normDeviation = 0.;
             return;
         }
         AllocateQubits(numQubits);
@@ -1439,66 +1430,191 @@ class AerState : public ISimulator
             op.qubits.push_back(q);
         state->buffer_op(std::move(op));
         Flush();
-        normDeviation = 0.;
     }
 
     /**
-     * Keeps the matrix product state normalized and in canonical form after a
-     * generic gate (see IState::NormDeviation). A matrix that does not keep
-     * the norm leaves the tensors around its qubit stale, not only a weight:
-     * Aer went on reading the other qubits and sampling from them (a qubit of
-     * a projected Bell pair was sampled as 1 half the time), and its save,
-     * which sorts the qubits with swaps, renormalized the live state. The
-     * site is scaled back to weight 1, read from Aer's marginal of the qubit
-     * (valid on it: its neighbours still hold), as a channel of one operator,
-     * after which Aer renormalizes the tensors outwards from the site, as it
-     * does after a measurement.
-     *
-     * A matrix that moves the norm by more than the tolerance is repaired at
-     * once, exactly. Smaller deviations add up, since many matrices each
-     * close to unitary move the norm by their sum; once the sum passes the
-     * tolerance every site that has drifted is repaired.
+     * A list of amplitudes is a state of the statevector method only (the
+     * density matrix takes one through its own loader). Aer's initializer
+     * builds a dense statevector whatever method the simulator was made for:
+     * a matrix product state or a stabilizer given amplitudes went on as a
+     * dense state under its own name, without its bond limit or its scaling.
+     * They are refused, as QCSim's and the GPU's are.
      */
-    void RestoreChainNorm(double deviation, Types::qubit_t qubit)
+    void RequireStatevectorMethod() const
     {
-        if (deviation > kNormDeviationTolerance)
-        {
-            RepairChainSite(qubit, -1.); // whatever the weight: the other tensors are stale even at weight 1
-            return;
-        }
-        normDeviation += deviation;
-        if (normDeviation <= kNormDeviationTolerance)
-            return;
-        normDeviation = 0.;
-        // Matrices unitary to rounding add up to the tolerance without moving any site by it: those sites are left.
-        const size_t count = GetNumberOfQubits();
-        for (size_t site = 0; site < count; ++site)
-            RepairChainSite(site, kNormDeviationTolerance * 1e-2);
+        if (simulationType != SimulationType::kStatevector)
+            throw std::runtime_error("AerState::InitializeState: Invalid simulation type for initializing the state.");
     }
 
-    void RepairChainSite(Types::qubit_t qubit, double slack)
+    template <class Derived> static AER::cmatrix_t ToAerMatrix(const Eigen::MatrixBase<Derived> &matrix)
+    {
+        AER::cmatrix_t result(static_cast<size_t>(matrix.rows()), static_cast<size_t>(matrix.cols()));
+        for (Eigen::Index row = 0; row < matrix.rows(); ++row)
+            for (Eigen::Index column = 0; column < matrix.cols(); ++column)
+                result(static_cast<size_t>(row), static_cast<size_t>(column)) = matrix(row, column);
+        return result;
+    }
+
+    /**
+     * A generic gate on the matrix product state, which stays normalized and
+     * in canonical form (see IState::NormDeviation).
+     *
+     * A matrix that moves the norm by more than the tolerance is a filter:
+     * ApplyFilterToChain. Smaller deviations add up, since many matrices each
+     * close to unitary move the state by their sum, and they add up for each
+     * qubit: once those of a qubit pass the tolerance, the tensors outside it
+     * are brought up to date from it (RenormalizeFromSite), whatever weight
+     * it has. A matrix can shift the probabilities of its qubit and leave the
+     * weight where it was, and the other qubits were then read from Schmidt
+     * values it had left stale.
+     */
+    template <class Matrix> void ApplyGenericToChain(const AER::reg_t &qubits, const Matrix &gate)
+    {
+        const double deviation = NormDeviation(gate);
+        if (deviation > kNormDeviationTolerance)
+            return ApplyFilterToChain(qubits, gate);
+        state->apply_unitary(qubits, ToAerMatrix(gate));
+        if (deviation == 0.)
+            return;
+        if (pendingDeviation.size() != GetNumberOfQubits())
+            pendingDeviation.assign(GetNumberOfQubits(), 0.);
+        for (const auto qubit : qubits)
+            if ((pendingDeviation[qubit] += deviation) > kNormDeviationTolerance)
+            {
+                pendingDeviation[qubit] = 0.;
+                RenormalizeFromSite(qubit);
+            }
+    }
+
+    /**
+     * Scales a site back to weight 1 and has Aer renormalize the tensors
+     * outwards from it, as it does after a measurement: the scaled identity
+     * goes to the chain as a channel of one operator, which Aer applies as it
+     * is and follows with that sweep. (It draws once from Aer's stream, as
+     * every channel does.)
+     */
+    void RenormalizeFromSite(Types::qubit_t qubit)
     {
         const std::vector<double> both = state->probabilities(AER::reg_t{qubit});
         const double weight = both.at(0) + both.at(1);
         if (!(weight > 0.) || !std::isfinite(weight))
-            throw std::runtime_error("The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm");
-        if (std::abs(weight - 1.) <= slack)
-            return;
-        AER::cmatrix_t scale(2, 2);
-        scale(0, 0) = scale(1, 1) = 1. / std::sqrt(weight);
-        scale(0, 1) = scale(1, 0) = 0.;
-        state->apply_kraus(AER::reg_t{qubit}, std::vector<AER::cmatrix_t>{scale});
+            throw std::runtime_error("AerState: the matrix product state has no norm left to restore");
+        state->apply_kraus(AER::reg_t{qubit}, std::vector<AER::cmatrix_t>{ToAerMatrix(Eigen::Matrix2cd(Eigen::Matrix2cd::Identity() / std::sqrt(weight)))});
     }
 
     /**
-     * Refuses the matrix of a generic gate that leaves nothing of a matrix
-     * product state, before it is applied. The weight it leaves,
-     * <psi|M^dagger M|psi>, is read from the Pauli expectation values of its
-     * qubits (M^dagger M is a sum of Pauli products), which do not change the
-     * state. One within rounding of none counts as none: nothing could be
-     * normalized from it.
+     * A one- or two-qubit matrix M that is not unitary, on the matrix product
+     * state: applied as M / sqrt(w), with w = <psi|M^dagger M|psi> the weight
+     * it leaves, as the one operator of a channel, so that Aer renormalizes
+     * the tensors outside its qubits afterwards. A matrix that does not keep
+     * the norm leaves those stale: Aer went on reading the other qubits and
+     * sampling from them (a qubit of a projected Bell pair was sampled as 1
+     * half the time), and its save, which sorts the qubits with swaps,
+     * renormalized the live state.
+     *
+     * The matrix has to be scaled before Aer applies it: Aer cannot split a
+     * tensor that holds nothing, and it cuts Schmidt values by their size as
+     * they are, before it normalizes them. So the weight is read first, and
+     * read as a sum of positive terms, which keeps a small one as exact as a
+     * large one: M^dagger M = V diag(h) V^dagger, and w = sum_k h_k p_k with
+     * p the probabilities of the qubits in the basis V. When M^dagger M is
+     * diagonal those are the probabilities Aer has; otherwise the qubits are
+     * turned by V^dagger first, a unitary, and M V / sqrt(w) is what remains
+     * to apply. For two qubits that turn is one more update of their bond,
+     * which a bond limit can cut: it is skipped where the Pauli expectation
+     * values of the pair already give the weight to ten digits, that is
+     * unless the weight is below a millionth of what the matrix could leave.
+     *
+     * A weight the chain cannot tell from none counts as none (NoWeightBelow):
+     * the matrix is refused with std::runtime_error and the state is as it
+     * was (turned back by V where it was turned).
      */
-    template <class Matrix> void RequireWeightLeft(const Matrix &gate, const AER::reg_t &qubits)
+    template <class Matrix> void ApplyFilterToChain(const AER::reg_t &qubits, const Matrix &gate)
+    {
+        static constexpr char noState[] = "The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm";
+        using Hermitian = std::decay_t<decltype((gate.adjoint() * gate).eval())>;
+        const Hermitian squared = gate.adjoint() * gate;
+        const Eigen::SelfAdjointEigenSolver<Hermitian> solver(squared);
+        const Eigen::Index dimension = squared.rows();
+        const double largest = solver.info() == Eigen::Success ? solver.eigenvalues()(dimension - 1) : 0.;
+        if (!(largest > 0.) || !std::isfinite(largest))
+            throw std::runtime_error(noState); // the zero matrix, or one that is not finite
+
+        // Diagonal to rounding: its own diagonal weighs the probabilities Aer has, and nothing is turned.
+        Hermitian offDiagonal = squared;
+        offDiagonal.diagonal().setZero();
+        const bool diagonal = offDiagonal.cwiseAbs().maxCoeff() <= std::numeric_limits<double>::epsilon() * largest;
+
+        if (!diagonal && qubits.size() == 2)
+        {
+            const double estimate = PauliWeight(squared, qubits);
+            if (estimate >= 1e-6 * largest)
+            {
+                state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix(gate / std::sqrt(estimate))});
+                return;
+            }
+        }
+
+        const Hermitian basis = diagonal ? Hermitian(Hermitian::Identity()) : Hermitian(solver.eigenvectors());
+        if (!diagonal)
+            state->apply_unitary(qubits, ToAerMatrix(basis.adjoint()));
+        const std::vector<double> probabilities = state->probabilities(qubits);
+        double weight = 0., total = 0.;
+        for (Eigen::Index k = 0; k < dimension; ++k)
+        {
+            const double value = diagonal ? squared(k, k).real() : solver.eigenvalues()(k);
+            weight += std::max(value, 0.) * probabilities.at(static_cast<size_t>(k));
+            total += probabilities[static_cast<size_t>(k)];
+        }
+        if (!(weight > NoWeightBelow() * largest * total) || !std::isfinite(weight))
+        {
+            if (!diagonal)
+                state->apply_unitary(qubits, ToAerMatrix(basis)); // back to the basis the state was in
+            throw std::runtime_error(noState);
+        }
+        state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix((gate * basis) / std::sqrt(weight))});
+    }
+
+    /**
+     * The fraction of what a matrix could leave below which a weight counts
+     * as none. Two things bound what a chain knows of a small weight: the
+     * rounding of amplitudes that cancel, (64 epsilon)^2 as on QCSim, and the
+     * truncation of the chain itself. At every update Aer drops the Schmidt
+     * values whose squares are below 1e-16, and those that add up to less
+     * than a larger truncation threshold when one is configured, so the
+     * chain holds its state to that weight only: |Phi-> with one qubit turned
+     * by 2e-4 has no weight on |Phi+>, and the chain, cut, held 2.5e-17 of
+     * it, which a projection onto |Phi+> then returned as a state. A margin
+     * of 16 covers a few cuts. A register of one qubit has no bond to cut.
+     */
+    double NoWeightBelow() const
+    {
+        constexpr double amplitudeRounding = 64. * std::numeric_limits<double>::epsilon();
+        if (GetNumberOfQubits() < 2)
+            return amplitudeRounding * amplitudeRounding;
+        double truncation = 1e-16; // what Aer drops whatever is configured
+        if (configuration.IsSet("matrix_product_state_truncation_threshold"))
+        {
+            try
+            {
+                const double configured = std::stod(configuration.GetConfiguration("matrix_product_state_truncation_threshold"));
+                if (std::isfinite(configured))
+                    truncation = std::max(truncation, configured);
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+        return 16. * truncation;
+    }
+
+    /**
+     * <psi|H|psi> for a Hermitian 4x4 H on two qubits of a normalized matrix
+     * product state, from the Pauli expectation values of the pair (H is a
+     * sum of Pauli products), which do not change the state. Its terms
+     * cancel: it is exact to the rounding of the largest, not of the result.
+     */
+    template <class Hermitian> double PauliWeight(const Hermitian &squared, const AER::reg_t &qubits)
     {
         using Complex = std::complex<double>;
         static const std::array<Eigen::Matrix2cd, 4> paulis = [] {
@@ -1509,18 +1625,15 @@ class AerState : public ISimulator
             p[3] << 1., 0., 0., -1.;
             return p;
         }();
-        const auto squared = (gate.adjoint() * gate).eval();
-        const size_t count = qubits.size(); // 1 or 2; the first qubit is the low bit of the matrix index
         double weight = 0.;
-        for (size_t first = 0; first < 4; ++first)
-            for (size_t second = 0; second < (count == 2 ? 4 : 1); ++second)
+        for (size_t first = 0; first < 4; ++first) // on qubits[0], the low bit of the matrix index
+            for (size_t second = 0; second < 4; ++second)
             {
                 Complex coefficient = 0.;
-                for (Eigen::Index row = 0; row < squared.rows(); ++row)
-                    for (Eigen::Index column = 0; column < squared.cols(); ++column)
-                        coefficient +=
-                            squared(row, column) * paulis[first](column % 2, row % 2) * (count == 2 ? paulis[second](column / 2, row / 2) : Complex(1.));
-                const double part = coefficient.real() / static_cast<double>(squared.rows());
+                for (Eigen::Index row = 0; row < 4; ++row)
+                    for (Eigen::Index column = 0; column < 4; ++column)
+                        coefficient += squared(row, column) * paulis[first](column % 2, row % 2) * paulis[second](column / 2, row / 2);
+                const double part = coefficient.real() / 4.;
                 if (part == 0.)
                     continue;
                 // The qubits in ascending order, and Aer reads the Pauli string from its last character.
@@ -1539,16 +1652,7 @@ class AerState : public ISimulator
                 }
                 weight += part * (targets.empty() ? 1. : state->expval_pauli(targets, pauli));
             }
-        if (!(weight > 1e-13 * squared.norm()))
-            throw std::runtime_error("The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm");
-    }
-
-    /** After a two-qubit matrix applied as a channel: Aer has renormalized the chain, unless nothing was left of it. */
-    void RequireChainWeight(Types::qubit_t qubit)
-    {
-        const std::vector<double> both = state->probabilities(AER::reg_t{qubit});
-        if (!(std::abs(both.at(0) + both.at(1) - 1.) < 1e-6))
-            throw std::runtime_error("The matrix of the generic gate leaves no state: a matrix product state cannot hold a state of zero norm");
+        return weight;
     }
 
     void InitializeDensityMatrixBuffer(size_t numQubits, std::complex<double> *values)
@@ -1596,10 +1700,11 @@ class AerState : public ISimulator
     SimulationType simulationType = SimulationType::kStatevector;               /**< The simulation type. */
     std::unique_ptr<QiskitAerState> state = std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
     AER::Vector<complex_t> savedAmplitudes;                                     /**< The amplitudes, saved. */
-    double normDeviation = 0.;         /**< How far the generic gates since the last repair may have moved the norm of a matrix product state. */
-    double savedNormDeviation = 0.;    /**< Its value at SaveState. */
-    bool normSaved = false;            /**< Whether SaveState has run. */
-    AER::cmatrix_t savedDensityMatrix; /**< The density matrix, saved. */
+    std::vector<double> pendingDeviation;      /**< For each qubit of a matrix product state: how far the generic gates on it may have moved the state since the
+                                                  tensors outside it were last brought up to date. */
+    std::vector<double> savedPendingDeviation; /**< Its value at SaveState. */
+    bool normSaved = false;                    /**< Whether SaveState has run. */
+    AER::cmatrix_t savedDensityMatrix;         /**< The density matrix, saved. */
     std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
 
     bool enableMultithreading = true; /**< The multithreading flag. */

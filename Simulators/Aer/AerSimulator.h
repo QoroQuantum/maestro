@@ -60,18 +60,10 @@ class AerSimulator : public AerState
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
         const AER::reg_t qubits = {qubit};
-        AER::cmatrix_t gate_matrix(2, 2);
-        gate_matrix(0, 0) = gate(0, 0);
-        gate_matrix(0, 1) = gate(0, 1);
-        gate_matrix(1, 0) = gate(1, 0);
-        gate_matrix(1, 1) = gate(1, 1);
-
-        const double deviation = simulationType == SimulationType::kMatrixProductState ? NormDeviation(gate) : 0.;
-        if (deviation > kNormDeviationTolerance)
-            RequireWeightLeft(gate, qubits); // before the matrix is applied: the chain is as it was when it is refused
-        state->apply_unitary(qubits, gate_matrix);
         if (simulationType == SimulationType::kMatrixProductState)
-            RestoreChainNorm(deviation, qubit);
+            ApplyGenericToChain(qubits, gate); // the chain stays normalized: see there
+        else
+            state->apply_unitary(qubits, ToAerMatrix(gate));
         NotifyObservers(qubits);
     }
 
@@ -85,27 +77,10 @@ class AerSimulator : public AerState
     {
         // Aer, like QCSim, maps the first entry to local matrix bit zero.
         const AER::reg_t qubits = {qubit0, qubit1};
-        AER::cmatrix_t gate_matrix(4, 4);
-        for (size_t i = 0; i < 4; ++i)
-            for (size_t j = 0; j < 4; ++j)
-                gate_matrix(i, j) = gate(i, j);
-
-        const double deviation = simulationType == SimulationType::kMatrixProductState ? NormDeviation(gate) : 0.;
-        if (deviation > kNormDeviationTolerance)
-        {
-            // A matrix that moves the norm goes to the chain as a channel of one operator: Aer applies it as it is,
-            // renormalizes the bond between the two qubits as any two-qubit update does, and then, as it must after
-            // an operator that is not unitary, the tensors outside them (see RestoreChainNorm).
-            RequireWeightLeft(gate, qubits); // Aer cannot split a tensor that holds nothing: refused before
-            state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{gate_matrix});
-            RequireChainWeight(qubit0);
-        }
+        if (simulationType == SimulationType::kMatrixProductState)
+            ApplyGenericToChain(qubits, gate);
         else
-        {
-            state->apply_unitary(qubits, gate_matrix);
-            if (simulationType == SimulationType::kMatrixProductState)
-                RestoreChainNorm(deviation, qubit0);
-        }
+            state->apply_unitary(qubits, ToAerMatrix(gate));
         NotifyObservers(qubits);
     }
 
@@ -1071,7 +1046,7 @@ class AerSimulator : public AerState
 
         sim->SetMultithreading(enableMultithreading); /**< The multithreading flag. */
 
-        const double localSavedNormDeviation = savedNormDeviation;
+        const std::vector<double> localSavedPendingDeviation = savedPendingDeviation;
         const bool localNormSaved = normSaved;
         AER::Vector<complex_t> localSavedAmplitudes = savedAmplitudes; /**< The amplitudes, saved. */
         AER::Data localSavedState = savedState;                        /**< The saved data - here there will be the saved state of
@@ -1124,10 +1099,10 @@ class AerSimulator : public AerState
             sim->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
 
         // The mark of the state, and the one saved with it (SaveState above wrote this simulator's).
-        sim->normDeviation = normDeviation;
-        sim->savedNormDeviation = localSavedNormDeviation;
+        sim->pendingDeviation = pendingDeviation;
+        sim->savedPendingDeviation = localSavedPendingDeviation;
         sim->normSaved = localNormSaved;
-        savedNormDeviation = localSavedNormDeviation;
+        savedPendingDeviation = localSavedPendingDeviation;
         normSaved = localNormSaved;
         return sim;
     }

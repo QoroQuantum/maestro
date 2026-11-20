@@ -71,14 +71,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the state, so the total probability of an MPS is 1 at any width and
   Aer's MPS reads the marginal of a qubit at any width (QCSim does it
   through the environments it keeps after a Kraus operator, QCSim b96ca88; Aer
-  through the sweep it does after one; the GPU library rebuilds its
-  canonical form). A matrix that leaves nothing of the state throws
-  `std::runtime_error` (on QCSim and Aer with the state as it was; Aer's
-  chain could not be split and crashed). Matrices each within 1e-10 of
-  unitary add up, and the chain is repaired once their sum passes that.
-  Amplitudes given to Aer's MPS are normalized, and ones without a norm
-  throw `std::invalid_argument`. Dense backends are unchanged: they keep the
-  weight the matrix leaves.
+  through the sweep it does after one, the matrix scaled by the weight it
+  leaves, read as a sum of positive terms so that a small one is as exact as
+  a large one; the GPU library rebuilds its canonical form). Dense backends
+  are unchanged: they keep the weight the matrix leaves.
+  - A matrix that leaves nothing of the state throws `std::runtime_error`
+    and the state is as it was, on the three of them (the GPU tries a matrix
+    that could on a copy of the chain first; Aer's chain could not be split
+    and crashed). "Nothing" is a weight the chain cannot tell from none:
+    within the rounding of amplitudes that cancel, (64 epsilon)^2 of what the
+    matrix could leave (2e-28 in double precision, 6e-11 on a GPU chain kept
+    in single precision), and on an Aer chain of two qubits or more, which
+    drops Schmidt weights below 1e-16 at every update (and below a larger
+    `matrix_product_state_truncation_threshold` when one is set), within 16
+    times that (1.6e-15 by default). A projection onto a state that holds
+    9e-14 of the chain is applied. On the GPU the rule covers one-qubit matrices; for two-qubit
+    ones the library refuses an exact zero.
+  - Matrices each within 1e-10 of unitary add up, and the chain is brought up
+    to date once their sum passes that (on Aer per qubit, whatever weight the
+    qubit has: `diag(1 + e, 1 - e)` shifts probabilities without moving it).
+    On Aer that draws once from its stream, as a channel does.
+  - A GPU library that does not export `MPSReCanonicalize` refuses a matrix
+    that is not unitary before the chain changes, and applies the others as
+    it did.
+- `InitializeState` (a list of amplitudes) on the Aer matrix product state
+  and stabilizers throws `std::runtime_error` and keeps the state, as on
+  QCSim and the GPU. Aer's initializer builds a dense statevector whatever
+  the method, so such a simulator went on as a dense state under its own
+  name, without its bond limit.
 - The tensor network's total probability is one contraction of each
   independent group of qubits after one pass over the network, and the
   contractor finds a cached plan by its fingerprint: both went through the

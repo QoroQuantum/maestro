@@ -109,6 +109,12 @@ class GpuLibMPSSim
         return obj && lib->MPSReCanonicalize(obj);
     }
 
+    // Older libraries do not export the explicit compression: Trim and ReCanonicalize then throw.
+    bool CanReCanonicalize() const
+    {
+        return lib->HasMPSCompressionAPI();
+    }
+
     bool SetInitialQubitsMap(const std::vector<long long int> &initialMap)
     {
         if (obj)
@@ -300,6 +306,19 @@ class GpuLibMPSSim
         if (obj)
             return lib->MPSSetBondDimensionsCallback(obj, callback);
         return false;
+    }
+
+    // For a copy of a chain that is only tried on: it must not report its bonds or ask for its routing as the chain
+    // it was copied from does.
+    void ClearCallbacks()
+    {
+        if (!obj)
+            return;
+        lib->MPSSetMeetingPositionCallback(obj, nullptr);
+        lib->MPSSetBondDimensionsCallback(obj, nullptr);
+        if (lib->HasMPSBondSummary())
+            lib->MPSSetBondDimensionSummaryCallback(obj, nullptr);
+        lib->MPSSetCallbackContext(obj, nullptr);
     }
 
     void InstallBondSummary(void (*summary)(void *, int64_t), void (*full)(void *, const int64_t *))
