@@ -234,9 +234,8 @@ struct SimulatorConfig
             throw std::invalid_argument("observable_error_tolerance must be finite and in (0, 1]");
         if (max_simulators && (!*max_simulators || *max_simulators > 1024))
             throw std::invalid_argument("max_simulators must be between 1 and 1024");
-        if (extended_stabilizer_amplitude_tolerance &&
-            (!std::isfinite(*extended_stabilizer_amplitude_tolerance) || *extended_stabilizer_amplitude_tolerance < 0 ||
-             *extended_stabilizer_amplitude_tolerance >= 1))
+        if (extended_stabilizer_amplitude_tolerance && (!std::isfinite(*extended_stabilizer_amplitude_tolerance) ||
+                                                        *extended_stabilizer_amplitude_tolerance < 0 || *extended_stabilizer_amplitude_tolerance >= 1))
             throw std::invalid_argument("extended_stabilizer_amplitude_tolerance must be finite and in [0, 1)");
         if (extended_stabilizer_max_components && !*extended_stabilizer_max_components)
             throw std::invalid_argument("extended_stabilizer_max_components must be positive");

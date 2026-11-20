@@ -173,8 +173,7 @@ void bind_api(nb::module_ &m)
         // The QCSim extended stabilizer runs its whole gate set on batched
         // frames, exactly: a pruned one keeps scalar trajectories.
         if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
-            !MaestroExecution::HasCandidateList(config) && !config.enable_sampling_reduction &&
-            !MaestroExecution::SetsExtendedStabilizerApproximation(config))
+            !MaestroExecution::HasCandidateList(config) && !config.enable_sampling_reduction && !MaestroExecution::SetsExtendedStabilizerApproximation(config))
         {
             std::optional<MaestroExecution::ExtendedFrameSampler> plan;
             {

@@ -90,9 +90,9 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
         const bool cap = configuration.IsSet(kMaxComponentsKey);
         if (!tolerance && !cap)
             return QC::ExtendedStabilizerApproximationPolicy::Exact();
-        return QC::ExtendedStabilizerApproximationPolicy::Approximate(
-            tolerance ? configuration.GetConfigurationAsDouble(kToleranceKey) : 0.0,
-            cap ? static_cast<size_t>(configuration.GetConfigurationAsUnsigned(kMaxComponentsKey)) : 0);
+        return QC::ExtendedStabilizerApproximationPolicy::Approximate(tolerance ? configuration.GetConfigurationAsDouble(kToleranceKey) : 0.0,
+                                                                      cap ? static_cast<size_t>(configuration.GetConfigurationAsUnsigned(kMaxComponentsKey))
+                                                                          : 0);
     }
 
     void SeedForExecution(uint64_t seed) override
