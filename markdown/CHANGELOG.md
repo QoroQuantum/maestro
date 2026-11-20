@@ -204,7 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache alone: an upper bound on what overlaps, so two realizations report
   1. A noisy fidelity still runs its
   realizations one after another and reports 1.
-- QCSim is pinned to QoroQuantum/QCSim b96ca88. On its density matrix, a
+- QCSim is pinned to QoroQuantum/QCSim 21cb0d2. On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
   one pass over the matrix instead of two, from 11 qubits for dense gates
   (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y
