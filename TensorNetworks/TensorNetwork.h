@@ -16,6 +16,7 @@
 #define __TENSOR_NETWORK_H_ 1
 
 #include <Eigen/Eigen>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 

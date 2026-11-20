@@ -15,7 +15,6 @@ namespace utf = boost::unit_test;
 
 #include <framework/avx2_detect.hpp>
 
-#include <chrono>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -1601,14 +1600,14 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
             BOOST_TEST(std::abs(sim->Probability(1) - .5) < 1e-9);
             BOOST_TEST(std::abs(sim->Probability(3) - .5) < 1e-9);
             // A two-qubit projection that is not along the basis, onto (|00> + |11>) / sqrt(2), of
-            // a state that holds 1e-14 of it.
+            // a state that holds 1e-12 of it.
             auto pair = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
             pair->AllocateQubits(3);
             pair->Initialize();
             pair->ApplyH(0);
             pair->ApplyCX(0, 2);
             pair->ApplyZ(0);       // (|00> - |11>) / sqrt(2) on qubits 0 and 2: nothing of it
-            pair->ApplyP(0, 2e-7); // (|00> - e^(i phi)|11>) / sqrt(2): sin^2(phi / 2) = 1e-14 of it
+            pair->ApplyP(0, 2e-6); // (|00> - e^(i phi)|11>) / sqrt(2): sin^2(phi / 2) = 1e-12 of it
             Eigen::Matrix4cd bell = Eigen::Matrix4cd::Zero();
             bell(0, 0) = bell(0, 3) = bell(3, 0) = bell(3, 3) = .5;
             pair->ApplyGenericTwoQubitGate(0, 2, bell);
@@ -1686,6 +1685,39 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
             BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - sumOf(after)) < 1e-12);
         }
 
+        // Under a bond limit too a refused matrix leaves the state as it was. With a limit of 2,
+        // Bell pairs on qubits (0, 2) and (1, 3) are a state that any further update of a bond
+        // between them can cut: Aer weighed a two-qubit matrix that is not along the basis with
+        // the pair turned on the live chain, an update that turning back did not undo.
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
+            sim->Configure("matrix_product_state_max_bond_dimension", "2");
+            sim->AllocateQubits(4);
+            sim->Initialize();
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 2);
+            sim->ApplyZ(0); // (|00> - |11>) / sqrt(2) on qubits 0 and 2
+            sim->ApplyH(1);
+            sim->ApplyCX(1, 3);
+            const std::vector<double> before = sim->AllProbabilities();
+            BOOST_REQUIRE(std::abs(before[0] - .25) < 1e-12);
+            Eigen::Matrix4cd bell = Eigen::Matrix4cd::Zero();
+            bell(0, 0) = bell(0, 3) = bell(3, 0) = bell(3, 3) = .5; // onto (|00> + |11>) / sqrt(2): nothing of it
+            Eigen::Matrix4cd both = Eigen::Matrix4cd::Zero();
+            both(1, 1) = 1.; // onto |01>, along the basis: nothing of it either
+            Eigen::Matrix2cd minus;
+            minus << .5, -.5, -.5, .5;
+            BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(0, 2, bell), std::runtime_error);
+            BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(2, 0, both), std::runtime_error);
+            BOOST_CHECK_THROW(sim->ApplyGenericTwoQubitGate(0, 1, Eigen::Matrix4cd(Eigen::Matrix4cd::Zero())), std::runtime_error);
+            const std::vector<double> after = sim->AllProbabilities();
+            for (size_t index = 0; index < before.size(); ++index)
+                BOOST_TEST(std::abs(after[index] - before[index]) < 1e-12, "bond limit 2, basis state " << index);
+            // And a matrix that is applied there leaves the chain normalized.
+            sim->ApplyGenericTwoQubitGate(1, 3, bell);
+            BOOST_TEST(std::abs(sumOf(sim->AllProbabilities()) - 1.) < 1e-9);
+        }
+
         // A register of one qubit has no bond to renormalize at.
         {
             auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
@@ -1747,14 +1779,18 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
 }
 
 // The tensor network's total is one contraction of each of its independent groups of qubits, after
-// one pass over the network: it went through every tensor of the register once per group, and so
+// one pass over the network. It went through every tensor of the register once per group, and so
 // did the contractor's cache of plans, which made it quadratic in the number of qubits (seconds for
-// a few thousand qubits that no gate connects).
-BOOST_AUTO_TEST_CASE(tensor_network_total_probability_is_linear_in_independent_qubits)
+// a few thousand qubits that no gate connects; milliseconds now, measured apart from the tests:
+// nothing here depends on the time it takes). The total is right whatever the number of groups,
+// for a group apart from qubit 0's, and again when the plans are found cached, also past what the
+// cache holds, where it drops the oldest.
+BOOST_AUTO_TEST_CASE(tensor_network_total_probability_over_independent_groups)
 {
     Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero();
     projector(0, 0) = 1.;
-    const auto timeOf = [&](size_t qubits) {
+    for (const size_t qubits : {size_t(3), size_t(64), size_t(4096), size_t(20000)})
+    {
         auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kTensorNetwork);
         sim->AllocateQubits(qubits);
         sim->Initialize();
@@ -1762,19 +1798,13 @@ BOOST_AUTO_TEST_CASE(tensor_network_total_probability_is_linear_in_independent_q
         sim->ApplyCX(qubits - 1, 0);
         sim->ApplyH(qubits / 2);
         sim->ApplyGenericOneQubitGate(qubits / 2, projector); // a group apart from qubit 0's: half the weight
-        double best = std::numeric_limits<double>::infinity();
-        for (int repeat = 0; repeat < 3; ++repeat) // the second and third find the plans cached
-        {
-            const auto start = std::chrono::steady_clock::now();
-            const double total = sim->MarginalProbabilities({})[0];
-            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
-            BOOST_TEST(std::abs(total - .5) < 1e-9, qubits << " qubits");
-        }
-        return best;
-    };
-    const double small = timeOf(4096), large = timeOf(32768);
-    // Eight times the qubits: about eight times the time when linear, sixty-four when quadratic.
-    BOOST_TEST(large < 24. * small + 0.05, "4096 qubits: " << small << " s, 32768 qubits: " << large << " s");
+        for (int repeat = 0; repeat < 3; ++repeat)            // the second and third find the plans cached
+            BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .5) < 1e-9, qubits << " qubits, pass " << repeat);
+        // A second matrix, on the group of qubit 0: a quarter is left, and the plans of the other groups still hold.
+        sim->ApplyH(0);
+        sim->ApplyGenericOneQubitGate(0, projector);
+        BOOST_TEST(std::abs(sim->MarginalProbabilities({})[0] - .25) < 1e-9, qubits << " qubits, two groups");
+    }
 }
 
 // A statevector given to Aer must hold the amplitudes of the register: a shorter one was read past

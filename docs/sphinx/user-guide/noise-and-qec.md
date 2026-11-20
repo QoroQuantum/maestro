@@ -326,7 +326,8 @@ and for the composite statevector, in the execute and estimate functions,
   it from none: below the rounding of amplitudes that cancel, about 2e-28 of
   what the matrix could leave in double precision and 6e-11 in single, and on
   Aer below 16 times the Schmidt weight it drops at every update, 1.6e-15
-  unless a larger truncation threshold is configured.
+  unless a larger truncation threshold is configured (1.4e-14 for a two-qubit
+  matrix that is not along the basis).
 - **Chain order.** Those environments cost one product per site between two
   operations that read them. When every two-qubit gate and channel of a circuit
   acts on neighbouring qubits, so that nothing has to be routed, the QCSim

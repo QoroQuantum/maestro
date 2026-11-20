@@ -1515,19 +1515,21 @@ class AerState : public ISimulator
      * The matrix has to be scaled before Aer applies it: Aer cannot split a
      * tensor that holds nothing, and it cuts Schmidt values by their size as
      * they are, before it normalizes them. So the weight is read first, and
-     * read as a sum of positive terms, which keeps a small one as exact as a
-     * large one: M^dagger M = V diag(h) V^dagger, and w = sum_k h_k p_k with
-     * p the probabilities of the qubits in the basis V. When M^dagger M is
-     * diagonal those are the probabilities Aer has; otherwise the qubits are
-     * turned by V^dagger first, a unitary, and M V / sqrt(w) is what remains
-     * to apply. For two qubits that turn is one more update of their bond,
-     * which a bond limit can cut: it is skipped where the Pauli expectation
-     * values of the pair already give the weight to ten digits, that is
-     * unless the weight is below a millionth of what the matrix could leave.
+     * read without changing the chain: a refused matrix leaves the state as
+     * it was, under a bond limit too.
      *
-     * A weight the chain cannot tell from none counts as none (NoWeightBelow):
-     * the matrix is refused with std::runtime_error and the state is as it
-     * was (turned back by V where it was turned).
+     * Where M^dagger M is diagonal, the weight is its diagonal times the
+     * probabilities Aer has of the qubits, a sum of positive terms that is as
+     * exact for a small weight as for a large one. For one qubit otherwise,
+     * M^dagger M = V diag(h) V^dagger and the qubit is turned by V^dagger, a
+     * unitary on one site, which cuts nothing; the probabilities are read
+     * there, and M V / sqrt(w) is what remains to apply (or V, to turn back).
+     * For two qubits otherwise, the weight is the sum of the Pauli expectation
+     * values of the pair that M^dagger M is made of (PauliWeight).
+     *
+     * A weight the chain cannot tell from none counts as none (NoWeightBelow,
+     * and for the two-qubit sum the rounding of its terms, 64 epsilon of what
+     * the matrix could leave): the matrix is refused with std::runtime_error.
      */
     template <class Matrix> void ApplyFilterToChain(const AER::reg_t &qubits, const Matrix &gate)
     {
@@ -1547,14 +1549,21 @@ class AerState : public ISimulator
 
         if (!diagonal && qubits.size() == 2)
         {
+            // Two qubits are not turned to be weighed: that is an update of their bond, which a bond limit can cut
+            // on the live chain, and turning back would not restore what was cut. The Pauli expectation values of
+            // the pair give the weight without changing anything, to the rounding of the largest of them: enough
+            // to scale the matrix, since Aer then normalizes the bond it splits itself, and to tell a weight from
+            // none down to that rounding, 64 epsilon of what the matrix could leave.
             const double estimate = PauliWeight(squared, qubits);
-            if (estimate >= 1e-6 * largest)
-            {
-                state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix(gate / std::sqrt(estimate))});
-                return;
-            }
+            const double rounding = 64. * std::numeric_limits<double>::epsilon();
+            if (!(estimate > std::max(rounding, NoWeightBelow()) * largest) || !std::isfinite(estimate))
+                throw std::runtime_error(noState);
+            state->apply_kraus(qubits, std::vector<AER::cmatrix_t>{ToAerMatrix(gate / std::sqrt(estimate))});
+            return;
         }
 
+        // One qubit is turned where it has to be: a unitary on one site changes no bond and cuts nothing, and
+        // turning back restores the tensor to rounding.
         const Hermitian basis = diagonal ? Hermitian(Hermitian::Identity()) : Hermitian(solver.eigenvectors());
         if (!diagonal)
             state->apply_unitary(qubits, ToAerMatrix(basis.adjoint()));

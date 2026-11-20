@@ -84,8 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in single precision), and on an Aer chain of two qubits or more, which
     drops Schmidt weights below 1e-16 at every update (and below a larger
     `matrix_product_state_truncation_threshold` when one is set), within 16
-    times that (1.6e-15 by default). A projection onto a state that holds
-    9e-14 of the chain is applied. On the GPU the rule covers one-qubit matrices; for two-qubit
+    times that (1.6e-15 by default; 1.4e-14, the rounding of the Pauli
+    expectation values it is read from, for a two-qubit matrix that is not
+    along the basis, which is not weighed by turning the pair on the live
+    chain: a bond limit could cut the state there, and a refusal would not
+    give it back). A projection onto a state that holds 9e-14 of the chain is
+    applied. On the GPU the rule covers one-qubit matrices; for two-qubit
     ones the library refuses an exact zero.
   - Matrices each within 1e-10 of unitary add up, and the chain is brought up
     to date once their sum passes that (on Aer per qubit, whatever weight the
