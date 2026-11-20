@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-11-20
+
 ### Changed
 
 - `Probabilities(outcomes)` takes basis-state indices and returns one
@@ -258,6 +260,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sampled realizations; an explicit `noise_realizations` only sets how many
   times the circuit runs, and with exact channels each run gives the same
   values.
+- QCSim MPS and MPO drop singular values below `1e-15` when no
+  `singular_value_threshold` is set. They kept everything above Eigen's
+  numerical rank threshold before, and the tiny components that survived
+  could inflate bond dimensions. `GetConfiguration` reports the effective
+  threshold, and an explicit value, `0` included, replaces it. Automatic
+  backend selection passes on only an explicit threshold, so each backend
+  keeps its own default; reconfiguring a `ConfigureNetwork` handle without a
+  threshold restores the default unless `native_options` gives one. On the
+  MPO, a bond-dimension limit alone no longer turns off exact marginal
+  sampling of terminal counts: that waits until an operation could have
+  truncated the state.
 
 ## [0.3.15] - 2026-11-15
 
@@ -1321,7 +1334,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.15...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.16...HEAD
+[0.3.16]: https://github.com/QoroQuantum/maestro/compare/v0.3.15...v0.3.16
 [0.3.15]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...v0.3.13
