@@ -1749,7 +1749,7 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
             BOOST_TEST(std::abs(sim->Probability(0) - 1.) < 1e-9, "diag(1e-8, 1) H on |+>: " << sim->Probability(0));
             BOOST_TEST(std::abs(sumOf(sim->AllProbabilities()) - 1.) < 1e-9);
         }
-        for (const double small : {1e-5, 1e-8, 1e-10})
+        for (const double smallv : {1e-5, 1e-8, 1e-10})
             for (const size_t qubits : {size_t(1), size_t(3)})
             {
                 // U diag(1, small) V^dagger with U and V turns that are not along the basis.
@@ -1759,7 +1759,7 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
                     return matrix;
                 };
                 Eigen::Matrix2cd values = Eigen::Matrix2cd::Identity();
-                values(1, 1) = small;
+                values(1, 1) = smallv;
                 const Eigen::Matrix2cd filter = turn(.7, .3) * values * turn(1.1, -.4).adjoint();
                 auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Method::kMatrixProductState);
                 auto reference = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kStatevector);
@@ -1781,7 +1781,7 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_stays_normalized_after_a_matrix_that_i
                 const std::vector<double> all = sim->AllProbabilities();
                 for (size_t index = 0; index < all.size(); ++index)
                     BOOST_TEST(std::abs(all[index] - expected[index] / weight) < 1e-7,
-                               "singular values 1 and " << small << ", " << qubits << " qubits, basis state " << index);
+                               "singular values 1 and " << smallv << ", " << qubits << " qubits, basis state " << index);
             }
         // And a projection onto a state orthogonal to the chain's is refused whatever the angle: of
         // 59 such pairs, Aer applied 21 (the zero eigenvalue came out positive) and returned what
