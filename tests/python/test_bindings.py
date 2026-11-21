@@ -1315,6 +1315,21 @@ measure q[0] -> c[0];
             maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QiskitAer,
                                     simulation_type=maestro.SimulationType.ExtendedStabilizer,
                                     extended_stabilizer_amplitude_tolerance=1e-3)
+        # Nor as a candidate that automatic selection may run instead.
+        aer = [(maestro.SimulatorType.QiskitAer, maestro.SimulationType.ExtendedStabilizer)]
+        with pytest.raises(ValueError, match="QCSim extended stabilizer only"):
+            maestro.SimulatorConfig(simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                                    extended_stabilizer_max_components=64, optimization_candidates=aer)
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                                         optimization_candidates=aer)
+        with pytest.raises(ValueError, match="QCSim extended stabilizer only"):
+            config.extended_stabilizer_amplitude_tolerance = 1e-3
+        assert config.extended_stabilizer_amplitude_tolerance is None
+        # A QCSim candidate is fine.
+        qcsim = [(maestro.SimulatorType.QCSim, maestro.SimulationType.ExtendedStabilizer)]
+        assert maestro.SimulatorConfig(simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                                       extended_stabilizer_amplitude_tolerance=1e-3,
+                                       optimization_candidates=qcsim).extended_stabilizer_amplitude_tolerance == 1e-3
 
 
 class TestSimulatorTypeIsHonored:

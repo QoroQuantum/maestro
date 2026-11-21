@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap keeps scalar trajectories: `compile_reference_sampler` returns `None`
   for one, and `MaestroCreateReferenceFrameSampler` refuses it. Aer's extended
   stabilizer has its own approximation, so a configuration that sets either
-  field for it is rejected rather than ignored. Pruning drops error branches,
+  field for it, requested or as a candidate, is rejected rather than ignored. Pruning drops error branches,
   so it lowers error rates; check a result by tightening the tolerance.
   Small coherent errors on a QEC circuit are where it pays: exactly, a
   rotated d=3 surface code with coherent over-rotations fills all 2^17

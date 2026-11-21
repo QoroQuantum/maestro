@@ -241,11 +241,19 @@ struct SimulatorConfig
             throw std::invalid_argument("extended_stabilizer_max_components must be positive");
 #ifndef NO_QISKIT_AER
         // Aer's extended stabilizer approximates by its own options and would
-        // ignore these silently; the native API rejects the pair too (Options.h).
-        if ((extended_stabilizer_amplitude_tolerance || extended_stabilizer_max_components) && simulator_type == Simulators::SimulatorType::kQiskitAer &&
-            simulation_type == Simulators::SimulationType::kExtendedStabilizer)
-            throw std::invalid_argument("extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components apply to the QCSim "
-                                        "extended stabilizer only");
+        // ignore these silently, requested or as a candidate that selection
+        // may run. The settings count as typed fields or native keys.
+        if (extended_stabilizer_amplitude_tolerance || extended_stabilizer_max_components || native_options.count("extended_stabilizer_amplitude_tolerance") ||
+            native_options.count("extended_stabilizer_max_components"))
+        {
+            const auto aerExtended = [](const auto &pair) {
+                return pair.first == Simulators::SimulatorType::kQiskitAer && pair.second == Simulators::SimulationType::kExtendedStabilizer;
+            };
+            if (aerExtended(std::pair{simulator_type, simulation_type}) ||
+                std::any_of(optimization_candidates.begin(), optimization_candidates.end(), aerExtended))
+                throw std::invalid_argument("extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components apply to the QCSim "
+                                            "extended stabilizer only");
+        }
 #endif
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
         RequireOneOf(precision, Precisions(), "precision");
