@@ -21,11 +21,165 @@
 
 #include "../Interfaces/State.h"
 #include "../TensorNetworks/RoutingConfig.h"
+#include <array>
 #include <charconv>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 namespace Simulators
 {
+
+// The settings of the two extended stabilizers. The simulators that read them
+// and the layers that accept them (SimulatorConfig, native requests, the legacy
+// C calls) check a value with the same function, so one rule decides it.
+namespace ExtendedStabilizerConfig
+{
+// QCSim prunes its components. Unset (both), it runs exactly.
+inline constexpr const char *kAmplitudeTolerance = "extended_stabilizer_amplitude_tolerance";
+inline constexpr const char *kMaxComponents = "extended_stabilizer_max_components";
+// Qiskit Aer samples a stabilizer-rank decomposition whose size follows from
+// the approximation error, and samples outcomes from it. Unset, a setting
+// keeps Aer's default.
+inline constexpr const char *kApproximationError = "extended_stabilizer_approximation_error";
+inline constexpr const char *kSamplingMethod = "extended_stabilizer_sampling_method";
+inline constexpr const char *kMetropolisMixingTime = "extended_stabilizer_metropolis_mixing_time";
+inline constexpr const char *kNormEstimationSamples = "extended_stabilizer_norm_estimation_samples";
+inline constexpr const char *kNormEstimationRepetitions = "extended_stabilizer_norm_estimation_repetitions";
+
+inline constexpr std::array<const char *, 2> kPruningKeys{kAmplitudeTolerance, kMaxComponents};
+inline constexpr std::array<const char *, 5> kAerKeys{kApproximationError, kSamplingMethod, kMetropolisMixingTime, kNormEstimationSamples,
+                                                      kNormEstimationRepetitions};
+inline constexpr std::string_view kPrefix = "extended_stabilizer_";
+
+inline bool IsPruningKey(std::string_view key)
+{
+    return key == kAmplitudeTolerance || key == kMaxComponents;
+}
+
+inline bool IsAerCountKey(std::string_view key)
+{
+    return key == kMetropolisMixingTime || key == kNormEstimationSamples || key == kNormEstimationRepetitions;
+}
+
+inline bool IsAerKey(std::string_view key)
+{
+    return key == kApproximationError || key == kSamplingMethod || IsAerCountKey(key);
+}
+
+inline const std::vector<std::string> &SamplingMethods()
+{
+    static const std::vector<std::string> values{"resampled_metropolis", "metropolis", "norm_estimation"};
+    return values;
+}
+
+// Aer keeps its integer settings in an int.
+inline constexpr uint64_t kMaxAerCount = static_cast<uint64_t>(std::numeric_limits<int>::max());
+
+// The range of each setting: an empty string for a valid value, otherwise the
+// error message.
+inline std::string AmplitudeToleranceError(double value)
+{
+    return std::isfinite(value) && value >= 0 && value < 1 ? "" : "extended_stabilizer_amplitude_tolerance must be finite and in [0, 1)";
+}
+
+inline std::string MaxComponentsError(uint64_t value)
+{
+    return value ? "" : "extended_stabilizer_max_components must be a positive integer";
+}
+
+inline std::string ApproximationErrorError(double value)
+{
+    return std::isfinite(value) && value > 0 && value <= 1 ? "" : "extended_stabilizer_approximation_error must be finite and in (0, 1]";
+}
+
+inline std::string SamplingMethodError(const std::string &value)
+{
+    for (const auto &method : SamplingMethods())
+        if (value == method)
+            return "";
+    return "extended_stabilizer_sampling_method must be one of 'resampled_metropolis', 'metropolis', 'norm_estimation'; got '" + value + "'.";
+}
+
+inline std::string AerCountError(std::string_view key, uint64_t value)
+{
+    return value >= 1 && value <= kMaxAerCount ? "" : std::string(key) + " must be between 1 and " + std::to_string(kMaxAerCount);
+}
+
+// The whole text as a number, without surrounding spaces. strtod rather than
+// std::stod: a subnormal value is a number, not a range error.
+inline bool ParseNumber(const std::string &text, double &value)
+{
+    if (text.empty() || text.front() == ' ' || text.front() == '\t' || text.front() == '\n')
+        return false;
+    char *end = nullptr;
+    value = std::strtod(text.c_str(), &end);
+    return end == text.c_str() + text.size();
+}
+
+inline bool ParseCount(const std::string &text, uint64_t &value)
+{
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    return parsed.ec == std::errc() && parsed.ptr == text.data() + text.size();
+}
+
+// Throws the message of a failed check; an empty one passes.
+inline void Reject(const std::string &error)
+{
+    if (!error.empty())
+        throw std::invalid_argument(error);
+}
+
+// The value of a setting from its text. Each throws std::invalid_argument for
+// text that is not a valid value.
+inline double ParseAmplitudeTolerance(const std::string &text)
+{
+    double value = 0;
+    Reject(ParseNumber(text, value) ? AmplitudeToleranceError(value) : AmplitudeToleranceError(-1));
+    return value;
+}
+
+inline uint64_t ParseMaxComponents(const std::string &text)
+{
+    uint64_t value = 0;
+    Reject(ParseCount(text, value) ? MaxComponentsError(value) : MaxComponentsError(0));
+    return value;
+}
+
+inline double ParseApproximationError(const std::string &text)
+{
+    double value = 0;
+    Reject(ParseNumber(text, value) ? ApproximationErrorError(value) : ApproximationErrorError(-1));
+    return value;
+}
+
+inline uint64_t ParseAerCount(std::string_view key, const std::string &text)
+{
+    uint64_t value = 0;
+    Reject(ParseCount(text, value) ? AerCountError(key, value) : AerCountError(key, 0));
+    return value;
+}
+
+// Checks the value of an extended stabilizer setting. Any other key passes.
+inline void Validate(std::string_view key, const std::string &value)
+{
+    if (key.substr(0, kPrefix.size()) != kPrefix)
+        return;
+    if (key == kAmplitudeTolerance)
+        ParseAmplitudeTolerance(value);
+    else if (key == kMaxComponents)
+        ParseMaxComponents(value);
+    else if (key == kApproximationError)
+        ParseApproximationError(value);
+    else if (key == kSamplingMethod)
+        Reject(SamplingMethodError(value));
+    else if (IsAerCountKey(key))
+        ParseAerCount(key, value);
+}
+} // namespace ExtendedStabilizerConfig
 
 class Configuration
 {
@@ -143,6 +297,9 @@ class Configuration
             RoutingConfig::ParseFlag(value);
         else if (key == RoutingConfig::kTruncationWeight)
             RoutingConfig::ParseWeight(value);
+        // Before the value is stored: a network keeps what it is given and
+        // replays it to every simulator it creates.
+        ExtendedStabilizerConfig::Validate(key, value);
         if (key == "precision" || key == "use_double_precision")
         {
             const bool useDouble = ParsePrecision(key, value);

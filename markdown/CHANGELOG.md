@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `extended_stabilizer_amplitude_tolerance` and
+  `extended_stabilizer_max_components` select QCSim's approximate extended
+  stabilizer, which until now no caller could reach. They are
+  `SimulatorConfig` fields (Python and C++), options of a native request,
+  keys of the legacy `SimpleExecute` and `SimpleEstimate` configuration, and
+  keys of `Configure` on a simulator handle. After each non-Clifford gate and
+  measurement the simulator drops the components whose amplitude is at most
+  the tolerance times the state's norm, then keeps at most the cap of the
+  largest. Unset, the extended stabilizer runs exactly, as before. A
+  tolerance of 0 drops nothing: alone it is the exact simulation, and with a
+  cap it is the cap. Batched extended frames run exactly, so a request with
+  a positive tolerance or a cap keeps scalar trajectories:
+  `compile_reference_sampler` returns `None` for one,
+  `MaestroCreateReferenceFrameSampler` refuses it, and the `noise.approximations`
+  of a native request list `extended_stabilizer_pruning`. A network handle or
+  a legacy handle that is configured again without the settings goes back to
+  the exact simulation. Pruning drops error branches, so it lowers error
+  rates; check a result by tightening the tolerance. Small coherent errors on
+  a QEC circuit are where it pays: exactly, a rotated d=3 surface code with
+  coherent over-rotations fills all 2^17 components; at a tolerance of 1e-4
+  it holds about 20,000 and matches the exact detection rate.
+- Qiskit Aer's extended stabilizer takes its own settings, under Aer's names
+  and on the same paths: `extended_stabilizer_approximation_error` (in
+  (0, 1], Aer's default 0.05: Aer samples a decomposition of about
+  extent / error² terms), `extended_stabilizer_sampling_method`
+  (`resampled_metropolis`, `metropolis` or `norm_estimation`),
+  `extended_stabilizer_metropolis_mixing_time`,
+  `extended_stabilizer_norm_estimation_samples` and
+  `extended_stabilizer_norm_estimation_repetitions`. Until now it always ran
+  with Aer's defaults, except through `Configure` on a simulator handle.
+  There, a value Aer cannot read is now an error (Aer dropped it silently),
+  and a setting made after `Initialize` reaches the state that exists.
+- QCSim's pruning and Aer's settings are different quantities, and each
+  backend ignores those of the other. A configuration is therefore rejected
+  when it sets one family and may run the other backend's extended
+  stabilizer, as the requested pair or as a candidate of automatic selection:
+  a candidate list with both extended stabilizers takes neither family. A
+  candidate list replaces the requested pair, and a fixed backend ignores its
+  candidates.
+
 ### Changed
 
 - `Probabilities(outcomes)` takes basis-state indices and returns one

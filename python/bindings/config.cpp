@@ -70,6 +70,13 @@ const char *const kConfigFields[] = {
     "pp_memory_limit_bytes",
     "pp_sampling_cache_nodes",
     "path_integral_threshold",
+    "extended_stabilizer_amplitude_tolerance",
+    "extended_stabilizer_max_components",
+    "extended_stabilizer_approximation_error",
+    "extended_stabilizer_sampling_method",
+    "extended_stabilizer_metropolis_mixing_time",
+    "extended_stabilizer_norm_estimation_samples",
+    "extended_stabilizer_norm_estimation_repetitions",
     "gate_fusion",
     "enable_causal_cone_reduction",
     "enable_observable_clustering",
@@ -135,12 +142,15 @@ void bind_config(nb::module_ &m)
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<uint64_t> pp_workers, std::optional<uint64_t> pp_max_fused_gates,
            std::optional<uint64_t> pp_memory_limit_bytes, std::optional<uint64_t> pp_sampling_cache_nodes, std::optional<double> path_integral_threshold,
-           std::optional<bool> gate_fusion, bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits,
-           bool auto_reduce, std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
-           std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy,
-           std::optional<size_t> min_cluster_qubits, std::optional<double> observable_error_tolerance, bool enable_sampling_reduction,
-           bool allow_reset_marginalization, std::string counts_policy, bool fixed_backend,
-           std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates) {
+           std::optional<double> extended_stabilizer_amplitude_tolerance, std::optional<uint64_t> extended_stabilizer_max_components,
+           std::optional<double> extended_stabilizer_approximation_error, std::optional<std::string> extended_stabilizer_sampling_method,
+           std::optional<uint64_t> extended_stabilizer_metropolis_mixing_time, std::optional<uint64_t> extended_stabilizer_norm_estimation_samples,
+           std::optional<uint64_t> extended_stabilizer_norm_estimation_repetitions, std::optional<bool> gate_fusion, bool enable_causal_cone_reduction,
+           bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits, bool auto_reduce, std::optional<std::string> trajectory_policy,
+           std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators, std::optional<bool> mps_routing_virtual_bonds,
+           std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy, std::optional<size_t> min_cluster_qubits,
+           std::optional<double> observable_error_tolerance, bool enable_sampling_reduction, bool allow_reset_marginalization, std::string counts_policy,
+           bool fixed_backend, std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -171,6 +181,13 @@ void bind_config(nb::module_ &m)
             config.pp_memory_limit_bytes = pp_memory_limit_bytes;
             config.pp_sampling_cache_nodes = pp_sampling_cache_nodes;
             config.path_integral_threshold = path_integral_threshold;
+            config.extended_stabilizer_amplitude_tolerance = extended_stabilizer_amplitude_tolerance;
+            config.extended_stabilizer_max_components = extended_stabilizer_max_components;
+            config.extended_stabilizer_approximation_error = extended_stabilizer_approximation_error;
+            config.extended_stabilizer_sampling_method = std::move(extended_stabilizer_sampling_method);
+            config.extended_stabilizer_metropolis_mixing_time = extended_stabilizer_metropolis_mixing_time;
+            config.extended_stabilizer_norm_estimation_samples = extended_stabilizer_norm_estimation_samples;
+            config.extended_stabilizer_norm_estimation_repetitions = extended_stabilizer_norm_estimation_repetitions;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
             config.enable_observable_clustering = enable_observable_clustering;
@@ -199,7 +216,11 @@ void bind_config(nb::module_ &m)
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
         "pp_workers"_a.noconvert() = nb::none(), "pp_max_fused_gates"_a.noconvert() = nb::none(), "pp_memory_limit_bytes"_a.noconvert() = nb::none(),
-        "pp_sampling_cache_nodes"_a.noconvert() = nb::none(), "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(),
+        "pp_sampling_cache_nodes"_a.noconvert() = nb::none(), "path_integral_threshold"_a = nb::none(),
+        "extended_stabilizer_amplitude_tolerance"_a = nb::none(), "extended_stabilizer_max_components"_a.noconvert() = nb::none(),
+        "extended_stabilizer_approximation_error"_a = nb::none(), "extended_stabilizer_sampling_method"_a = nb::none(),
+        "extended_stabilizer_metropolis_mixing_time"_a.noconvert() = nb::none(), "extended_stabilizer_norm_estimation_samples"_a.noconvert() = nb::none(),
+        "extended_stabilizer_norm_estimation_repetitions"_a.noconvert() = nb::none(), "gate_fusion"_a = nb::none(),
         "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction, "enable_observable_clustering"_a = defaults.enable_observable_clustering,
         "max_cluster_qubits"_a.noconvert() = nb::none(), "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(),
         "trajectory_max_memory_mb"_a.noconvert() = nb::none(), "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(),
@@ -361,6 +382,35 @@ void bind_config(nb::module_ &m)
     BindConfigField<false>(config_class, "pp_sampling_cache_nodes", &SimulatorConfig::pp_sampling_cache_nodes,
                            "Pauli propagation: the most nodes kept in the shot-sampling cache; 0 "
                            "disables caching. None uses the backend default (8192 on the GPU).");
+    BindConfigField(config_class, "extended_stabilizer_amplitude_tolerance", &SimulatorConfig::extended_stabilizer_amplitude_tolerance,
+                    "QCSim ExtendedStabilizer: after each non-Clifford gate and measurement, drop the components "
+                    "whose amplitude is at most this fraction of the state's norm, in [0, 1). None (with "
+                    "extended_stabilizer_max_components None) runs exactly. Pruned runs keep scalar trajectories, "
+                    "not batched extended frames.");
+    BindConfigField<false>(config_class, "extended_stabilizer_max_components", &SimulatorConfig::extended_stabilizer_max_components,
+                           "QCSim ExtendedStabilizer: keep at most this many of the largest components after each "
+                           "non-Clifford gate and measurement. Must be positive; None sets no cap.");
+    BindConfigField(config_class, "extended_stabilizer_approximation_error", &SimulatorConfig::extended_stabilizer_approximation_error,
+                    "Qiskit Aer ExtendedStabilizer: the error bound of Aer's stabilizer-rank decomposition, in (0, 1]. "
+                    "Aer samples about extent / error**2 terms, so a smaller error costs more time and memory. None "
+                    "keeps Aer's default, 0.05. Aer has no exact mode on a non-Clifford circuit. The QCSim "
+                    "ExtendedStabilizer ignores Aer's settings and Aer ignores QCSim's, so a configuration that may "
+                    "run the other backend's ExtendedStabilizer raises.");
+    BindConfigField(config_class, "extended_stabilizer_sampling_method", &SimulatorConfig::extended_stabilizer_sampling_method,
+                    "Qiskit Aer ExtendedStabilizer: how outcomes are sampled from the decomposition: "
+                    "'resampled_metropolis' (Aer's default: a fresh Metropolis walk for each shot), 'metropolis' (one "
+                    "walk for all the shots) or 'norm_estimation' (qubit by qubit, from estimated norms). None keeps "
+                    "the default.");
+    BindConfigField<false>(config_class, "extended_stabilizer_metropolis_mixing_time", &SimulatorConfig::extended_stabilizer_metropolis_mixing_time,
+                           "Qiskit Aer ExtendedStabilizer: Metropolis steps taken before a sample is read. Positive; "
+                           "None keeps Aer's default, 5000.");
+    BindConfigField<false>(config_class, "extended_stabilizer_norm_estimation_samples", &SimulatorConfig::extended_stabilizer_norm_estimation_samples,
+                           "Qiskit Aer ExtendedStabilizer: random stabilizer states used in one norm estimate, which "
+                           "expectation values, probabilities and 'norm_estimation' sampling rest on. Positive; None "
+                           "keeps Aer's default, 100.");
+    BindConfigField<false>(config_class, "extended_stabilizer_norm_estimation_repetitions", &SimulatorConfig::extended_stabilizer_norm_estimation_repetitions,
+                           "Qiskit Aer ExtendedStabilizer: norm estimates taken, of which Aer keeps the median. "
+                           "Positive; None keeps Aer's default, 3.");
     BindConfigField(config_class, "path_integral_threshold", &SimulatorConfig::path_integral_threshold,
                     "Trim threshold for PathIntegral simulation; None disables "
                     "trimming.");

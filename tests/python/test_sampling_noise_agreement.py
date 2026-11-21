@@ -2213,3 +2213,95 @@ def test_noise_drawn_while_the_circuit_runs_on_a_matrix_product_state(bond):
     assert native["execution_metadata"]["realization_workers"] >= 1
     assert native["execution_metadata"]["sampling_strategy"] == "trajectory_v1"
     check(sum(row[0] == "1" for row in native["samples"]) / shots, sum(row[2] == "1" for row in native["samples"]) / shots, "a request's rows")
+
+
+# ---- The extended stabilizer's pruning through every entry point -----------------------
+#
+# QCSim prunes its components by an amplitude tolerance and a component cap. They reach
+# it as SimulatorConfig fields, as options of a native request and as keys of a simulator
+# handle, and each must prune alike. ry(0.2)|0> = cos(0.1)|0> + sin(0.1)|1>: the |1>
+# component has amplitude 0.0998, and <Z> is cos(0.2), or 1 once that component is dropped.
+
+_PRUNING = [({}, math.cos(0.2)),
+            ({"extended_stabilizer_amplitude_tolerance": 0.0}, math.cos(0.2)),
+            ({"extended_stabilizer_amplitude_tolerance": 0.05}, math.cos(0.2)),
+            ({"extended_stabilizer_amplitude_tolerance": 0.2}, 1.0),
+            ({"extended_stabilizer_max_components": 1}, 1.0),
+            ({"extended_stabilizer_max_components": 2}, math.cos(0.2)),
+            ({"extended_stabilizer_amplitude_tolerance": 0.0, "extended_stabilizer_max_components": 1}, 1.0)]
+
+
+def _pruning_request(settings, backend="qcsim"):
+    return {"schema_version": 2, "operation": "estimate",
+            "circuit": {"format": "instructions", "num_qubits": 1, "num_clbits": 1,
+                        "source": [{"name": "ry", "qubits": [0], "params": [0.2]}]},
+            "simulator": {"backend": backend, "method": "extended_stabilizer", "options": settings},
+            "execution": {"seed": 1}, "observables": ["Z"]}
+
+
+@pytest.mark.parametrize("settings, expected", _PRUNING)
+def test_extended_stabilizer_pruning_is_the_same_through_every_entry_point(settings, expected):
+    circuit = QuantumCircuit()
+    circuit.ry(0, 0.2)
+    python = circuit.estimate(["Z"], config=_config(S.ExtendedStabilizer, **settings))["expectation_values"][0]
+    assert python == pytest.approx(expected, abs=1e-9)
+
+    native = _native_request(_pruning_request(settings))
+    assert native["ok"], native
+    assert native["expectation_values"][0] == pytest.approx(python, abs=1e-12)
+
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(B.QCSim, S.ExtendedStabilizer)
+    try:
+        simulator = owner.get_simulator(handle)
+        for key, value in settings.items():
+            simulator.Configure(key, repr(value))
+        simulator.AllocateQubits(1)
+        simulator.Initialize()
+        simulator.ApplyRy(0, 0.2)
+        assert simulator.ExpectationValues(["Z"])[0] == pytest.approx(python, abs=1e-12)
+    finally:
+        owner.destroy_simulator(handle)
+
+
+@pytest.mark.parametrize("settings", [{"extended_stabilizer_amplitude_tolerance": 1.0},
+                                      {"extended_stabilizer_amplitude_tolerance": -0.1},
+                                      {"extended_stabilizer_max_components": 0},
+                                      {"extended_stabilizer_approximation_error": 0.1},
+                                      {"extended_stabilizer_sampling_method": "metropolis"}])
+def test_an_extended_stabilizer_setting_is_refused_through_every_entry_point(settings):
+    """Out of range, or a setting of Aer's extended stabilizer, which QCSim's would ignore."""
+    with pytest.raises(ValueError):
+        _config(S.ExtendedStabilizer, **settings)
+    native = _native_request(_pruning_request(settings))
+    assert not native["ok"], native
+    assert native["error"]["code"] in ("invalid_input", "unsupported_capability")
+
+
+@pytest.mark.skipif(not hasattr(B, "QiskitAer"), reason="built without Aer")
+def test_each_extended_stabilizer_takes_its_own_settings_through_every_entry_point():
+    """Aer's extended stabilizer takes Aer's settings and refuses QCSim's pruning, from Python and from a request."""
+    aer = {"extended_stabilizer_approximation_error": 0.1, "extended_stabilizer_sampling_method": "norm_estimation",
+           "extended_stabilizer_norm_estimation_samples": 40, "extended_stabilizer_norm_estimation_repetitions": 2}
+    config = _config(S.ExtendedStabilizer, backend=B.QiskitAer, **aer)
+    for field, value in aer.items():
+        assert getattr(config, field) == value
+    # h t h |0> has <Z> = cos(pi/4), which Aer estimates from sampled norms: 40 samples,
+    # twice, so to about 0.1. (Aer's extended stabilizer runs ry at multiples of pi/2 only.)
+    magic = QuantumCircuit()
+    magic.h(0)
+    magic.t(0)
+    magic.h(0)
+    python = magic.estimate(["Z"], config=config)["expectation_values"][0]
+    assert python == pytest.approx(math.cos(math.pi / 4), abs=0.3)
+    request = _pruning_request(aer, backend="aer")
+    request["circuit"]["source"] = [{"name": "h", "qubits": [0]}, {"name": "t", "qubits": [0]}, {"name": "h", "qubits": [0]}]
+    native = _native_request(request)
+    assert native["ok"], native
+    assert native["expectation_values"][0] == pytest.approx(math.cos(math.pi / 4), abs=0.3)
+
+    pruning = {"extended_stabilizer_amplitude_tolerance": 0.1}
+    with pytest.raises(ValueError, match="QCSim extended stabilizer only"):
+        _config(S.ExtendedStabilizer, backend=B.QiskitAer, **pruning)
+    refused = _native_request(_pruning_request(pruning, backend="aer"))
+    assert not refused["ok"] and refused["error"]["code"] == "unsupported_capability", refused

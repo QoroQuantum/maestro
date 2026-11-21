@@ -2102,9 +2102,281 @@ void TestPauliPropagatorExactNoise()
           "Capabilities do not list the Pauli propagator for exact noise");
 }
 
+// The extended stabilizer settings through native requests and the legacy C
+// calls: QCSim's pruning (extended_stabilizer_amplitude_tolerance,
+// extended_stabilizer_max_components) and Aer's approximation and sampling.
+// ry(0.2)|0> = cos(0.1)|0> + sin(0.1)|1>: the |1> component has amplitude
+// 0.0998, so 1 comes up with probability 0.00997 and <Z> = cos(0.2).
+static void TestExtendedStabilizerSettings()
+{
+    const char *tolerance = "extended_stabilizer_amplitude_tolerance";
+    const char *cap = "extended_stabilizer_max_components";
+    const char *error = "extended_stabilizer_approximation_error";
+    const char *measured = "ry(0.2) q[0]; measure q[0] -> c[0];";
+    const size_t shots = 6000; // 60 ones expected, standard deviation 8
+    const auto prepare = [&](const char *operation, const char *body, j::object options, const char *backend = "qcsim") {
+        auto request = Request(operation, 1, body, "extended_stabilizer");
+        auto &simulator = request["simulator"].as_object();
+        simulator["backend"] = backend;
+        simulator["options"] = std::move(options);
+        if (std::string(operation) == "execute")
+            request["execution"].as_object()["shots"] = shots;
+        return request;
+    };
+    const auto ones = [](const j::object &result) {
+        const auto *count = result.at("counts").as_object().if_contains("1");
+        return count ? count->to_number<uint64_t>() : uint64_t{0};
+    };
+    const auto exact = [&](const j::object &result) { return ones(result) > 20 && ones(result) < 110; };
+    const auto failure = [](const j::object &request) { return std::string(Call(request, false, true).at("error").at("code").as_string()); };
+
+    // Pruning by tolerance and by cap. A tolerance of zero drops nothing: it
+    // is the exact simulation, which QCSim's approximate policy cannot say.
+    Check(exact(Call(prepare("execute", measured, {}))), "The extended stabilizer does not run exactly by default");
+    Check(exact(Call(prepare("execute", measured, {{tolerance, 0.05}}))), "A tolerance below the amplitude dropped it");
+    const auto pruned = Call(prepare("execute", measured, {{tolerance, 0.2}}));
+    Check(ones(pruned) == 0, "A tolerance above the amplitude kept it");
+    Check(pruned.at("execution_metadata").at("configured_options").as_object().contains(tolerance), "The result does not report the pruning tolerance");
+    Check(ones(Call(prepare("execute", measured, {{cap, 1}}))) == 0, "A cap of one component kept two");
+    Check(exact(Call(prepare("execute", measured, {{cap, 2}}))), "A cap of two components dropped one");
+    Check(exact(Call(prepare("execute", measured, {{tolerance, 0}}))), "A tolerance of zero did not run exactly");
+    Check(exact(Call(prepare("execute", measured, {{tolerance, 0.0}, {cap, 2}}))), "A zero tolerance with a cap of two dropped a component");
+    Check(ones(Call(prepare("execute", measured, {{tolerance, 0}, {cap, 1}}))) == 0, "A zero tolerance took the cap away");
+
+    // Estimates prune as executions do.
+    const auto expectation = [&](j::object options) {
+        auto request = prepare("estimate", "ry(0.2) q[0];", std::move(options));
+        request["observables"] = j::array{"Z"};
+        return Real(Call(request).at("expectation_values").as_array().at(0));
+    };
+    Near(expectation({}), std::cos(0.2));
+    Near(expectation({{tolerance, 0}}), std::cos(0.2));
+    Near(expectation({{tolerance, 0.05}}), std::cos(0.2));
+    Near(expectation({{tolerance, 0.2}}), 1.);
+    Near(expectation({{cap, 1}}), 1.);
+
+    // Values out of range, and the settings on a method that does not read them.
+    for (const auto &options : {j::object{{tolerance, 1}}, j::object{{tolerance, -0.1}}, j::object{{tolerance, "0.1"}}, j::object{{cap, 0}},
+                                j::object{{cap, 1.5}}, j::object{{cap, -1}}})
+        Check(failure(prepare("execute", measured, options)) == "invalid_input", "An extended stabilizer pruning value out of range was accepted");
+    for (const char *method : {"statevector", "stabilizer", "matrix_product_state"})
+    {
+        auto request = prepare("execute", measured, {{tolerance, 0.1}});
+        request["simulator"].as_object()["method"] = method;
+        Check(failure(request) == "unsupported_capability", "A method without components accepted the pruning tolerance");
+    }
+
+    // Discovery.
+    char *text = MaestroGetCapabilitiesJson();
+    Check(text != nullptr, "Cannot read capabilities");
+    const auto catalog = j::parse(text).as_object();
+    FreeResult(text);
+    const auto &capabilities = catalog.contains("capabilities") ? catalog.at("capabilities").as_object() : catalog;
+    bool aer = false;
+    for (const auto &backend : capabilities.at("backends").as_array())
+        aer = aer || backend.at("name") == "aer";
+    const auto option = [&](const char *name) {
+        for (const auto &entry : capabilities.at("options").as_array())
+            if (entry.at("name") == name)
+                return entry.as_object();
+        throw std::runtime_error(std::string("Capabilities lack the option ") + name);
+    };
+    const j::array qcsimOnly{j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}}};
+    const j::array aerOnly = aer ? j::array{j::object{{"backend", "aer"}, {"method", "extended_stabilizer"}}} : j::array{};
+    Check(option(tolerance).at("minimum") == 0 && option(tolerance).at("exclusiveMaximum") == 1 &&
+              option(tolerance).at("supported_configurations") == qcsimOnly,
+          "Capabilities misreport the pruning tolerance");
+    Check(option(cap).at("minimum") == 1 && option(cap).at("supported_configurations") == qcsimOnly, "Capabilities misreport the component cap");
+    Check(option(error).at("exclusiveMinimum") == 0 && option(error).at("maximum") == 1 && option(error).at("default") == 0.05 &&
+              option(error).at("supported_configurations") == aerOnly,
+          "Capabilities misreport Aer's approximation error");
+    Check(option("extended_stabilizer_sampling_method").at("enum") == j::array{"resampled_metropolis", "metropolis", "norm_estimation"} &&
+              option("extended_stabilizer_sampling_method").at("default") == "resampled_metropolis",
+          "Capabilities misreport Aer's sampling methods");
+    for (const auto &[name, value] :
+         {std::pair{"extended_stabilizer_metropolis_mixing_time", 5000}, std::pair{"extended_stabilizer_norm_estimation_samples", 100},
+          std::pair{"extended_stabilizer_norm_estimation_repetitions", 3}})
+        Check(option(name).at("minimum") == 1 && option(name).at("default") == value && option(name).at("supported_configurations") == aerOnly,
+              "Capabilities misreport an Aer sampling count");
+
+    // Batched frames run exactly, so a pruned noisy run keeps scalar
+    // trajectories and reports the pruning; a zero tolerance keeps the frames.
+    const j::object noise{{"mode", "pauli"}, {"evaluation", "trajectories"}, {"channels", j::array{Channel("depolarizing", {{"probability", 1e-9}})}}};
+    const auto noisy = [&](j::object options) {
+        auto request = prepare("execute", measured, std::move(options));
+        request["noise"] = noise;
+        return Call(request);
+    };
+    const auto frames = [](const j::object &result) {
+        const auto *strategy = result.at("execution_metadata").as_object().if_contains("sampling_strategy");
+        return strategy && *strategy == "extended_frame_v1";
+    };
+    const auto reportsPruning = [](const j::object &result) {
+        for (const auto &value : result.at("noise").at("approximations").as_array())
+            if (value == "extended_stabilizer_pruning")
+                return true;
+        return false;
+    };
+    for (const auto &options : {j::object{}, j::object{{tolerance, 0}}})
+    {
+        const auto result = noisy(options);
+        Check(frames(result) && !reportsPruning(result) && exact(result), "An exact noisy extended stabilizer run left the frames");
+    }
+    for (const auto &options : {j::object{{tolerance, 0.2}}, j::object{{cap, 1}}})
+    {
+        const auto result = noisy(options);
+        Check(!frames(result) && reportsPruning(result) && ones(result) == 0, "A pruned noisy extended stabilizer run did not prune on trajectories");
+    }
+    const auto handle = [&](j::object options, std::string &code) {
+        const auto request =
+            j::serialize(j::object{{"schema_version", 2},
+                                   {"circuit", Request("execute", 1, measured, "extended_stabilizer").at("circuit")},
+                                   {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}, {"options", std::move(options)}}},
+                                   {"noise", noise}});
+        char *message = nullptr;
+        void *sampler = MaestroCreateReferenceFrameSampler(request.c_str(), &message);
+        if (message)
+        {
+            code = std::string(j::parse(message).at("error").at("code").as_string());
+            FreeResult(message);
+        }
+        const bool compiled = sampler != nullptr;
+        if (sampler)
+            MaestroDestroyReferenceFrameSampler(sampler);
+        return compiled;
+    };
+    std::string code;
+    Check(handle({}, code) && handle({{tolerance, 0}}, code), "An exact extended stabilizer frame handle did not compile");
+    Check(!handle({{tolerance, 0.2}}, code) && code == "unsupported_capability", "A pruned extended stabilizer compiled to exact frames");
+    Check(!handle({{cap, 8}}, code) && code == "unsupported_capability", "A capped extended stabilizer compiled to exact frames");
+
+    // Aer has its own settings, under Aer's names. Each backend ignores the
+    // other's, so a request that may run the other one is refused.
+    Check(failure(prepare("execute", measured, {{error, 0.1}})) == "unsupported_capability",
+          "The QCSim extended stabilizer accepted Aer's approximation error");
+    if (aer)
+    {
+        Check(failure(prepare("execute", measured, {{tolerance, 0.1}}, "aer")) == "unsupported_capability", "Aer accepted QCSim's pruning tolerance");
+        for (const auto &options :
+             {j::object{{error, 0}}, j::object{{error, 1.5}}, j::object{{error, "0.1"}}, j::object{{"extended_stabilizer_sampling_method", "gibbs"}},
+              j::object{{"extended_stabilizer_metropolis_mixing_time", 0}}, j::object{{"extended_stabilizer_norm_estimation_samples", 2147483648LL}},
+              j::object{{"extended_stabilizer_norm_estimation_repetitions", 1.5}}})
+            Check(failure(prepare("execute", measured, options, "aer")) == "invalid_input", "An Aer extended stabilizer value out of range was accepted");
+        // h t h |0> gives 1 with probability sin^2(pi/8) = 0.146. The mixing
+        // time and the norm estimates are cut to keep the test short: Aer's
+        // defaults walk 5000 steps for a sample.
+        const char *magic = "h q[0]; t q[0]; h q[0]; measure q[0] -> c[0];";
+        for (const auto &options :
+             {j::object{{error, 0.04}, {"extended_stabilizer_sampling_method", "metropolis"}, {"extended_stabilizer_metropolis_mixing_time", 100}},
+              j::object{{"extended_stabilizer_sampling_method", "resampled_metropolis"}, {"extended_stabilizer_metropolis_mixing_time", 100}},
+              j::object{{"extended_stabilizer_sampling_method", "norm_estimation"},
+                        {"extended_stabilizer_norm_estimation_samples", 40},
+                        {"extended_stabilizer_norm_estimation_repetitions", 2}}})
+        {
+            auto request = prepare("execute", magic, options, "aer");
+            request["execution"].as_object()["shots"] = 200;
+            Call(request, true, true);
+            const auto result = Call(request);
+            // 29 expected, standard deviation 5.
+            Check(ones(result) > 8 && ones(result) < 60, "Aer's extended stabilizer sampled the wrong distribution under its settings");
+            const auto &metadata = result.at("execution_metadata").as_object();
+            Check(metadata.at("backend") == "aer" && metadata.at("method") == "extended_stabilizer", "An Aer extended stabilizer request ran elsewhere");
+            for (const auto &entry : options)
+                Check(metadata.at("configured_options").as_object().contains(entry.key()), "The result does not report an Aer extended stabilizer setting");
+        }
+        // A candidate list replaces the requested pair. One that may run the
+        // other backend's extended stabilizer refuses the setting; a list
+        // with both takes neither family.
+        const j::object qcsimCandidate{{"backend", "qcsim"}, {"method", "extended_stabilizer"}},
+            aerCandidate{{"backend", "aer"}, {"method", "extended_stabilizer"}};
+        const auto listed = [&](const char *backend, j::object options, j::array candidates) {
+            auto request = prepare("execute", measured, std::move(options), backend);
+            request["simulator"].as_object()["selection"] = "automatic";
+            request["simulator"].as_object()["candidates"] = std::move(candidates);
+            return request;
+        };
+        Check(failure(listed("qcsim", {{tolerance, 0.1}}, {aerCandidate})) == "invalid_input", "Pruning was accepted with only Aer to run it");
+        Check(failure(listed("qcsim", {{tolerance, 0.1}}, {qcsimCandidate, aerCandidate})) == "invalid_input", "Pruning was accepted with Aer as a candidate");
+        Check(failure(listed("aer", {{error, 0.1}}, {qcsimCandidate})) == "invalid_input", "Aer's error was accepted with only QCSim to run it");
+        Check(failure(listed("aer", {{error, 0.1}}, {aerCandidate, qcsimCandidate})) == "invalid_input", "Aer's error was accepted with QCSim as a candidate");
+        Call(listed("qcsim", {{tolerance, 0.1}}, {qcsimCandidate}), true, true);
+        Call(listed("aer", {{error, 0.1}}, {aerCandidate}), true, true);
+        Call(listed("qcsim", {}, {qcsimCandidate, aerCandidate}), true, true);
+    }
+
+    // The legacy calls take the same keys, and a missing one restores the
+    // default on a handle that had it.
+    GetMaestroObjectWithMute();
+    int qcsim = -1;
+    for (const auto &backend : capabilities.at("backends").as_array())
+        if (backend.at("name") == "qcsim")
+            qcsim = backend.at("legacy_id").to_number<int>();
+    const int extendedStabilizer = 5; // Simulators::SimulationType::kExtendedStabilizer
+
+    struct Legacy
+    {
+        unsigned long handle = CreateSimpleSimulator(1);
+
+        ~Legacy()
+        {
+            DestroySimpleSimulator(handle);
+        }
+    } legacy;
+
+    Check(legacy.handle != 0 && RemoveAllOptimizationSimulatorsAndAdd(legacy.handle, qcsim, extendedStabilizer) == 1,
+          "Cannot configure a legacy extended stabilizer");
+    const std::string qasm = std::string("OPENQASM 2.0; qreg q[1]; creg c[1]; ") + measured;
+    const auto legacyOnes = [&](j::object options, bool &accepted) {
+        options["shots"] = shots;
+        options["seed"] = 5;
+        char *raw = SimpleExecute(legacy.handle, qasm.c_str(), j::serialize(options).c_str());
+        accepted = raw != nullptr;
+        if (!raw)
+            return uint64_t{0};
+        const auto result = j::parse(raw).as_object();
+        FreeResult(raw);
+        Check(result.at("method") == "extended_stabilizer", "A legacy extended stabilizer request ran another method");
+        const auto *count = result.at("counts").as_object().if_contains("1");
+        return count ? count->to_number<uint64_t>() : uint64_t{0};
+    };
+    const auto legacyExpectation = [&](j::object options, bool &accepted) {
+        char *raw = SimpleEstimate(legacy.handle, "OPENQASM 2.0; qreg q[1]; ry(0.2) q[0];", "Z", j::serialize(options).c_str());
+        accepted = raw != nullptr;
+        if (!raw)
+            return 0.;
+        const auto result = j::parse(raw).as_object();
+        FreeResult(raw);
+        return Real(result.at("expectation_values").as_array().at(0));
+    };
+    bool accepted = false;
+    uint64_t count = legacyOnes({}, accepted);
+    Check(accepted && count > 20 && count < 110, "The legacy extended stabilizer does not run exactly by default");
+    Check(legacyOnes({{tolerance, 0.2}}, accepted) == 0 && accepted, "Legacy execution ignored the pruning tolerance");
+    count = legacyOnes({}, accepted);
+    Check(accepted && count > 20 && count < 110, "A legacy call without the tolerance kept that of the call before");
+    Check(legacyOnes({{cap, 1}}, accepted) == 0 && accepted, "Legacy execution ignored the component cap");
+    count = legacyOnes({{tolerance, 0}}, accepted);
+    Check(accepted && count > 20 && count < 110, "A legacy zero tolerance did not run exactly");
+    Near(legacyExpectation({{tolerance, 0.2}}, accepted), 1.);
+    Check(accepted, "Legacy estimation refused the pruning tolerance");
+    Near(legacyExpectation({}, accepted), std::cos(0.2));
+    Near(legacyExpectation({{cap, 1}}, accepted), 1.);
+    for (const auto &options : {j::object{{tolerance, 1}}, j::object{{tolerance, "half"}}, j::object{{tolerance, true}}, j::object{{cap, 0}},
+                                j::object{{cap, 2.5}}, j::object{{error, 0.1}}, j::object{{"extended_stabilizer_sampling_method", "metropolis"}}})
+    {
+        legacyOnes(options, accepted);
+        Check(!accepted, "Legacy execution accepted an extended stabilizer setting it cannot honor");
+        legacyExpectation(options, accepted);
+        Check(!accepted, "Legacy estimation accepted an extended stabilizer setting it cannot honor");
+    }
+    // The refusals changed nothing.
+    Near(legacyExpectation({}, accepted), std::cos(0.2));
+}
+
 void TestRequestNoiseAndOptions()
 {
     TestExtendedFrameRequests();
+    TestExtendedStabilizerSettings();
     TestAutomaticMixedStateNoise();
     TestPauliPropagatorExactNoise();
     TestShotRows();

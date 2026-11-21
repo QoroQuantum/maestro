@@ -188,6 +188,87 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
     }
 }
 
+// The extended stabilizer settings, under their ISimulator::Configure keys:
+// QCSim's pruning (extended_stabilizer_amplitude_tolerance,
+// extended_stabilizer_max_components) and Aer's approximation error and
+// sampling settings. Legacy calls do not pass arbitrary keys through, so each
+// is forwarded here, after the check the simulators make. A missing one goes
+// back to its default (exact for QCSim, Aer's own), like the other legacy
+// options. A setting is refused when the network may run the other backend's
+// extended stabilizer, which would ignore it: the rule of
+// SimulatorConfig::Validate. `configured` is set when a setting was applied,
+// so that the caller re-creates the network's simulator.
+static bool ConfigureLegacyExtendedStabilizer(Network::INetwork<> &network, const boost::json::value &config, bool &configured)
+{
+    namespace Settings = Simulators::ExtendedStabilizerConfig;
+    const auto mayRun = [&network](Simulators::SimulatorType type) {
+        const auto method = Simulators::SimulationType::kExtendedStabilizer;
+        if (network.GetOptimizeSimulator())
+            return network.OptimizationSimulatorExists(type, method);
+        const auto simulator = network.GetSimulator();
+        return simulator && simulator->GetType() == type && simulator->GetSimulationType() == method;
+    };
+    try
+    {
+        const bool qcsim = mayRun(Simulators::SimulatorType::kQCSim);
+#ifndef NO_QISKIT_AER
+        const bool aer = mayRun(Simulators::SimulatorType::kQiskitAer);
+#else
+        const bool aer = false;
+#endif
+        // Every setting is checked before the first one is applied, so a
+        // refused call leaves the network as it was.
+        struct Setting
+        {
+            const char *key;
+            bool reader; // the backend that reads it may run
+            bool present;
+            std::string text;
+        };
+
+        std::vector<Setting> settings;
+        const auto read = [&](const char *key, bool reader, bool other) {
+            const auto *value = config.is_object() ? config.as_object().if_contains(key) : nullptr;
+            if (!value || value->is_null())
+            {
+                settings.push_back({key, reader, false, {}});
+                return true;
+            }
+            if ((!value->is_string() && !value->is_number()) || other)
+                return false;
+            settings.push_back({key, reader, true, Json::JsonParserMaestro<>::GetConfigString(key, config)});
+            Settings::Validate(key, settings.back().text);
+            return true;
+        };
+        for (const char *key : Settings::kPruningKeys)
+            if (!read(key, qcsim, aer))
+                return false;
+        for (const char *key : Settings::kAerKeys)
+            if (!read(key, aer, qcsim))
+                return false;
+        for (const auto &setting : settings)
+        {
+            if (!setting.present)
+            {
+                // Only where the backend that reads it may run: elsewhere a
+                // leftover value changes nothing.
+                if (setting.reader)
+                    network.RemoveConfiguration(setting.key);
+                continue;
+            }
+            configured = true;
+            if (network.GetSimulator())
+                network.GetSimulator()->Clear();
+            network.Configure(setting.key, setting.text.c_str());
+        }
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+}
+
 // SimpleExecute accepts the same count policies as native requests.
 static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::string &policy)
 {
@@ -921,6 +1002,9 @@ extern "C"
             network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
         }
 
+        if (!ConfigureLegacyExtendedStabilizer(*network, configJson, configured))
+            return nullptr;
+
         if (configured || !network->GetSimulator())
             network->CreateSimulator();
 
@@ -1129,6 +1213,9 @@ extern "C"
                 network->GetSimulator()->Clear();
             network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
         }
+
+        if (!ConfigureLegacyExtendedStabilizer(*network, configJson, configured))
+            return nullptr;
 
         if (configured || !network->GetSimulator())
             network->CreateSimulator();

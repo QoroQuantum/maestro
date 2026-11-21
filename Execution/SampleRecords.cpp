@@ -306,6 +306,9 @@ bool SampleExtendedFrames(const RecordCircuitPtr &circuit, const noise::NoiseMod
         throw std::invalid_argument("Circuit is null.");
     if (!noise_model.inject_noise_covers_model())
         return false;
+    // Frames run exactly; a pruned extended stabilizer keeps scalar trajectories.
+    if (SetsExtendedStabilizerApproximation(config))
+        return false;
     // Sampled execution realizes relaxation as a reset drawn once per
     // realization. Frames would draw a Pauli instead: the same channel for
     // each shot, but other correlations between the shots that share a

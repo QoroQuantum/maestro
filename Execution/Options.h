@@ -131,6 +131,13 @@ inline const std::vector<Option> &Options()
         {"pp_gates_between_trims", "pauli_propagator_steps_between_trims", "positive_integer", "pp"},
         {"pp_gates_between_deduplications", "pauli_propagator_num_gates_between_deduplications", "positive_integer", "pp"},
         {"path_integral_threshold", "path_integral_threshold", "nonnegative", "path"},
+        {"extended_stabilizer_amplitude_tolerance", "extended_stabilizer_amplitude_tolerance", "nonnegative", "cpu_extended_stabilizer"},
+        {"extended_stabilizer_max_components", "extended_stabilizer_max_components", "positive_integer", "cpu_extended_stabilizer"},
+        {"extended_stabilizer_approximation_error", "extended_stabilizer_approximation_error", "positive_probability", "aer_extended_stabilizer"},
+        {"extended_stabilizer_sampling_method", "extended_stabilizer_sampling_method", "string", "aer_extended_stabilizer"},
+        {"extended_stabilizer_metropolis_mixing_time", "extended_stabilizer_metropolis_mixing_time", "positive_integer", "aer_extended_stabilizer"},
+        {"extended_stabilizer_norm_estimation_samples", "extended_stabilizer_norm_estimation_samples", "positive_integer", "aer_extended_stabilizer"},
+        {"extended_stabilizer_norm_estimation_repetitions", "extended_stabilizer_norm_estimation_repetitions", "positive_integer", "aer_extended_stabilizer"},
     };
     return options;
 }
@@ -205,6 +212,12 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
         return method == Method::kPauliPropagator;
     if (family == "path")
         return method == Method::kPathIntegral;
+    if (family == "cpu_extended_stabilizer")
+        return method == Method::kExtendedStabilizer && backend == Backend::kQCSim;
+#ifndef NO_QISKIT_AER
+    if (family == "aer_extended_stabilizer")
+        return method == Method::kExtendedStabilizer && backend == Backend::kQiskitAer;
+#endif
     return false;
 }
 
@@ -274,6 +287,12 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             Require(UInt(value) <= INT_MAX, "Pauli gate interval exceeds INT_MAX");
         if (name == "max_simulators")
             Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
+        if (name == "extended_stabilizer_amplitude_tolerance")
+            Require(Number(value) < 1, key + " must be below 1");
+        if (Simulators::ExtendedStabilizerConfig::IsAerCountKey(name))
+            Require(UInt(value) <= Simulators::ExtendedStabilizerConfig::kMaxAerCount, key + " exceeds INT_MAX");
+        if (name == "extended_stabilizer_sampling_method")
+            choice(value, Simulators::ExtendedStabilizerConfig::SamplingMethods(), key);
         if (name == "trajectory_policy")
             choice(value, {"block_v1", "shot_v1"}, key);
         if (name == "counts_policy")

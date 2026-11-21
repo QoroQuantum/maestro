@@ -869,4 +869,103 @@ BOOST_AUTO_TEST_CASE(measurement_reset_snapshots_and_clone)
     BOOST_CHECK_CLOSE(extended->Probability(0), 1.0, 1e-7);
 }
 
+// ry(0.2)|0> = cos(0.1)|0> + sin(0.1)|1>: the |1> component has amplitude 0.0998.
+BOOST_AUTO_TEST_CASE(approximation_settings_prune_components)
+{
+    using Settings = std::vector<std::pair<const char *, const char *>>;
+    const double excited = std::sin(0.1) * std::sin(0.1);
+    const auto run = [](const Settings &settings, bool beforeAllocation) {
+        auto simulator = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kExtendedStabilizer);
+        if (beforeAllocation)
+            for (const auto &[key, value] : settings)
+                simulator->Configure(key, value);
+        simulator->AllocateQubits(1);
+        simulator->Initialize();
+        if (!beforeAllocation)
+            for (const auto &[key, value] : settings)
+                simulator->Configure(key, value);
+        simulator->ApplyRy(0, 0.2);
+        return simulator->Probability(1);
+    };
+    for (const bool before : {true, false})
+    {
+        BOOST_TEST_CONTEXT("configured " << (before ? "before" : "after") << " allocation")
+        {
+            BOOST_CHECK_CLOSE(run({}, before), excited, 1e-7);
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_amplitude_tolerance", "0.05"}}, before), excited, 1e-7);
+            BOOST_CHECK_SMALL(run({{"extended_stabilizer_amplitude_tolerance", "0.2"}}, before), 1e-12);
+            BOOST_CHECK_SMALL(run({{"extended_stabilizer_max_components", "1"}}, before), 1e-12);
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_max_components", "2"}}, before), excited, 1e-7);
+            // A tolerance of zero drops nothing: alone it is the exact
+            // simulation (QCSim refuses an approximate policy without a
+            // tolerance or a cap), and it takes back an earlier tolerance.
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_amplitude_tolerance", "0"}}, before), excited, 1e-7);
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_amplitude_tolerance", "-0"}}, before), excited, 1e-7);
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_amplitude_tolerance", "0.2"}, {"extended_stabilizer_amplitude_tolerance", "0"}}, before), excited,
+                              1e-7);
+            // With a cap it is the cap alone.
+            BOOST_CHECK_SMALL(run({{"extended_stabilizer_amplitude_tolerance", "0"}, {"extended_stabilizer_max_components", "1"}}, before), 1e-12);
+            BOOST_CHECK_CLOSE(run({{"extended_stabilizer_amplitude_tolerance", "0"}, {"extended_stabilizer_max_components", "2"}}, before), excited, 1e-7);
+        }
+    }
+
+    // A clone and a reset keep the policy, of one setting or of both.
+    for (const Settings &settings : {Settings{{"extended_stabilizer_amplitude_tolerance", "0.2"}},
+                                     Settings{{"extended_stabilizer_amplitude_tolerance", "0.2"}, {"extended_stabilizer_max_components", "2"}},
+                                     Settings{{"extended_stabilizer_max_components", "1"}}})
+    {
+        auto simulator = CreateQCSimInterfaceSimulator(Simulators::SimulationType::kExtendedStabilizer, 1);
+        for (const auto &[key, value] : settings)
+            simulator->Configure(key, value);
+        auto clone = simulator->Clone();
+        clone->ApplyRy(0, 0.2);
+        BOOST_CHECK_SMALL(clone->Probability(1), 1e-12);
+        simulator->Reset();
+        simulator->ApplyRy(0, 0.2);
+        BOOST_CHECK_SMALL(simulator->Probability(1), 1e-12);
+        // The clone of a state that was pruned is that state.
+        auto pruned = simulator->Clone();
+        BOOST_CHECK_SMALL(pruned->Probability(1), 1e-12);
+    }
+
+    // QCSim saves its policy with the state and restores it. The configuration
+    // decides: a setting made after SaveState holds after RestoreState.
+    {
+        auto simulator = CreateQCSimInterfaceSimulator(Simulators::SimulationType::kExtendedStabilizer, 1);
+        simulator->SaveState();
+        simulator->Configure("extended_stabilizer_amplitude_tolerance", "0.2");
+        simulator->RestoreState();
+        simulator->ApplyRy(0, 0.2);
+        BOOST_CHECK_SMALL(simulator->Probability(1), 1e-12);
+
+        auto exact = CreateQCSimInterfaceSimulator(Simulators::SimulationType::kExtendedStabilizer, 1);
+        exact->Configure("extended_stabilizer_amplitude_tolerance", "0.2");
+        exact->SaveState();
+        exact->Configure("extended_stabilizer_amplitude_tolerance", "0");
+        exact->RestoreState();
+        exact->ApplyRy(0, 0.2);
+        BOOST_CHECK_CLOSE(exact->Probability(1), excited, 1e-7);
+    }
+
+    // A rejected value is not stored, so Initialize and Clone never replay it.
+    for (const auto &[key, value] : Settings{{"extended_stabilizer_amplitude_tolerance", "-0.1"},
+                                             {"extended_stabilizer_amplitude_tolerance", "1"},
+                                             {"extended_stabilizer_amplitude_tolerance", "nan"},
+                                             {"extended_stabilizer_amplitude_tolerance", "inf"},
+                                             {"extended_stabilizer_amplitude_tolerance", "0.1x"},
+                                             {"extended_stabilizer_amplitude_tolerance", " 0.1"},
+                                             {"extended_stabilizer_amplitude_tolerance", ""},
+                                             {"extended_stabilizer_max_components", "0"},
+                                             {"extended_stabilizer_max_components", "-1"},
+                                             {"extended_stabilizer_max_components", "+5"},
+                                             {"extended_stabilizer_max_components", "2.5"},
+                                             {"extended_stabilizer_max_components", "18446744073709551616"},
+                                             {"extended_stabilizer_max_components", "two"}})
+    {
+        auto fresh = CreateQCSimInterfaceSimulator(Simulators::SimulationType::kExtendedStabilizer, 1);
+        BOOST_CHECK_THROW(fresh->Configure(key, value), std::invalid_argument);
+        BOOST_TEST(fresh->GetConfiguration(key).empty(), key << "=" << value << " was stored");
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -5,7 +5,11 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
+#include <cmath>
+#include <exception>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 namespace Simulators::Private
@@ -55,6 +59,11 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             configuration.SetConfiguration(key, value);
             return;
         }
+        // A pruning setting is checked before it is stored, so a rejected
+        // value never reaches the configuration that Initialize and Clone replay.
+        const bool pruning = ExtendedStabilizerConfig::IsPruningKey(key);
+        if (pruning)
+            ExtendedStabilizerConfig::Validate(key, value ? value : "");
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
         if (std::string("seed") == key)
@@ -68,6 +77,28 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             if (workers > 1024)
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
+        // Initialize replays every setting once the state exists, so a policy
+        // set before allocation applies from the first gate.
+        if (pruning)
+        {
+            pruningPolicy = ApproximationPolicy();
+            ApplyPruningPolicy();
+        }
+    }
+
+    // The pruning the configuration asks for (extended_stabilizer_amplitude_tolerance,
+    // extended_stabilizer_max_components): exact unless a positive tolerance or
+    // a component cap is set. A tolerance of zero drops nothing, so without a
+    // cap it is the exact simulation; QCSim refuses an approximate policy that
+    // has neither.
+    QC::ExtendedStabilizerApproximationPolicy ApproximationPolicy() const
+    {
+        using namespace ExtendedStabilizerConfig;
+        const double tolerance = configuration.IsSet(kAmplitudeTolerance) ? ParseAmplitudeTolerance(configuration.GetConfiguration(kAmplitudeTolerance)) : 0.0;
+        const size_t cap = configuration.IsSet(kMaxComponents) ? static_cast<size_t>(ParseMaxComponents(configuration.GetConfiguration(kMaxComponents))) : 0;
+        if (tolerance == 0.0 && cap == 0)
+            return QC::ExtendedStabilizerApproximationPolicy::Exact();
+        return QC::ExtendedStabilizerApproximationPolicy::Approximate(tolerance == 0.0 ? 0.0 : tolerance, cap);
     }
 
     void SeedForExecution(uint64_t seed) override
@@ -248,9 +279,12 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
         extendedStabilizer->SaveState();
     }
 
+    // QCSim saves its policy with the state and restores it. The configuration
+    // decides the policy here, so one set since SaveState is put back.
     void RestoreState() override
     {
         extendedStabilizer->RestoreState();
+        ApplyPruningPolicy();
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -478,10 +512,16 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
         cloned->enableMultithreading = enableMultithreading;
         cloned->upcomingGates = upcomingGates;
         cloned->upcomingGateIndex = upcomingGateIndex;
-        if (extendedStabilizer)
-            cloned->extendedStabilizer = extendedStabilizer->Clone();
+        // The settings first, the state after them: the copied state carries
+        // its pruning policy, so replaying the settings onto it would only
+        // prune it again, once per setting. The seeding below reaches it.
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
+        if (extendedStabilizer)
+        {
+            cloned->extendedStabilizer = extendedStabilizer->Clone();
+            cloned->ApplyPruningPolicy();
+        }
         if (configuration.IsSet("seed"))
             cloned->SetSeed(seed);
         else
@@ -490,6 +530,17 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     }
 
   protected:
+    // Gives the state the policy of the configuration, unless it has it.
+    void ApplyPruningPolicy()
+    {
+        if (!extendedStabilizer)
+            return;
+        const auto &current = extendedStabilizer->GetApproximationPolicy();
+        if (current.mode != pruningPolicy.mode || current.amplitudeTolerance != pruningPolicy.amplitudeTolerance ||
+            current.maxComponents != pruningPolicy.maxComponents)
+            extendedStabilizer->SetApproximationPolicy(pruningPolicy);
+    }
+
     template <bool Many> bool TryMarginalCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &counts)
     {
         using namespace Utils::Sampling;
@@ -675,6 +726,10 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     }
 
     std::unique_ptr<Simulators::QCSimExtendedStabilizer> extendedStabilizer;
+    // The policy of the configuration, kept so that RestoreState compares it
+    // without parsing. Configure is the only writer of the two settings.
+    // Exact until one of them is set.
+    QC::ExtendedStabilizerApproximationPolicy pruningPolicy = QC::ExtendedStabilizerApproximationPolicy::Exact();
 };
 } // namespace Simulators::Private
 #endif

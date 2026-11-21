@@ -7,6 +7,7 @@
 #include "../maestrolib/Maestro.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <limits>
@@ -155,6 +156,25 @@ struct SimulatorConfig
 
     // path integral parameters
     std::optional<double> path_integral_threshold = std::nullopt;
+    // QCSim extended stabilizer pruning. Unset (both) runs exactly. A
+    // tolerance drops the components whose amplitude is at most this fraction
+    // of the state's norm after each non-Clifford gate and measurement; a cap
+    // then keeps at most this many of the largest. Either one selects
+    // approximate mode, which batched extended frames cannot run.
+    std::optional<double> extended_stabilizer_amplitude_tolerance = std::nullopt;
+    std::optional<uint64_t> extended_stabilizer_max_components = std::nullopt;
+    // Qiskit Aer extended stabilizer, under Aer's own names. Aer always
+    // approximates a non-Clifford circuit: it samples a stabilizer-rank
+    // decomposition of ceil(extent / error^2) terms, and samples outcomes from
+    // it with the chosen method. Unset keeps Aer's defaults: an error of 0.05,
+    // "resampled_metropolis", 5000 mixing steps, 100 norm estimation samples
+    // and 3 repetitions. A different quantity from QCSim's pruning, so each
+    // backend has its own settings (Validate refuses those of the other).
+    std::optional<double> extended_stabilizer_approximation_error = std::nullopt;
+    std::optional<std::string> extended_stabilizer_sampling_method = std::nullopt;
+    std::optional<uint64_t> extended_stabilizer_metropolis_mixing_time = std::nullopt;
+    std::optional<uint64_t> extended_stabilizer_norm_estimation_samples = std::nullopt;
+    std::optional<uint64_t> extended_stabilizer_norm_estimation_repetitions = std::nullopt;
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
     bool enable_causal_cone_reduction = true;
@@ -196,6 +216,17 @@ struct SimulatorConfig
     std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
 
+    // Whether the configuration may run this backend and method. With
+    // automatic selection a candidate list names every backend allowed and
+    // replaces the requested pair (ConfigureNetwork); otherwise only the
+    // requested pair runs.
+    bool MayRun(Simulators::SimulatorType type, Simulators::SimulationType method) const
+    {
+        if (fixed_backend || optimization_candidates.empty())
+            return simulator_type == type && simulation_type == method;
+        return std::find(optimization_candidates.begin(), optimization_candidates.end(), std::pair{type, method}) != optimization_candidates.end();
+    }
+
     // Throws std::invalid_argument for an unsupported combination or value.
     void Validate() const
     {
@@ -226,6 +257,7 @@ struct SimulatorConfig
             throw std::invalid_argument("observable_error_tolerance must be finite and in (0, 1]");
         if (max_simulators && (!*max_simulators || *max_simulators > 1024))
             throw std::invalid_argument("max_simulators must be between 1 and 1024");
+        ValidateExtendedStabilizer();
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
         RequireOneOf(precision, Precisions(), "precision");
         RequireOneOf(mps_sampling, MpsSamplingModes(), "mps_sampling");
@@ -252,6 +284,58 @@ struct SimulatorConfig
         for (const auto &candidate : optimization_candidates)
             if (Simulators::IsDistributedGpuSimulator(candidate.first))
                 throw std::invalid_argument("Distribution cannot be an automatic candidate");
+    }
+
+  private:
+    // The settings of the two extended stabilizers, as typed fields and as
+    // native keys: the range of each value, by the functions the simulators
+    // use, and which backend a setting belongs to.
+    void ValidateExtendedStabilizer() const
+    {
+        namespace Settings = Simulators::ExtendedStabilizerConfig;
+        const auto reject = [](const std::string &error) {
+            if (!error.empty())
+                throw std::invalid_argument(error);
+        };
+        if (extended_stabilizer_amplitude_tolerance)
+            reject(Settings::AmplitudeToleranceError(*extended_stabilizer_amplitude_tolerance));
+        if (extended_stabilizer_max_components)
+            reject(Settings::MaxComponentsError(*extended_stabilizer_max_components));
+        if (extended_stabilizer_approximation_error)
+            reject(Settings::ApproximationErrorError(*extended_stabilizer_approximation_error));
+        if (extended_stabilizer_sampling_method)
+            reject(Settings::SamplingMethodError(*extended_stabilizer_sampling_method));
+        for (const auto &[count, key] : {std::pair{extended_stabilizer_metropolis_mixing_time, Settings::kMetropolisMixingTime},
+                                         std::pair{extended_stabilizer_norm_estimation_samples, Settings::kNormEstimationSamples},
+                                         std::pair{extended_stabilizer_norm_estimation_repetitions, Settings::kNormEstimationRepetitions}})
+            if (count)
+                reject(Settings::AerCountError(key, *count));
+        bool nativePruning = false, nativeAer = false;
+        for (const auto &[key, value] : native_options)
+        {
+            Settings::Validate(key, value);
+            nativePruning = nativePruning || Settings::IsPruningKey(key);
+            nativeAer = nativeAer || Settings::IsAerKey(key);
+        }
+        // Each backend approximates in its own way and ignores the settings of
+        // the other. A setting is refused when the backend that would ignore it
+        // may run, as the requested pair or as a candidate. A list with both
+        // extended stabilizers therefore takes neither family.
+        const auto extended = Simulators::SimulationType::kExtendedStabilizer;
+#ifndef NO_QISKIT_AER
+        if ((extended_stabilizer_amplitude_tolerance || extended_stabilizer_max_components || nativePruning) &&
+            MayRun(Simulators::SimulatorType::kQiskitAer, extended))
+            throw std::invalid_argument("extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components apply to the QCSim "
+                                        "extended stabilizer only, and this configuration may run Aer's, which takes "
+                                        "extended_stabilizer_approximation_error; a candidate list with both takes neither");
+#endif
+        if ((extended_stabilizer_approximation_error || extended_stabilizer_sampling_method || extended_stabilizer_metropolis_mixing_time ||
+             extended_stabilizer_norm_estimation_samples || extended_stabilizer_norm_estimation_repetitions || nativeAer) &&
+            MayRun(Simulators::SimulatorType::kQCSim, extended))
+            throw std::invalid_argument("extended_stabilizer_approximation_error and the extended_stabilizer sampling settings apply to the Aer "
+                                        "extended stabilizer only, and this configuration may run QCSim's, which takes "
+                                        "extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components; a candidate list with "
+                                        "both takes neither");
     }
 };
 
@@ -476,6 +560,46 @@ inline bool AdmitsReferenceFrames(const SimulatorConfig &config)
            (config.simulation_type == Simulators::SimulationType::kStabilizer || !config.fixed_backend);
 }
 
+// The QCSim extended stabilizer's pruning that a configuration asks for: the
+// typed field, else its native key (ConfigureNetwork applies the typed field
+// after the native options, so it decides). Parsed as the simulator parses it:
+// a native value that Validate would refuse throws std::invalid_argument.
+inline std::optional<double> EffectiveExtendedStabilizerTolerance(const SimulatorConfig &config)
+{
+    if (config.extended_stabilizer_amplitude_tolerance)
+        return config.extended_stabilizer_amplitude_tolerance;
+    const auto native = config.native_options.find(Simulators::ExtendedStabilizerConfig::kAmplitudeTolerance);
+    return native == config.native_options.end() ? std::nullopt
+                                                 : std::optional<double>(Simulators::ExtendedStabilizerConfig::ParseAmplitudeTolerance(native->second));
+}
+
+inline std::optional<uint64_t> EffectiveExtendedStabilizerMaxComponents(const SimulatorConfig &config)
+{
+    if (config.extended_stabilizer_max_components)
+        return config.extended_stabilizer_max_components;
+    const auto native = config.native_options.find(Simulators::ExtendedStabilizerConfig::kMaxComponents);
+    return native == config.native_options.end() ? std::nullopt
+                                                 : std::optional<uint64_t>(Simulators::ExtendedStabilizerConfig::ParseMaxComponents(native->second));
+}
+
+// Whether the configuration prunes the QCSim extended stabilizer: a positive
+// tolerance or a component cap. Batched extended frames run exactly, so such a
+// request keeps scalar trajectories. A zero tolerance drops nothing, so frames
+// still apply. The method is not checked: callers ask this of a QCSim extended
+// stabilizer request.
+inline bool SetsExtendedStabilizerApproximation(const SimulatorConfig &config)
+{
+    const auto tolerance = EffectiveExtendedStabilizerTolerance(config);
+    return (tolerance && *tolerance > 0) || EffectiveExtendedStabilizerMaxComponents(config);
+}
+
+// Whether a run of this configuration may prune: it sets the pruning and may
+// run the QCSim extended stabilizer, requested or as a candidate.
+inline bool PrunesExtendedStabilizer(const SimulatorConfig &config)
+{
+    return config.MayRun(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kExtendedStabilizer) && SetsExtendedStabilizerApproximation(config);
+}
+
 // ConfigureNetwork applies native counts_policy after the typed option.
 inline const std::string &EffectiveCountsPolicy(const SimulatorConfig &config)
 {
@@ -636,6 +760,32 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     if (!config.singular_value_threshold && !config.native_options.count("matrix_product_state_truncation_threshold") &&
         !config.native_options.count("matrix_product_operator_truncation_threshold"))
         network->RemoveConfiguration("matrix_product_state_truncation_threshold");
+    // A handle that was configured before keeps its settings. An extended
+    // stabilizer setting that this configuration leaves unset goes back to its
+    // default (exact for QCSim, Aer's own for Aer), or the run would silently
+    // keep the approximation of an earlier one. Only where the backend that
+    // reads the setting may run: elsewhere a leftover value changes nothing.
+    {
+        namespace Settings = Simulators::ExtendedStabilizerConfig;
+        const auto extended = Simulators::SimulationType::kExtendedStabilizer;
+        const std::pair<const char *, bool> typed[] = {
+            {Settings::kAmplitudeTolerance, config.extended_stabilizer_amplitude_tolerance.has_value()},
+            {Settings::kMaxComponents, config.extended_stabilizer_max_components.has_value()},
+            {Settings::kApproximationError, config.extended_stabilizer_approximation_error.has_value()},
+            {Settings::kSamplingMethod, config.extended_stabilizer_sampling_method.has_value()},
+            {Settings::kMetropolisMixingTime, config.extended_stabilizer_metropolis_mixing_time.has_value()},
+            {Settings::kNormEstimationSamples, config.extended_stabilizer_norm_estimation_samples.has_value()},
+            {Settings::kNormEstimationRepetitions, config.extended_stabilizer_norm_estimation_repetitions.has_value()}};
+        const bool qcsim = config.MayRun(Simulators::SimulatorType::kQCSim, extended);
+#ifndef NO_QISKIT_AER
+        const bool aer = config.MayRun(Simulators::SimulatorType::kQiskitAer, extended);
+#else
+        const bool aer = false;
+#endif
+        for (const auto &[key, set] : typed)
+            if (!set && !config.native_options.count(key) && (Settings::IsPruningKey(key) ? qcsim : aer))
+                network->RemoveConfiguration(key);
+    }
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
     if (config.mps_routing_strategy)
@@ -763,6 +913,28 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
         auto val = oss.str();
         network->Configure("path_integral_threshold", val.c_str());
     }
+    if (config.extended_stabilizer_amplitude_tolerance)
+    {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10) << *config.extended_stabilizer_amplitude_tolerance;
+        network->Configure("extended_stabilizer_amplitude_tolerance", oss.str().c_str());
+    }
+    if (config.extended_stabilizer_max_components)
+        network->Configure("extended_stabilizer_max_components", std::to_string(*config.extended_stabilizer_max_components).c_str());
+    if (config.extended_stabilizer_approximation_error)
+    {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10) << *config.extended_stabilizer_approximation_error;
+        network->Configure(Simulators::ExtendedStabilizerConfig::kApproximationError, oss.str().c_str());
+    }
+    if (config.extended_stabilizer_sampling_method)
+        network->Configure(Simulators::ExtendedStabilizerConfig::kSamplingMethod, config.extended_stabilizer_sampling_method->c_str());
+    for (const auto &[count, key] :
+         {std::pair{config.extended_stabilizer_metropolis_mixing_time, Simulators::ExtendedStabilizerConfig::kMetropolisMixingTime},
+          std::pair{config.extended_stabilizer_norm_estimation_samples, Simulators::ExtendedStabilizerConfig::kNormEstimationSamples},
+          std::pair{config.extended_stabilizer_norm_estimation_repetitions, Simulators::ExtendedStabilizerConfig::kNormEstimationRepetitions}})
+        if (count)
+            network->Configure(key, std::to_string(*count).c_str());
 
     // A backend placeholder: the network executes on a register of its own.
     const size_t placeholderQubits = Network::INetwork<double>::kBackendPlaceholderQubits;

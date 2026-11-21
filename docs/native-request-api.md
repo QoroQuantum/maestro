@@ -445,6 +445,32 @@ are rejected. Small floating-point thresholds retain their precision.
 | `pp_gates_between_trims` | `pauli_propagator_steps_between_trims` | positive_integer | pp |
 | `pp_gates_between_deduplications` | `pauli_propagator_num_gates_between_deduplications` | positive_integer | pp |
 | `path_integral_threshold` | `path_integral_threshold` | nonnegative | path |
+| `extended_stabilizer_amplitude_tolerance` | `extended_stabilizer_amplitude_tolerance` | nonnegative, below 1 | cpu_extended_stabilizer |
+| `extended_stabilizer_max_components` | `extended_stabilizer_max_components` | positive_integer | cpu_extended_stabilizer |
+| `extended_stabilizer_approximation_error` | `extended_stabilizer_approximation_error` | number in (0, 1] (default 0.05) | aer_extended_stabilizer |
+| `extended_stabilizer_sampling_method` | `extended_stabilizer_sampling_method` | `resampled_metropolis` (default), `metropolis` or `norm_estimation` | aer_extended_stabilizer |
+| `extended_stabilizer_metropolis_mixing_time` | `extended_stabilizer_metropolis_mixing_time` | positive_integer (default 5000) | aer_extended_stabilizer |
+| `extended_stabilizer_norm_estimation_samples` | `extended_stabilizer_norm_estimation_samples` | positive_integer (default 100) | aer_extended_stabilizer |
+| `extended_stabilizer_norm_estimation_repetitions` | `extended_stabilizer_norm_estimation_repetitions` | positive_integer (default 3) | aer_extended_stabilizer |
+
+The two extended stabilizers approximate in different ways, and each has its
+own options. The QCSim one (`cpu_extended_stabilizer`) runs exactly unless it
+is told to prune: after each non-Clifford gate and measurement it drops the
+components whose amplitude is at most `extended_stabilizer_amplitude_tolerance`
+times the state's norm, then keeps at most `extended_stabilizer_max_components`
+of the largest. A tolerance of zero drops nothing. Batched frames run exactly,
+so a pruned noisy request keeps scalar trajectories, and its
+`noise.approximations` lists `extended_stabilizer_pruning`. Qiskit Aer's
+(`aer_extended_stabilizer`) always approximates a non-Clifford circuit: it
+samples a stabilizer-rank decomposition of about extent / error² terms, where
+the error is `extended_stabilizer_approximation_error`, and samples outcomes
+from it by `extended_stabilizer_sampling_method`. The mixing time is the number
+of Metropolis steps before a sample; the norm estimation counts are the random
+stabilizer states of one estimate and the estimates of which Aer keeps the
+median. They take Aer's own names and defaults, and are at most `INT_MAX`.
+Each backend ignores the options of the other, so an option is rejected for a
+request that may run the other backend's extended stabilizer, as the requested
+pair or as a candidate: a candidate list with both takes neither family.
 
 Tensor options apply to MPS/MPO/TN; GPU solver selectors require their named
 GPU method. Precision is `single` or `double` and applies to Aer and the GPU
@@ -756,6 +782,18 @@ Explicit `legacy` keeps the ordinary network executor. Eligible terminal histogr
 multinomial sampling under `auto`. Supported QCSim dynamic circuits default to
 `trajectory_policy="shot_v1"`, including stabilizer, extended-stabilizer, MPS and MPO.
 Omitting the policy uses that default even after an earlier call supplied an override.
+
+`SimpleExecute` and `SimpleEstimate` accept the extended stabilizer options of
+`simulator.options` under the same names, with the same ranges: QCSim's
+`extended_stabilizer_amplitude_tolerance` and `extended_stabilizer_max_components`,
+and Aer's `extended_stabilizer_approximation_error`,
+`extended_stabilizer_sampling_method`, `extended_stabilizer_metropolis_mixing_time`,
+`extended_stabilizer_norm_estimation_samples` and
+`extended_stabilizer_norm_estimation_repetitions`. A value out of range, or an
+option given to a handle that may run the other backend's extended stabilizer,
+returns the legacy null-result failure, and none of the call's extended
+stabilizer options is applied. Omitting an option restores its default, also
+after an earlier call supplied it.
 
 Fidelity operations use ideal inverse preparation. Delays are identity operations
 in that inverse; `noisy_fidelity` applies its noise only to the forward

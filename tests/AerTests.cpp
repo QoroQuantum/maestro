@@ -2123,4 +2123,135 @@ BOOST_AUTO_TEST_CASE(aer_rejected_values_preserve_accepted_configuration)
     BOOST_CHECK_SMALL(clone->Probability(1) - 1.0, 1e-10);
 }
 
+// Aer's extended stabilizer samples a stabilizer-rank decomposition of
+// ceil(extent / error^2) terms. h t h |0> gives 1 with probability sin^2(pi/8),
+// and T has extent 1.17 over two Clifford branches of equal weight: 469 terms
+// at the default error of 0.05, 2 at an error of 1, where half the draws take
+// one branch twice and miss by 0.15 or 0.35.
+BOOST_AUTO_TEST_CASE(extended_stabilizer_settings)
+{
+    using Type = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    const double expected = std::pow(std::sin(std::acos(-1.0) / 8), 2);
+    const char *errorKey = "extended_stabilizer_approximation_error";
+    const auto probabilities = [&](const char *error, bool afterInitialize) {
+        std::vector<double> values;
+        for (uint64_t seed = 1; seed <= 24; ++seed)
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kExtendedStabilizer);
+            sim->Configure("seed", std::to_string(seed).c_str());
+            if (error && !afterInitialize)
+                sim->Configure(errorKey, error);
+            sim->AllocateQubits(1);
+            sim->Initialize();
+            if (error && afterInitialize)
+                sim->Configure(errorKey, error);
+            sim->ApplyH(0);
+            sim->ApplyT(0);
+            sim->ApplyH(0);
+            values.push_back(sim->AllProbabilities().at(1));
+        }
+        return values;
+    };
+    const auto worst = [&](const std::vector<double> &values) {
+        double deviation = 0;
+        for (const double value : values)
+            deviation = std::max(deviation, std::abs(value - expected));
+        return deviation;
+    };
+    const auto defaults = probabilities(nullptr, false);
+    BOOST_TEST(worst(defaults) < 0.1);
+    // The default is 0.05: naming it changes nothing. (To the last digits:
+    // Aer sums the terms on several threads.)
+    const auto named = probabilities("0.05", false);
+    for (size_t seed = 0; seed < defaults.size(); ++seed)
+        BOOST_CHECK_SMALL(named[seed] - defaults[seed], 1e-12);
+    for (const bool afterInitialize : {false, true})
+    {
+        BOOST_TEST_CONTEXT("configured " << (afterInitialize ? "after" : "before") << " Initialize")
+        {
+            // Aer hands its settings to a state when it creates it; the
+            // simulator also hands them to one that exists.
+            BOOST_TEST(worst(probabilities("1", afterInitialize)) > 0.1);
+            BOOST_TEST(worst(probabilities("0.02", afterInitialize)) < 0.1);
+        }
+    }
+
+    // The sampling settings: each method draws the same distribution. One
+    // qubit, whose two outcomes a Metropolis step connects. The mixing time
+    // is cut where every shot walks anew: 5000 steps a shot is Aer's default.
+    using Settings = std::vector<std::pair<const char *, const char *>>;
+    for (const Settings &settings :
+         {Settings{{"extended_stabilizer_sampling_method", "metropolis"}},
+          Settings{{"extended_stabilizer_sampling_method", "resampled_metropolis"}, {"extended_stabilizer_metropolis_mixing_time", "100"}},
+          Settings{{"extended_stabilizer_sampling_method", "norm_estimation"},
+                   {"extended_stabilizer_norm_estimation_samples", "40"},
+                   {"extended_stabilizer_norm_estimation_repetitions", "2"}}})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kExtendedStabilizer);
+        sim->Configure("seed", "11");
+        sim->Configure(errorKey, "0.04");
+        const std::string context = settings.front().second;
+        for (const auto &[key, value] : settings)
+        {
+            sim->Configure(key, value);
+            BOOST_TEST(sim->GetConfiguration(key) == value);
+        }
+        sim->AllocateQubits(1);
+        sim->Initialize();
+        sim->ApplyH(0);
+        sim->ApplyT(0);
+        sim->ApplyH(0);
+        const size_t shots = 300;
+        size_t ones = 0, total = 0;
+        for (const auto &[outcome, count] : sim->SampleCounts({0}, shots))
+        {
+            total += count;
+            if (outcome == 1)
+                ones += count;
+        }
+        BOOST_TEST(total == shots, context);
+        // 44 expected, standard deviation 6.
+        BOOST_TEST((ones > 15 && ones < 85), context << ": " << ones << " of " << shots);
+        // A clone carries the settings.
+        auto clone = sim->Clone();
+        BOOST_TEST(clone->GetConfiguration(errorKey) == "0.04");
+        for (const auto &[key, value] : settings)
+            BOOST_TEST(clone->GetConfiguration(key) == value);
+    }
+
+    // A value Aer would not read is an error, and is not stored: Aer's own
+    // rejection is silent, which would leave the default in place unnoticed.
+    for (const auto &[key, value] : Settings{{errorKey, "0"},
+                                             {errorKey, "-0.1"},
+                                             {errorKey, "1.5"},
+                                             {errorKey, "nan"},
+                                             {errorKey, "five"},
+                                             {"extended_stabilizer_sampling_method", "gibbs"},
+                                             {"extended_stabilizer_sampling_method", "Metropolis"},
+                                             {"extended_stabilizer_metropolis_mixing_time", "0"},
+                                             {"extended_stabilizer_metropolis_mixing_time", "-3"},
+                                             {"extended_stabilizer_metropolis_mixing_time", "2147483648"},
+                                             {"extended_stabilizer_norm_estimation_samples", "1.5"},
+                                             {"extended_stabilizer_norm_estimation_repetitions", "many"}})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kExtendedStabilizer);
+        BOOST_CHECK_THROW(sim->Configure(key, value), std::invalid_argument);
+        BOOST_TEST(sim->GetConfiguration(key).empty(), key << "=" << value << " was stored");
+    }
+
+    // QCSim's pruning settings mean nothing to Aer, which does not keep them.
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQiskitAer, Method::kExtendedStabilizer);
+    BOOST_CHECK_NO_THROW(sim->Configure("extended_stabilizer_amplitude_tolerance", "0.1"));
+    BOOST_TEST(sim->GetConfiguration("extended_stabilizer_amplitude_tolerance").empty());
+    // The QCSim extended stabilizer keeps Aer's as any other key and ignores them.
+    auto qcsim = Simulators::SimulatorsFactory::CreateSimulator(Type::kQCSim, Method::kExtendedStabilizer);
+    BOOST_CHECK_NO_THROW(qcsim->Configure(errorKey, "0.2"));
+    BOOST_CHECK_THROW(qcsim->Configure(errorKey, "2"), std::invalid_argument);
+    qcsim->AllocateQubits(1);
+    qcsim->Initialize();
+    qcsim->ApplyRy(0, 0.2);
+    BOOST_CHECK_CLOSE(qcsim->Probability(1), std::pow(std::sin(0.1), 2), 1e-7);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

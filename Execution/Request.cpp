@@ -2799,6 +2799,8 @@ std::unique_ptr<FrameSamplerHandle> CompileFrameSampler(const boost::json::objec
     if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
         !HasCandidateList(config) && !config.enable_sampling_reduction)
     {
+        Supported(!SetsExtendedStabilizerApproximation(config),
+                  "Extended frames run exactly: unset extended_stabilizer_amplitude_tolerance and extended_stabilizer_max_components");
         Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Extended frames apply pauli or combined noise only");
         Supported(noise.model.inject_noise_covers_model(), "Extended frames cannot represent coherent, correlated or crosstalk noise");
         auto channels = noise::inject_exact_noise(input.circuit, noise.model);

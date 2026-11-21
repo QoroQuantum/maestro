@@ -418,6 +418,250 @@ void TestPauliTuningForwarding()
     Check(stored(config) == std::vector<std::string>{"3", "17", "8589934592", "0"}, "Typed Pauli tuning options did not reach the backend");
 }
 
+// The extended stabilizer settings as typed fields and as native keys: one
+// rule for a value, which backend a setting belongs to, and a handle that is
+// configured again.
+void TestExtendedStabilizerConfiguration()
+{
+    using namespace MaestroExecution;
+    GetMaestroObjectWithMute();
+    const char *tolerance = "extended_stabilizer_amplitude_tolerance";
+    const char *cap = "extended_stabilizer_max_components";
+    const char *error = "extended_stabilizer_approximation_error";
+    const auto rejected = [](const SimulatorConfig &config) {
+        try
+        {
+            config.Validate();
+        }
+        catch (const std::invalid_argument &)
+        {
+            return true;
+        }
+        return false;
+    };
+    SimulatorConfig extended;
+    extended.simulation_type = Method::kExtendedStabilizer;
+    extended.fixed_backend = true;
+
+    // A native value is checked as the typed field is, and as the simulator
+    // checks it: no value passes here and fails in Configure.
+    for (const auto &[key, value] : std::vector<std::pair<const char *, const char *>>{{tolerance, "nan"},
+                                                                                       {tolerance, "-0.5"},
+                                                                                       {tolerance, "1"},
+                                                                                       {tolerance, "0.1x"},
+                                                                                       {tolerance, "abc"},
+                                                                                       {cap, "0"},
+                                                                                       {cap, "-1"},
+                                                                                       {cap, "many"},
+                                                                                       {error, "0"},
+                                                                                       {error, "2"},
+                                                                                       {"extended_stabilizer_sampling_method", "gibbs"},
+                                                                                       {"extended_stabilizer_metropolis_mixing_time", "0"},
+                                                                                       {"extended_stabilizer_norm_estimation_samples", "2147483648"}})
+    {
+        SimulatorConfig config; // a statevector: neither extended stabilizer may run, so only the value can be refused
+        config.native_options[key] = value;
+        Check(rejected(config), "An invalid native extended stabilizer value passed validation");
+    }
+    {
+        SimulatorConfig config = extended;
+        config.extended_stabilizer_amplitude_tolerance = 1.;
+        Check(rejected(config), "A typed tolerance of 1 passed validation");
+        config.extended_stabilizer_amplitude_tolerance = std::numeric_limits<double>::quiet_NaN();
+        Check(rejected(config), "A typed NaN tolerance passed validation");
+        config.extended_stabilizer_amplitude_tolerance = 0.;
+        config.extended_stabilizer_max_components = 0;
+        Check(rejected(config), "A typed cap of zero passed validation");
+        config = SimulatorConfig{};
+        config.extended_stabilizer_approximation_error = 0.;
+        Check(rejected(config), "A typed approximation error of zero passed validation");
+        config.extended_stabilizer_approximation_error = 0.5;
+        config.extended_stabilizer_sampling_method = "gibbs";
+        Check(rejected(config), "An unknown typed sampling method passed validation");
+        config.extended_stabilizer_sampling_method = "metropolis";
+        config.extended_stabilizer_metropolis_mixing_time = uint64_t{1} << 31;
+        Check(rejected(config), "A typed mixing time beyond Aer's int passed validation");
+        config.extended_stabilizer_metropolis_mixing_time = 10;
+        config.extended_stabilizer_norm_estimation_samples = 0;
+        Check(rejected(config), "Zero typed norm estimation samples passed validation");
+        config.extended_stabilizer_norm_estimation_samples = 20;
+        config.extended_stabilizer_norm_estimation_repetitions = 0;
+        Check(rejected(config), "Zero typed norm estimation repetitions passed validation");
+        config.extended_stabilizer_norm_estimation_repetitions = 3;
+        Check(!rejected(config), "Valid Aer extended stabilizer settings were refused where neither extended stabilizer runs");
+    }
+
+    // Pruning means a positive tolerance or a cap. The typed field decides
+    // over the native key, as ConfigureNetwork applies it last.
+    {
+        SimulatorConfig config = extended;
+        Check(!SetsExtendedStabilizerApproximation(config) && !PrunesExtendedStabilizer(config), "An unset configuration prunes");
+        config.extended_stabilizer_amplitude_tolerance = 0.;
+        Check(!SetsExtendedStabilizerApproximation(config), "A zero tolerance prunes");
+        config.native_options[tolerance] = "0.1";
+        Check(!SetsExtendedStabilizerApproximation(config), "A native tolerance overrode the typed zero");
+        config.extended_stabilizer_amplitude_tolerance.reset();
+        Check(SetsExtendedStabilizerApproximation(config) && PrunesExtendedStabilizer(config), "A native tolerance does not prune");
+        config.native_options[tolerance] = "0";
+        Check(!SetsExtendedStabilizerApproximation(config), "A native zero tolerance prunes");
+        config.native_options[cap] = "7";
+        Check(SetsExtendedStabilizerApproximation(config), "A native cap does not prune");
+        config.native_options.clear();
+        config.extended_stabilizer_max_components = 7;
+        Check(SetsExtendedStabilizerApproximation(config), "A typed cap does not prune");
+        config.simulation_type = Method::kStatevector;
+        Check(!PrunesExtendedStabilizer(config), "A statevector prunes");
+    }
+
+    // Which backend may run: the requested pair, or the candidates of an
+    // automatic list, which replace it.
+    {
+        SimulatorConfig config;
+        config.simulation_type = Method::kExtendedStabilizer;
+        Check(config.MayRun(Backend::kQCSim, Method::kExtendedStabilizer) && !config.MayRun(Backend::kQCSim, Method::kStatevector),
+              "MayRun misreads the requested pair");
+        config.optimization_candidates = {{Backend::kQCSim, Method::kStatevector}};
+        Check(!config.MayRun(Backend::kQCSim, Method::kExtendedStabilizer) && config.MayRun(Backend::kQCSim, Method::kStatevector),
+              "A candidate list did not replace the requested pair");
+        config.fixed_backend = true;
+        Check(config.MayRun(Backend::kQCSim, Method::kExtendedStabilizer) && !config.MayRun(Backend::kQCSim, Method::kStatevector),
+              "A fixed backend followed its candidate list");
+    }
+
+    // Each backend ignores the settings of the other: refused where that
+    // backend may run, as typed fields and as native keys.
+    {
+        SimulatorConfig config = extended;
+        config.extended_stabilizer_approximation_error = 0.1;
+        Check(rejected(config), "The QCSim extended stabilizer took Aer's typed approximation error");
+        config.extended_stabilizer_approximation_error.reset();
+        config.native_options["extended_stabilizer_sampling_method"] = "metropolis";
+        Check(rejected(config), "The QCSim extended stabilizer took Aer's native sampling method");
+        // A list without the QCSim extended stabilizer replaces the requested pair.
+        config.fixed_backend = false;
+        config.optimization_candidates = {{Backend::kQCSim, Method::kStatevector}};
+        Check(!rejected(config), "An Aer setting was refused though the QCSim extended stabilizer cannot run");
+        config.optimization_candidates.emplace_back(Backend::kQCSim, Method::kExtendedStabilizer);
+        Check(rejected(config), "An Aer setting was accepted with the QCSim extended stabilizer as a candidate");
+#ifndef NO_QISKIT_AER
+        SimulatorConfig aer;
+        aer.simulator_type = Backend::kQiskitAer;
+        aer.simulation_type = Method::kExtendedStabilizer;
+        aer.fixed_backend = true;
+        aer.extended_stabilizer_approximation_error = 0.1;
+        aer.extended_stabilizer_sampling_method = "norm_estimation";
+        Check(!rejected(aer), "Aer's extended stabilizer refused its own settings");
+        aer.native_options[cap] = "8";
+        Check(rejected(aer), "Aer's extended stabilizer took QCSim's native cap");
+        aer.native_options.clear();
+        aer.extended_stabilizer_amplitude_tolerance = 0.1;
+        Check(rejected(aer), "Aer's extended stabilizer took QCSim's typed tolerance");
+        // Requested on Aer, but the list names only QCSim's: the pruning applies there.
+        aer.extended_stabilizer_approximation_error.reset();
+        aer.extended_stabilizer_sampling_method.reset();
+        aer.fixed_backend = false;
+        aer.optimization_candidates = {{Backend::kQCSim, Method::kExtendedStabilizer}};
+        Check(!rejected(aer), "Pruning was refused though only the QCSim extended stabilizer can run");
+        // A list with both takes neither family.
+        aer.optimization_candidates.emplace_back(Backend::kQiskitAer, Method::kExtendedStabilizer);
+        Check(rejected(aer), "Pruning was accepted with Aer's extended stabilizer as a candidate");
+        aer.extended_stabilizer_amplitude_tolerance.reset();
+        Check(!rejected(aer), "A list with both extended stabilizers and no setting was refused");
+        aer.extended_stabilizer_approximation_error = 0.1;
+        Check(rejected(aer), "Aer's error was accepted with QCSim's extended stabilizer as a candidate");
+#endif
+    }
+
+    // The settings reach the simulator, and a handle that is configured again
+    // without them goes back to the default: it does not keep the pruning (or
+    // Aer's settings) of the configuration before.
+    struct NetworkHandle
+    {
+        unsigned long handle = CreateSimpleSimulator(2);
+
+        ~NetworkHandle()
+        {
+            DestroySimpleSimulator(handle);
+        }
+    } owner;
+
+    Check(owner.handle != 0, "Cannot create a network for the extended stabilizer settings");
+    const auto stored = [&](const SimulatorConfig &config, const char *key) {
+        const auto network = ConfigureNetwork(owner.handle, config);
+        Check(bool(network) && network->GetSimulator(), "Cannot configure an extended stabilizer network");
+        return network->GetSimulator()->GetConfiguration(key);
+    };
+    const auto probability = [&](const SimulatorConfig &config) {
+        const auto network = ConfigureNetwork(owner.handle, config, 1);
+        Check(bool(network) && network->GetSimulator(), "Cannot configure an extended stabilizer register");
+        const auto simulator = network->GetSimulator();
+        simulator->ApplyRy(0, 0.2);
+        return simulator->Probability(1);
+    };
+    const double excited = std::sin(0.1) * std::sin(0.1);
+    {
+        SimulatorConfig config = extended;
+        Check(stored(config, tolerance).empty() && stored(config, cap).empty(), "An unset pruning setting reached the backend");
+        Check(std::abs(probability(config) - excited) < 1e-9, "An unset configuration pruned");
+        config.extended_stabilizer_amplitude_tolerance = 0.2;
+        config.extended_stabilizer_max_components = 9;
+        Check(std::stod(stored(config, tolerance)) == 0.2 && stored(config, cap) == "9", "Typed pruning settings did not reach the backend");
+        Check(probability(config) < 1e-12, "A typed tolerance did not prune");
+        Check(stored(extended, tolerance).empty() && stored(extended, cap).empty(), "A handle kept the pruning of an earlier configuration");
+        Check(std::abs(probability(extended) - excited) < 1e-9, "A handle kept pruning after a configuration without it");
+        SimulatorConfig native = extended;
+        native.native_options[tolerance] = "0.2";
+        Check(stored(native, tolerance) == "0.2" && probability(native) < 1e-12, "A native tolerance did not prune");
+        Check(std::abs(probability(extended) - excited) < 1e-9, "A handle kept a native tolerance after a configuration without it");
+        // A zero tolerance is the exact simulation, not an error.
+        config = extended;
+        config.extended_stabilizer_amplitude_tolerance = 0.;
+        Check(std::abs(probability(config) - excited) < 1e-9, "A zero tolerance did not run exactly");
+        // The network refuses a bad value before it keeps it: one it kept
+        // would be replayed to the simulator it creates next, which throws.
+        const auto network = ConfigureNetwork(owner.handle, extended);
+        bool refused = false;
+        try
+        {
+            network->Configure(tolerance, "2");
+        }
+        catch (const std::invalid_argument &)
+        {
+            refused = true;
+        }
+        network->CreateSimulator(Backend::kQCSim, Method::kExtendedStabilizer, 1);
+        Check(refused && network->GetSimulator() && network->GetSimulator()->GetConfiguration(tolerance).empty(),
+              "A network kept a tolerance its simulator refuses");
+    }
+#ifndef NO_QISKIT_AER
+    {
+        SimulatorConfig aer;
+        aer.simulator_type = Backend::kQiskitAer;
+        aer.simulation_type = Method::kExtendedStabilizer;
+        aer.fixed_backend = true;
+        Check(stored(aer, error).empty(), "An unset Aer approximation error reached the backend");
+        aer.extended_stabilizer_approximation_error = 0.1;
+        aer.extended_stabilizer_sampling_method = "metropolis";
+        aer.extended_stabilizer_metropolis_mixing_time = 77;
+        aer.extended_stabilizer_norm_estimation_samples = 31;
+        aer.extended_stabilizer_norm_estimation_repetitions = 2;
+        Check(std::stod(stored(aer, error)) == 0.1 && stored(aer, "extended_stabilizer_sampling_method") == "metropolis" &&
+                  stored(aer, "extended_stabilizer_metropolis_mixing_time") == "77" && stored(aer, "extended_stabilizer_norm_estimation_samples") == "31" &&
+                  stored(aer, "extended_stabilizer_norm_estimation_repetitions") == "2",
+              "Typed Aer extended stabilizer settings did not reach the backend");
+        SimulatorConfig plain = aer;
+        plain.extended_stabilizer_approximation_error.reset();
+        plain.extended_stabilizer_sampling_method.reset();
+        plain.extended_stabilizer_metropolis_mixing_time.reset();
+        plain.extended_stabilizer_norm_estimation_samples.reset();
+        plain.extended_stabilizer_norm_estimation_repetitions.reset();
+        Check(stored(plain, error).empty() && stored(plain, "extended_stabilizer_sampling_method").empty() &&
+                  stored(plain, "extended_stabilizer_metropolis_mixing_time").empty(),
+              "A handle kept Aer's settings of an earlier configuration");
+    }
+#endif
+}
+
 void TestAutomaticGpuMixedStateFallback()
 {
     using namespace MaestroExecution;
