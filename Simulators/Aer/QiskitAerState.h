@@ -134,6 +134,19 @@ class QiskitAerState : public AER::AerState
             static_cast<AER::DataMap<AER::SingleData, AER::Vector<complex_t>>>(std::move(fakeState->last_result_.data)).value()["statevector"].value());
     }
 
+    // Hands the current settings to an existing extended stabilizer state,
+    // which otherwise reads them only when it is created. Operations buffered
+    // before the change run first, under the settings they were given with.
+    void refresh_extended_stabilizer_config()
+    {
+        const auto extendedState = std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(get_state());
+        if (!extendedState)
+            return;
+        flush_ops();
+        const AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+        extendedState->set_config(fakeState->configs_);
+    }
+
     std::shared_ptr<AER::QuantumState::Base> clone_extended_stabilizer_state()
     {
         flush_ops();

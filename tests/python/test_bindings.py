@@ -1293,12 +1293,59 @@ measure q[0] -> c[0];
 
         assert 120 < ones() < 280
         assert ones(extended_stabilizer_amplitude_tolerance=0.2) == 0
+        # A zero tolerance drops nothing: the run is exact, on frames or not.
+        assert 120 < ones(extended_stabilizer_amplitude_tolerance=0.0) < 280
+
+    def test_zero_tolerance_runs_exactly(self):
+        # A tolerance of zero drops nothing. Alone it is the exact simulation,
+        # which QCSim cannot express as an approximate policy; with a cap it
+        # is the cap.
+        assert 120 < self.ones(extended_stabilizer_amplitude_tolerance=0.0) < 280
+        assert 120 < self.ones(extended_stabilizer_amplitude_tolerance=0.0, extended_stabilizer_max_components=2) < 280
+        assert self.ones(extended_stabilizer_amplitude_tolerance=0.0, extended_stabilizer_max_components=1) == 0
+
+    def test_estimate_prunes(self):
+        # <Z> = cos(0.2) exactly, 1 once the |1> component is dropped.
+        qasm = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\nry(0.2) q[0];\n'
+
+        def z(**pruning):
+            config = maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                fixed_backend=True, **pruning)
+            return maestro.simple_estimate(qasm, "Z", config=config)['expectation_values'][0]
+
+        assert z() == pytest.approx(math.cos(0.2), abs=1e-9)
+        assert z(extended_stabilizer_amplitude_tolerance=0.0) == pytest.approx(math.cos(0.2), abs=1e-9)
+        assert z(extended_stabilizer_amplitude_tolerance=0.05) == pytest.approx(math.cos(0.2), abs=1e-9)
+        assert z(extended_stabilizer_amplitude_tolerance=0.2) == pytest.approx(1.0, abs=1e-12)
+        assert z(extended_stabilizer_max_components=1) == pytest.approx(1.0, abs=1e-12)
+
+    def test_a_config_used_twice_does_not_keep_the_pruning(self):
+        # The same config object, pruned and then not.
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.ExtendedStabilizer,
+            fixed_backend=True, seed=7, extended_stabilizer_amplitude_tolerance=0.2)
+        assert maestro.simple_execute(self.QASM, shots=self.SHOTS, config=config)['counts'].get('1', 0) == 0
+        config.extended_stabilizer_amplitude_tolerance = None
+        assert 120 < maestro.simple_execute(self.QASM, shots=self.SHOTS, config=config)['counts'].get('1', 0) < 280
 
     @pytest.mark.parametrize("field,value", [
         ("extended_stabilizer_amplitude_tolerance", -1e-3),
         ("extended_stabilizer_amplitude_tolerance", 1.0),
         ("extended_stabilizer_amplitude_tolerance", float("nan")),
+        ("extended_stabilizer_amplitude_tolerance", float("inf")),
         ("extended_stabilizer_max_components", 0),
+        ("extended_stabilizer_approximation_error", 0.0),
+        ("extended_stabilizer_approximation_error", -0.1),
+        ("extended_stabilizer_approximation_error", 1.5),
+        ("extended_stabilizer_approximation_error", float("nan")),
+        ("extended_stabilizer_sampling_method", "gibbs"),
+        ("extended_stabilizer_metropolis_mixing_time", 0),
+        ("extended_stabilizer_metropolis_mixing_time", 2**31),
+        ("extended_stabilizer_norm_estimation_samples", 0),
+        ("extended_stabilizer_norm_estimation_repetitions", 0),
     ])
     def test_rejects_invalid_value(self, field, value):
         with pytest.raises(ValueError, match=field):
@@ -1330,6 +1377,82 @@ measure q[0] -> c[0];
         assert maestro.SimulatorConfig(simulation_type=maestro.SimulationType.ExtendedStabilizer,
                                        extended_stabilizer_amplitude_tolerance=1e-3,
                                        optimization_candidates=qcsim).extended_stabilizer_amplitude_tolerance == 1e-3
+        # A candidate list replaces the requested pair: requested on Aer, but
+        # only QCSim's extended stabilizer can run, so the pruning applies.
+        assert maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QiskitAer,
+                                       simulation_type=maestro.SimulationType.ExtendedStabilizer,
+                                       extended_stabilizer_max_components=64,
+                                       optimization_candidates=qcsim).extended_stabilizer_max_components == 64
+        # A fixed backend ignores its candidates.
+        assert maestro.SimulatorConfig(simulation_type=maestro.SimulationType.ExtendedStabilizer, fixed_backend=True,
+                                       extended_stabilizer_max_components=64,
+                                       optimization_candidates=aer).extended_stabilizer_max_components == 64
+
+
+class TestAerExtendedStabilizerSettings:
+    """Qiskit Aer's extended stabilizer has its own settings, under Aer's names:
+    the error bound of its sampled decomposition and how it samples outcomes.
+    Each backend ignores the other's, so a configuration that may run the other
+    one's extended stabilizer is refused."""
+
+    AER_SETTINGS = {
+        "extended_stabilizer_approximation_error": 0.04,
+        "extended_stabilizer_sampling_method": "metropolis",
+        "extended_stabilizer_metropolis_mixing_time": 100,
+        "extended_stabilizer_norm_estimation_samples": 40,
+        "extended_stabilizer_norm_estimation_repetitions": 2,
+    }
+
+    @pytest.mark.parametrize("field", list(AER_SETTINGS))
+    def test_qcsim_extended_stabilizer_refuses_aers_settings(self, field):
+        extended = maestro.SimulationType.ExtendedStabilizer
+        with pytest.raises(ValueError, match="Aer extended stabilizer only"):
+            maestro.SimulatorConfig(simulation_type=extended, **{field: self.AER_SETTINGS[field]})
+        # As a candidate that selection may run, too.
+        qcsim = [(maestro.SimulatorType.QCSim, extended)]
+        with pytest.raises(ValueError, match="Aer extended stabilizer only"):
+            maestro.SimulatorConfig(optimization_candidates=qcsim, **{field: self.AER_SETTINGS[field]})
+        config = maestro.SimulatorConfig(simulation_type=extended)
+        with pytest.raises(ValueError, match="Aer extended stabilizer only"):
+            setattr(config, field, self.AER_SETTINGS[field])
+        assert getattr(config, field) is None
+        # Where the QCSim extended stabilizer cannot run, the setting is kept
+        # and ignored, as other method-specific fields are.
+        assert getattr(maestro.SimulatorConfig(**{field: self.AER_SETTINGS[field]}), field) == self.AER_SETTINGS[field]
+
+    @pytest.mark.skipif(not hasattr(maestro.SimulatorType, "QiskitAer"), reason="built without Aer")
+    def test_a_list_with_both_extended_stabilizers_takes_neither_family(self):
+        extended = maestro.SimulationType.ExtendedStabilizer
+        both = [(maestro.SimulatorType.QCSim, extended), (maestro.SimulatorType.QiskitAer, extended)]
+        assert maestro.SimulatorConfig(simulation_type=extended, optimization_candidates=both).optimization_candidates == both
+        with pytest.raises(ValueError, match="takes neither"):
+            maestro.SimulatorConfig(simulation_type=extended, optimization_candidates=both,
+                                    extended_stabilizer_amplitude_tolerance=1e-3)
+        with pytest.raises(ValueError, match="takes neither"):
+            maestro.SimulatorConfig(simulation_type=extended, optimization_candidates=both,
+                                    extended_stabilizer_approximation_error=0.1)
+
+    @pytest.mark.skipif(not hasattr(maestro.SimulatorType, "QiskitAer"), reason="built without Aer")
+    @pytest.mark.parametrize("sampling", [
+        {"extended_stabilizer_sampling_method": "metropolis", "extended_stabilizer_metropolis_mixing_time": 100},
+        {"extended_stabilizer_sampling_method": "resampled_metropolis", "extended_stabilizer_metropolis_mixing_time": 100},
+        {"extended_stabilizer_sampling_method": "norm_estimation", "extended_stabilizer_norm_estimation_samples": 40,
+         "extended_stabilizer_norm_estimation_repetitions": 2},
+    ])
+    def test_aer_runs_under_its_settings(self, sampling):
+        # h t h |0> gives 1 with probability sin^2(pi/8) = 0.146: 29 of 200,
+        # standard deviation 5. The mixing time and the norm estimates are cut
+        # to keep the test short (Aer's default walks 5000 steps for a sample).
+        qasm = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\ncreg c[1];\nh q[0];\nt q[0];\nh q[0];\nmeasure q[0] -> c[0];\n'
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QiskitAer,
+            simulation_type=maestro.SimulationType.ExtendedStabilizer,
+            fixed_backend=True, seed=7, extended_stabilizer_approximation_error=0.04, **sampling)
+        result = maestro.simple_execute(qasm, shots=200, config=config)
+        assert result['simulator'] == maestro.SimulatorType.QiskitAer.value
+        assert result['method'] == maestro.SimulationType.ExtendedStabilizer.value
+        assert sum(result['counts'].values()) == 200
+        assert 8 < result['counts'].get('1', 0) < 60
 
 
 class TestSimulatorTypeIsHonored:
@@ -5928,6 +6051,11 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "path_integral_threshold": 1e-9,
     "extended_stabilizer_amplitude_tolerance": 1e-4,
     "extended_stabilizer_max_components": 4096,
+    "extended_stabilizer_approximation_error": 0.02,
+    "extended_stabilizer_sampling_method": "norm_estimation",
+    "extended_stabilizer_metropolis_mixing_time": 700,
+    "extended_stabilizer_norm_estimation_samples": 50,
+    "extended_stabilizer_norm_estimation_repetitions": 5,
     "gate_fusion": False,
     "enable_causal_cone_reduction": False,
     "enable_observable_clustering": False,
@@ -5967,6 +6095,7 @@ class TestSimulatorConfigFields:
         ("mpo_kraus_completeness_check", "loud"),
         ("mps_routing_strategy", "typo"),
         ("mps_routing_strategy", "current"),
+        ("extended_stabilizer_sampling_method", "gibbs"),
     ]
 
     def test_constructor_is_keyword_only(self):

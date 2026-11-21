@@ -136,6 +136,9 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     // Exact channels on the propagator are exact only while no term is dropped.
     if (TruncatesPauliTerms(config, qubits))
         result.approximations.emplace_back("Pauli_truncation");
+    // A pruned extended stabilizer drops components of the state.
+    if (PrunesExtendedStabilizer(config))
+        result.approximations.emplace_back("extended_stabilizer_pruning");
 }
 
 inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits)

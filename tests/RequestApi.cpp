@@ -20,6 +20,7 @@ void TestFrameCountPolicy();
 void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestPauliTuningForwarding();
+void TestExtendedStabilizerConfiguration();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
 void TestNetworkSimulatorPlaceholders();
@@ -1278,6 +1279,7 @@ try
     TestFusionMetadata();
     TestPauliPropagatorDedupDefault();
     TestPauliTuningForwarding();
+    TestExtendedStabilizerConfiguration();
     TestAutomaticGpuMixedStateFallback();
 
     std::cout << "Native request API: " << checks << " checks passed\n";

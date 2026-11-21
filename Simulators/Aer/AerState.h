@@ -232,6 +232,10 @@ class AerState : public ISimulator
             configuration.SetConfiguration("precision", precision);
             return;
         }
+        // Aer reads the extended stabilizer's settings itself, and the catch
+        // below would drop a value it cannot read without a word. Checked
+        // here, a bad value is an error, as it is on the QCSim simulator.
+        ExtendedStabilizerConfig::Validate(key, value);
         if (std::string("seed") != key && configuration.WasApplied(key, value) && state->is_initialized())
             return;
 
@@ -268,6 +272,14 @@ class AerState : public ISimulator
 
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
+
+        // Aer hands its settings to a state when it creates it. An extended
+        // stabilizer that exists takes them now, so that a setting made after
+        // Initialize holds from here on, as it does on the QCSim simulator.
+        // (The size of the decomposition is fixed by the first non-Clifford
+        // gate: an approximation error set after it waits for the next state.)
+        if (simulationType == SimulationType::kExtendedStabilizer && ExtendedStabilizerConfig::IsAerKey(key) && state->is_initialized())
+            state->refresh_extended_stabilizer_config();
 
         if (std::string("seed") == key)
         {

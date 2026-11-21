@@ -99,6 +99,8 @@ inline json::object OptionCapability(const Option &option)
         choices = &KrausCompletenessChecks();
     else if (name == "mps_svd_solver" || name == "mpo_svd_solver" || name == "tensor_network_svd_solver")
         choices = &SvdSolvers();
+    else if (name == "extended_stabilizer_sampling_method")
+        choices = &Simulators::ExtendedStabilizerConfig::SamplingMethods();
     if (choices)
     {
         json::array values;
@@ -133,6 +135,16 @@ inline json::object OptionCapability(const Option &option)
         result["maximum"] = 1024;
     if (name == "extended_stabilizer_amplitude_tolerance")
         result["exclusiveMaximum"] = 1;
+    // Aer's own defaults, which an omitted option keeps.
+    if (name == "extended_stabilizer_approximation_error")
+        result["default"] = 0.05;
+    if (name == "extended_stabilizer_sampling_method")
+        result["default"] = "resampled_metropolis";
+    if (Simulators::ExtendedStabilizerConfig::IsAerCountKey(name))
+    {
+        result["maximum"] = INT_MAX;
+        result["default"] = name == "extended_stabilizer_metropolis_mixing_time" ? 5000 : name == "extended_stabilizer_norm_estimation_samples" ? 100 : 3;
+    }
     if (name == "pp_workers")
         result["constraints"] = json::array{json::object{{"backend", "gpu"}, {"minimum", 1}, {"maximum", 64}}};
     if (name == "pp_max_fused_gates")
