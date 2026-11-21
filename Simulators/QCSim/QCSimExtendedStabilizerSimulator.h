@@ -728,7 +728,8 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     std::unique_ptr<Simulators::QCSimExtendedStabilizer> extendedStabilizer;
     // The policy of the configuration, kept so that RestoreState compares it
     // without parsing. Configure is the only writer of the two settings.
-    QC::ExtendedStabilizerApproximationPolicy pruningPolicy;
+    // Exact until one of them is set.
+    QC::ExtendedStabilizerApproximationPolicy pruningPolicy = QC::ExtendedStabilizerApproximationPolicy::Exact();
 };
 } // namespace Simulators::Private
 #endif
