@@ -755,10 +755,6 @@ if(COMPILE_TESTS)
         target_link_libraries(tensor_contraction_tests PRIVATE OpenMP::OpenMP_CXX)
     endif()
     add_test(NAME tensor_contractions COMMAND tensor_contraction_tests)
-    if(WIN32 AND NOT Boost_USE_STATIC_LIBS)
-        string(REPLACE ";" "\\;" tensor_test_path "$<TARGET_FILE_DIR:Boost::serialization>;$ENV{PATH}")
-        set_tests_properties(tensor_contractions PROPERTIES ENVIRONMENT "PATH=${tensor_test_path}")
-    endif()
 
     set(TESTSSRC
         tests/AerTests.cpp
@@ -794,6 +790,7 @@ if(COMPILE_TESTS)
         tests/ExtStabTests.cpp
         tests/MPSSwapsOptTests.cpp
         tests/NoiseModelTests.cpp
+        tests/NoiseSimsVsDM.cpp
         tests/PathIntegralTests.cpp
         tests/NetwSimTests.cpp
         tests/FusionNetwTests.cpp
@@ -815,6 +812,7 @@ if(COMPILE_TESTS)
     endif()
 
     add_executable(tests ${ACTIVE_TESTSSRC})
+    target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     # Use libmaestro's factory implementation. Compiling it into this executable
     # as well duplicates Aer's non-inline globals; ELF symbol interposition then
     # registers two destructors for the same object and aborts at process exit.
@@ -824,6 +822,11 @@ if(COMPILE_TESTS)
     add_dependencies(tests maestro)
     # Check the process exit status, after Boost.Test reports its assertions.
     add_test(NAME tests_shutdown COMMAND tests --run_test=main_tests)
+    add_test(NAME noise_sims_vs_dm COMMAND tests --run_test=noise_sims_vs_dm)
+    if(WIN32 AND NOT Boost_USE_STATIC_LIBS)
+        string(REPLACE ";" "\\;" boost_test_path "$<TARGET_FILE_DIR:Boost::serialization>;$ENV{PATH}")
+        set_tests_properties(tensor_contractions noise_sims_vs_dm PROPERTIES ENVIRONMENT "PATH=${boost_test_path}")
+    endif()
     if(MSVC AND NOT Boost_USE_STATIC_LIBS)
         # Tests.cpp supplies the Boost.Test implementation. Import only the
         # serialization DLL, not the test framework, in the other test files.
@@ -871,7 +874,7 @@ if(COMPILE_TESTS)
 
     # Focused reuse of the mixed-state/noise suites for iteration without
     # rebuilding the full simulator test executable. The same cases remain in tests.
-    add_executable(mixed_state_noise_tests EXCLUDE_FROM_ALL tests/Tests.cpp tests/NoiseModelTests.cpp
+    add_executable(mixed_state_noise_tests EXCLUDE_FROM_ALL tests/Tests.cpp tests/NoiseModelTests.cpp tests/NoiseSimsVsDM.cpp
         tests/QCSimDensityMatrixTests.cpp tests/QCSimMPOTests.cpp)
     if(QAER)
         target_sources(mixed_state_noise_tests PRIVATE tests/AerTests.cpp)
