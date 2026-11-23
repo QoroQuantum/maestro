@@ -1724,6 +1724,35 @@ def test_a_damping_of_zero_is_a_gate():
     assert len(Q.generalized_amplitude_damping(0.3, 0.4).kraus_operators) == 4
 
 
+@pytest.mark.parametrize("method,width,cap", [("matrix_product_state", 12, 2), ("matrix_product_operator", 6, 4)])
+def test_checkpoint_batch_honors_tensor_routing(method, width, cap):
+    # Along this path a single CZ crosses each cut. The state fits at bond two
+    # (four for its density operator), so undoing the prefix must recover zero.
+    path = (4, 2, 1, 0, 5, 3)
+    cz = [{"name": "cz", "qubits": [path[i], path[i + 1]]}
+          for parity in (0, 1) for i in range(parity, len(path) - 1, 2)]
+
+    def rotations(sign):
+        return [{"name": "ry", "qubits": [q], "params": [sign * (1.2 + 0.1 * q)]} for q in range(len(path))]
+
+    def circuit(source):
+        return {"format": "instructions", "num_qubits": width, "num_clbits": 1, "source": source}
+
+    options = {"max_bond_dimension": cap, "gate_fusion": False}
+    request = {"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit(rotations(1) + cz),
+               "suffixes": [circuit(cz[::-1] + rotations(-1) + [{"name": "measure", "qubits": [0], "clbits": [0]}])],
+               "simulator": {"backend": "qcsim", "method": method, "selection": "fixed", "options": options},
+               "execution": {"shots": 128, "seed": 3}}
+    routed = _native_request(request)
+    assert routed["ok"], routed
+    assert routed["results"][0]["counts"] == {"0": 128}
+
+    options["disable_optimized_swapping"] = True
+    disabled = _native_request(request)
+    assert disabled["ok"], disabled
+    assert disabled["results"][0]["counts"].get("1", 0) > 0
+
+
 def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
     """A prefix runs once. PrefixCheckpointedSimulator and a checkpoint_batch request take the same
     resets, measurements and channel instructions in it, refuse the same ones, and prepare the same state."""

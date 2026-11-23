@@ -1269,6 +1269,10 @@ existing behavior. GPU routing is unchanged.
 The same optional field is available on Python `SimulatorConfig`; `None`
 retains a native request value or the default. Direct simulator callers retain
 native routing until the network explicitly resolves automatic lookahead.
+For `checkpoint_batch` and Python's `PrefixCheckpointedSimulator`, the
+network chooses the initial layout before executing the prefix. Each suffix
+uses the saved layout and resolves lookahead for its own gates.
+`disable_optimized_swapping=true` disables both the initial layout search and lookahead.
 At finite bond caps, routing can change truncation error as well as runtime.
 The combined policy has measured MPS and MPO accuracy regressions, including a
 noisy MPO case that is also about 70% slower than legacy. It is therefore opt-in;
