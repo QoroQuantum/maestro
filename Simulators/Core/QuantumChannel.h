@@ -902,9 +902,20 @@ class QuantumChannel
         const double discriminant = std::hypot(a - c, 2.0 * coherenceMultiplier);
         const double lambdaPlus = 0.5 * (a + c + discriminant);
         const double lambdaMinus = std::max(0.0, 0.5 * (a + c - discriminant));
-        const double angle = 0.5 * std::atan2(2.0 * coherenceMultiplier, a - c);
-        const double cosine = std::cos(angle);
-        const double sine = std::sin(angle);
+        double cosine, sine;
+        if (a == c && coherenceMultiplier > 0.0)
+        {
+            // The two eigenvectors have exactly equal-magnitude entries. A one-ulp
+            // difference between sin(pi/4) and cos(pi/4) would introduce a spurious
+            // non-Pauli component into the Kraus operators of a balanced relaxation.
+            cosine = sine = std::sqrt(0.5);
+        }
+        else
+        {
+            const double angle = 0.5 * std::atan2(2.0 * coherenceMultiplier, a - c);
+            cosine = std::cos(angle);
+            sine = std::sin(angle);
+        }
 
         KrausOperators kraus;
         if (lambdaPlus > kZeroTolerance)
