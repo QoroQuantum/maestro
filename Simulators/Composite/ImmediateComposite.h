@@ -1622,7 +1622,7 @@ class ImmediateCompositeSimulator : public ISimulator
         // Aer returns independent samples in draw order. Pairing rows by index preserves the
         // product distribution of the components and the joint distribution within each one.
         // Keep only a bounded batch, even when a shot spans many machine words.
-        using Key = typename decltype(result)::key_type;
+        using Key = typename Utils::Sampling::Counts<Many>::key_type;
         const size_t bytesPerRow = sizeof(Key) + (qubits.size() + 7) / 8;
         const size_t capacity = std::min({shots, size_t{1024}, std::max(size_t{1}, (size_t{1} << 20) / bytesPerRow)});
         std::vector<Key> joint(capacity);
