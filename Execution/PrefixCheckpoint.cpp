@@ -97,13 +97,18 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
         if (!simulator_)
             throw std::runtime_error("PrefixCheckpointedSimulator: requested simulator/simulation type is not available.");
         network_->GetController()->SetOptimizeCircuit(false);
-        network_->SetInitialQubitsMapOptimization(false);
-        network_->SetMPSOptimizeSwaps(false);
         if (config_.seed)
             simulator_->SetSeed(*config_.seed);
         Circuits::OperationState state(num_qubits_);
+        const bool route_prefix = network_->PrepareCheckpointRouting(simulator_, executed_prefix, true);
+        if (route_prefix)
+            simulator_->SetUpcomingGates(executed_prefix->GetOperations());
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
+        // Saves and worker clones need the final site map, but every suffix
+        // provides its own gates. Drop the finished prefix's routing window.
+        if (route_prefix)
+            simulator_->SetUpcomingGates({});
         simulator_->SaveState();
         // A prefix with resets, or with measurements other than its end ones,
         // collapsed once here, so every suffix shot shares that branch: frames,
@@ -225,6 +230,10 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
                                    size_t batch_shots, size_t first_shot, std::optional<uint64_t> seed, Circuits::Circuit<>::ExecuteResults &counts,
                                    size_t &max_bond) {
         state.Reset();
+        // Resolve lookahead for this realization's gates. Restoring then recovers
+        // the prefix's tensors and site map; each sampling path binds its own
+        // execution window and starts its gate counter at zero.
+        network_->PrepareCheckpointRouting(simulator, circuit, false);
         simulator->RestoreState();
         // A suffix begins in an arbitrary saved state: even its first reset
         // may branch on a pure-state backend, so CanSampleTerminal sends any

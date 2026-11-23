@@ -1251,6 +1251,15 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     {
         return 0;
     }
+
+    // Plan lookahead for the segment executed on this checkpoint register.
+    // Only a fresh register may take a new logical-to-physical layout. A true
+    // result asks the caller to bind the actual operations before execution.
+    virtual bool PrepareCheckpointRouting(const std::shared_ptr<Simulators::ISimulator> &, const std::shared_ptr<Circuits::Circuit<Time>> &,
+                                          bool /*freshRegister*/) const
+    {
+        return false;
+    }
 };
 
 } // namespace Network

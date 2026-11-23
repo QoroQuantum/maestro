@@ -15,8 +15,9 @@ class PrefixCheckpoint
   public:
     // Executes prefix (which may be null) once on a register of num_qubits
     // qubits, or of the prefix's width when num_qubits <= 0, and saves the
-    // state. The register is fixed: circuit optimization, initial MPS mapping
-    // and swap optimization are off, so suffix qubits keep their indices.
+    // state. The logical register is fixed. MPS/MPO can place the fresh
+    // prefix register and route each suffix from its restored physical map
+    // according to the configured swap optimization.
     // The prefix runs without its end measurements (ExecutedCheckpointPrefix):
     // only suffixes are sampled, and those measurements would collapse the
     // saved state once for every suffix shot. A measurement that later
