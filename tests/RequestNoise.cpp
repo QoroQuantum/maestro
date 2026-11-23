@@ -1445,11 +1445,11 @@ void TestLegacyCountsPolicy()
     Near(estimate("{}"), 0.);
     Near(std::abs(estimate(R"({"terminal_channel_policy":"trajectories","seed":9})")), 1.);
     Near(estimate("{}"), 0.);
-    program.emplace_back(j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"memory", j::array{0}}});
+    program.emplace_back(j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{1}}});
     const auto measured = Native(SimpleExecute(fresh.handle, j::serialize(program).c_str(), R"({"shots":512,"seed":9})"));
     const auto &histogram = measured.at("counts").as_object();
     const double decayed = Real(histogram.at("00"));
-    Check(decayed + Real(histogram.at("10")) == 512 && std::abs(decayed / 512 - 0.5) < 0.1,
+    Check(decayed + Real(histogram.at("01")) == 512 && std::abs(decayed / 512 - 0.5) < 0.1,
           "Legacy channel sampler lost the damped population or the handle's output width");
     program[1].as_object()["factors"] = j::array{};
     Check(!SimpleExecute(fresh.handle, j::serialize(program).c_str(), "{}"), "Legacy execution accepted an empty channel");
