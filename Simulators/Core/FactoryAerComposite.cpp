@@ -71,4 +71,18 @@ std::unique_ptr<ISimulator> CreateImmediateCompositeSimulator(SimulatorType type
     return std::make_unique<Private::ImmediateCompositeSimulator>(type);
 }
 
+std::unordered_map<std::vector<bool>, Types::qubit_t> SamplePreparedStatevector(ISimulator &simulator, const Types::qubits_vector &qubits, size_t shots)
+{
+#ifndef NO_QISKIT_AER
+    if (simulator.GetType() == SimulatorType::kCompositeQiskitAer)
+    {
+        if (auto *composite = dynamic_cast<Private::CompositeSimulator *>(&simulator))
+            return composite->SampleAerComponents(qubits, shots);
+        if (auto *immediate = dynamic_cast<Private::ImmediateCompositeSimulator *>(&simulator))
+            return immediate->SampleAerComponents<true>(qubits, shots);
+    }
+#endif
+    return simulator.SampleCountsMany(qubits, shots);
+}
+
 } // namespace Simulators::FactoryBackends

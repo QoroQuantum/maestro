@@ -202,9 +202,18 @@ class QiskitAerState : public AER::AerState
 
     std::unordered_map<std::vector<bool>, uint_t> sample_counts_many(const reg_t &qubits, uint_t shots)
     {
+        std::unordered_map<std::vector<bool>, uint_t> counts;
+        for_each_sample(qubits, shots, [&](size_t, const std::vector<bool> &bits) { ++counts[bits]; });
+        return counts;
+    }
+
+    // The individual rows let a composite pair independent component samples by shot index, without
+    // copying their states or packing a global qubit number into a machine word.
+    template <class Consumer> void for_each_sample(const reg_t &qubits, uint_t shots, Consumer &&consume)
+    {
         const auto &state = get_state();
         if (!state)
-            return {};
+            return;
 
         flush_ops();
 
@@ -217,24 +226,23 @@ class QiskitAerState : public AER::AerState
         // across backends we sort the qubits ourselves and then remap the
         // bits back to the caller-requested order.
         reg_t sorted_qubits = qubits;
-        std::vector<size_t> order(qubits.size());
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&qubits](size_t a, size_t b) { return qubits[a] < qubits[b]; });
-        for (size_t i = 0; i < qubits.size(); ++i)
-            sorted_qubits[i] = qubits[order[i]];
+        std::sort(sorted_qubits.begin(), sorted_qubits.end());
+        sorted_qubits.erase(std::unique(sorted_qubits.begin(), sorted_qubits.end()), sorted_qubits.end());
+        reg_t positions;
+        positions.reserve(qubits.size());
+        for (const auto q : qubits)
+            positions.push_back(std::lower_bound(sorted_qubits.begin(), sorted_qubits.end(), q) - sorted_qubits.begin());
 
-        std::vector<AER::SampleVector> samples = state->sample_measure(sorted_qubits, shots, fakeState->rng_);
-        std::unordered_map<std::vector<bool>, uint_t> ret;
-
+        const auto samples = state->sample_measure(sorted_qubits, shots, fakeState->rng_);
+        if (samples.size() != shots)
+            throw std::runtime_error("Aer returned an incomplete sample");
         std::vector<bool> bitstring(qubits.size());
-        for (const auto &sample : samples)
+        for (size_t shot = 0; shot < samples.size(); ++shot)
         {
             for (size_t i = 0; i < qubits.size(); ++i)
-                bitstring[order[i]] = sample[i] == 1;
-
-            ++ret[bitstring];
+                bitstring[i] = samples[shot][positions[i]] == 1;
+            consume(shot, bitstring);
         }
-        return ret;
     }
 };
 

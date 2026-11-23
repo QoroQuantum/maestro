@@ -560,8 +560,9 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
      * of the channel is realized the cheapest way that is exact: a Pauli or
      * unitary mixture is drawn without reading the state, and a relaxation or
      * general Kraus factor takes one Kraus operator with the probability the
-     * state gives it, read in a single pass from the reduced density matrix
-     * of its targets, and leaves the state normalized. Branches come from the
+     * state gives it. QCSim reads the target populations when they suffice
+     * and otherwise reads the local density matrix. The chosen operator
+     * leaves the state normalized. Branches come from the
      * channel stream (ChannelUniform), which SetSeed seeds.
      */
     void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
@@ -662,6 +663,19 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     {
         RequireBasisState(outcome);
         return state->getBasisStateProbability(static_cast<size_t>(outcome));
+    }
+
+    std::vector<double> MarginalProbabilities(const Types::qubits_vector &qubits) override
+    {
+        if (qubits.empty() || qubits.size() > 3)
+            return QCSimGateSimulator::MarginalProbabilities(qubits);
+        RequireMarginalQubits(qubits);
+        const auto values = [](const auto &weights) { return std::vector<double>(weights.begin(), weights.end()); };
+        if (qubits.size() == 1)
+            return values(state->LocalPopulations(qubits[0]));
+        if (qubits.size() == 2)
+            return values(state->LocalPopulations(qubits[0], qubits[1]));
+        return values(state->LocalPopulations(qubits[0], qubits[1], qubits[2]));
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override

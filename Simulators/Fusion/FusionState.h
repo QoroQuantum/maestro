@@ -1396,6 +1396,35 @@ class FusionState : public ISimulator
     // Fixed capacity: the algebra of a block allocates nothing.
     using Local = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor, 8, 8>;
 
+    // A thermal Kraus operator (including a reset) has at most one nonzero element per
+    // row. Its output populations depend only on input populations. The same holds for
+    // diagonal and permutation gates up to the last draw. Still apply the resolved
+    // product to the full state, preserving coherences and entanglement.
+    Local TrajectoryInput(const TrajectoryBlock &block)
+    {
+        bool beforeDraw = false;
+        for (auto it = block.steps.rbegin(); it != block.steps.rend(); ++it)
+        {
+            if (it->unitary.size() == 0)
+            {
+                if (it->channel && it->channel->GetFactors()[it->factor].kind != QuantumChannel::FactorKind::kThermal)
+                    return immediate_->LocalDensityMatrix(block.targets);
+                beforeDraw = true;
+            }
+            else if (beforeDraw)
+            {
+                for (Eigen::Index row = 0; row < it->unitary.rows(); ++row)
+                    if ((it->unitary.row(row).array() != std::complex<double>{}).count() > 1)
+                        return immediate_->LocalDensityMatrix(block.targets);
+            }
+        }
+        const auto populations = immediate_->MarginalProbabilities(block.targets);
+        const auto dimension = static_cast<Eigen::Index>(populations.size());
+        Local rho = Local::Zero(dimension, dimension);
+        rho.diagonal() = Eigen::Map<const Eigen::VectorXd>(populations.data(), dimension);
+        return rho;
+    }
+
     // Every operator of the block acts on its targets only, so the reduced
     // density matrix of the targets before the block gives the probability of
     // every branch. The steps are walked on that small matrix, each channel
@@ -1410,7 +1439,7 @@ class FusionState : public ISimulator
             InvalidatePlan();
         if (ResolveWithoutReading(block))
             return;
-        Local rho = immediate_->LocalDensityMatrix(block.targets);
+        Local rho = TrajectoryInput(block);
         if (stateNormSq_ != 1.)
             rho /= stateNormSq_;
         Local product = WalkTrajectoryBlock(block, rho);

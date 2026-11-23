@@ -1,5 +1,6 @@
 #include "Sampling.h"
 #include "ReferenceFrameSampler.h"
+#include "SampleRecords.h"
 #include "SimulatorConfig.h"
 #include "Transforms/ConeAnalysis.h"
 #include "Json/Json.h"
@@ -396,6 +397,22 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
             result.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
             return result;
         }
+    }
+    if (auto sampled = SampleTerminalChannels(circuit, config, shots, false))
+    {
+        SamplingResult result;
+        result.counts.reserve(sampled->counts.size());
+        for (auto &[bits, count] : sampled->counts)
+            result.counts.emplace(std::move(bits), count);
+        result.components = sampled->components;
+        result.largest_component = sampled->largest_component;
+        result.simulator = sampled->simulator;
+        result.method = sampled->method;
+        result.gate_fusion = sampled->gate_fusion;
+        result.gate_fusion_max_qubits = sampled->gate_fusion_max_qubits;
+        result.time_taken = sampled->time_taken;
+        result.sampling_strategy = std::move(sampled->sampling_strategy);
+        return result;
     }
     GetMaestroObjectWithMute();
     const auto width = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);

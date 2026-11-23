@@ -55,10 +55,12 @@ positive count is honored (execution caps it at `shots`). Noisy estimates also
 compute an ideal baseline. {doc}`/examples/noise-modes` compares the analytical
 and Monte Carlo modes on one circuit.
 
-The statevector and the matrix product state draw the noise that depends on the
-state as each shot runs (see {ref}`py_noise_sampled_channels`). With such noise
-every shot is a realization of its own, and `noise_realizations` reports the
-shot count whatever was requested.
+The statevector and the matrix product state can draw state-dependent noise as
+each shot runs. For independent runtime noise, `noise_realizations` reports the
+shot count. QCSim and Qiskit Aer statevectors, including their composite
+simulators, can also average a final channel layer when estimating observables
+or sample its measurement statistics from one prepared state
+(see {ref}`py_noise_sampled_channels`).
 
 (py_noise_model)=
 ## Building a noise model
@@ -301,8 +303,24 @@ and for the composite statevector, in the execute and estimate functions,
   identity: a Kraus operator that is zero is no branch. A circuit whose channels are all of that
   kind evolves once for all its shots, an estimate of it is one evolution, and
   the shots of a realization share it.
-- **Statevector.** One pass over the state gives the reduced density matrix of
-  a channel's qubits, and with it the probability of every operator. With gate
+- **Terminal noise on QCSim and Qiskit Aer statevectors.** In automatic estimation,
+  Maestro can apply the final channels' adjoints to a Pauli observable and
+  evaluate the resulting Pauli sum on the preceding state. For example, a
+  final T1 decay with probability `p` gives ⟨Z⟩ after decay as
+  `(1 - p) * ⟨Z⟩ + p`. This removes the sampling error from that layer.
+  Earlier stochastic evolution still contributes trajectory variance. If the
+  Pauli expansion becomes too large, Maestro uses the ordinary trajectory.
+  For terminal computational-basis measurements after a deterministic prefix,
+  Maestro can sample joint populations once and apply eligible final channels
+  to the resulting counts. T1 changes these counts, while pure dephasing
+  leaves them unchanged. This preserves correlations with unmeasured channel
+  targets and other measured qubits. Counts and shot rows retain shot noise.
+  Composite statevectors evaluate the prefix on its entangled components.
+  Errors drawn when preparing a realization keep their shared draw across shots.
+- **QCSim statevector trajectories.** For amplitude damping and other Kraus
+  operators with at most one nonzero entry per row, a pass over the state gives
+  the target populations needed to choose the branch. A general operator can
+  also depend on coherences and uses the local density matrix. With gate
   fusion, a block of gates and channels on up to three qubits is resolved from
   one such read and applied as one matrix. Where the channels of a block most
   probably do nothing, the block is applied first and the norm of the result
@@ -311,7 +329,9 @@ and for the composite statevector, in the execute and estimate functions,
   that is not unitary, applied through a simulator handle, blocks are read
   first.
 - **Qiskit Aer.** Aer draws the branches that need the state itself, from the
-  stream that also draws its measurement outcomes. Adding such a channel to a
+  stream that also draws its measurement outcomes. Maestro keeps these Kraus
+  instructions in Aer's native operation buffer. A two-target Kraus family
+  with an identity spectator can use a one-qubit instruction. Adding a channel to a
   seeded circuit therefore changes the outcomes of the measurements after it,
   where on the QCSim methods the branches have a stream of their own and the
   measurements around a channel keep theirs. The statistics are the same.
@@ -344,7 +364,9 @@ and for the composite statevector, in the execute and estimate functions,
   the operator; smaller registers run as listed). Circuits that need routing
   run as listed.
 - **Composite statevector.** A one-qubit channel is drawn in the component that
-  holds its qubit; only a two-qubit unitary or Kraus branch joins components.
+  holds its qubit. When a two-qubit Kraus set acts as the identity on one
+  target, Maestro also applies it within the active component. A two-qubit
+  operation that couples the components joins them.
 
 The remaining pure-state methods neither hold nor sample channels. A noise
 realization draws for them every channel whose branches need no state (a
@@ -381,8 +403,9 @@ for method in ["DensityMatrix", "Statevector"]:
 ```
 
 A mixed-state method applies each instruction exactly. The statevector and the
-matrix product state draw a branch of it in every shot, in a plain `execute` as
-under a noise model. The other pure-state methods need a noise function
+matrix product state can draw a branch of it in each shot, in a plain `execute`
+as under a noise model. Eligible final statevector measurements can use the
+joint-population sampler described above. The other pure-state methods need a noise function
 (`noisy_execute`, `full_noise_execute`), whose realizations draw the
 instruction, and accept only channels whose branches need no state. Other
 factories are `pauli`, `unitary_mixture`, `phase_damping`,

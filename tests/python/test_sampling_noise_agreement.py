@@ -736,6 +736,10 @@ def test_set_t1_differs_from_exact_damping_only_in_coherence():
     for method in (S.Statevector, S.MatrixProductState, S.TensorNetwork):
         sampled = circuit.noisy_estimate_montecarlo(["Z", "X"], model, 4000, _config(method, seed=97), noise_seed=101)
         (z, x), (ez, ex) = sampled["expectation_values"], sampled["realization_standard_errors"]
+        if method == S.Statevector:
+            assert (ez, ex) == (0.0, 0.0)
+            assert (z, x) == pytest.approx((gamma, math.sqrt(1 - gamma)), abs=1e-14, rel=0)
+            continue
         assert abs(z - gamma) <= Z_BOUND * ez, method.name
         if method != S.TensorNetwork:
             assert abs(x - math.sqrt(1 - gamma)) <= Z_BOUND * ex, method.name
@@ -2105,7 +2109,13 @@ def test_a_mixture_of_unitaries_is_drawn_into_a_gate_where_no_channel_is_sampled
             "request estimate": native_estimate["noise"]["stochastic_execution"],
             "request suffix": suffix["results"][0]["stochastic_execution"],
         }
-        assert reported == dict.fromkeys(reported, expected), f"{label} on {name}: {reported}"
+        expected_reports = dict.fromkeys(reported, expected)
+        if method == S.Statevector:
+            # Both estimators average the terminal channel on the observables.
+            expected_reports["Python estimate"] = expected_reports["request estimate"] = False
+            assert estimated["estimate_evaluation"] == "deterministic"
+            assert estimated["realization_standard_errors"] == [0.]
+        assert reported == expected_reports, f"{label} on {name}: {reported}"
         if label == "mixture":
             # The Hadamard branch, drawn in 0.4 of the realizations, sends half of the pair to odd parity.
             for where, counts in (("Python", executed["counts"]), ("request", native["counts"])):

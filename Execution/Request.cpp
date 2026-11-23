@@ -10,6 +10,7 @@
 #include "ReferenceFrameSampler.h"
 #include "SampleRecords.h"
 #include "Sampling.h"
+#include "TerminalExpectation.h"
 #include "TerminalSampling.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Json.h"
@@ -1622,6 +1623,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             options.layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             options.rows = true;
             options.exact_channels = noise.exact;
+            options.allow_terminal_channels = noise.automatic;
             auto frame_config = config;
             if (prefer_extended_frames)
                 frame_config.counts_policy = "frame_v1";
@@ -1780,7 +1782,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (!noise.thermal_approximation_warning.empty())
             std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
         std::mt19937 rng(noise.seed);
-        const size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
         std::vector<double> sums(observables.size()), squares(observables.size()), bounds(observables.size());
         size_t bounded = 0;
         EstimationResult last;
@@ -1791,6 +1792,18 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         CircuitPtr first_realization;
         const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, noise, rng, first_realization);
         RuntimeDraws draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
+        std::optional<TerminalExpectation> terminal;
+        if (!noise.enabled)
+            terminal = PrepareTerminalExpectation(circuit, observables, config);
+        else if (noise.automatic && !noise.exact && noise.mode != "analytical")
+        {
+            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            terminal = PrepareTerminalNoiseExpectation(plan, layer, runtime_circuit, observables, config);
+        }
+        const bool stochastic_prefix = terminal ? terminal->stochastic_prefix : stochastic_estimation;
+        const bool deterministic_tail = terminal && !stochastic_prefix;
+        const size_t scheduled = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_prefix ? kMeasurementTrajectories : 1;
+        const size_t realizations = deterministic_tail ? 1 : scheduled;
         size_t largest = 0, clusters = 0, total_qubits = 0, total_clusters = 0;
         double reduction_time = 0;
         bool reduced = false;
@@ -1846,6 +1859,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             }
         };
         const auto realize = [&](size_t r) {
+            if (terminal)
+                return terminal->prefix;
             const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
             draws.See(noisy);
             return noisy;
@@ -1865,7 +1880,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
                 if (cached)
                     execution_config.auto_reduce = false;
-                auto result = EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+                auto result = terminal ? EstimateTerminalExpectation(*terminal, execution_config, cached ? &worker_cache : nullptr)
+                                       : EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
                 Realization record;
                 record.values = std::move(result.values);
                 record.bounds = std::move(result.plan.error_bounds);
@@ -1925,9 +1941,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         for (auto method : last.cluster_methods)
             methods.emplace_back(MethodName(method));
         auto metadata = ReductionMetadata(last, config);
-        metadata["stochastic_execution"] = stochastic_estimation;
-        metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
-        metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
+        const bool sampled_estimate = stochastic_prefix || (!deterministic_tail && noise.policy.stochastic_noise);
+        metadata["stochastic_execution"] = stochastic_prefix;
+        metadata["measurement_trajectories"] = stochastic_prefix ? realizations : size_t{0};
+        metadata["estimate_evaluation"] = sampled_estimate ? "trajectory_average" : "deterministic";
+        if (terminal)
+            metadata["terminal_channels_averaged"] = true;
         // The workers available after the warm-up realization: an upper bound on what overlapped.
         if (noise.enabled && noise.mode != "analytical")
             metadata["realization_workers"] = concurrency;
@@ -1954,8 +1973,18 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                             {"count_order", "classical_bit_0_first"},
                             {"basis_order", "qubit_0_least_significant"}};
         if (noise.enabled)
-            result["noise"] = NoiseMetadata(noise, realizations);
-        if (realizations == 1 && (stochastic_estimation || noise.policy.stochastic_noise))
+        {
+            auto info = NoiseMetadata(noise, deterministic_tail ? noise.requested_realizations.value_or(1) : realizations);
+            if (deterministic_tail)
+            {
+                info["evaluation"] = "terminal_channels";
+                info["stochastic_noise"] = false;
+                info["stochastic_execution"] = false;
+                info["approximations"] = json::array{};
+            }
+            result["noise"] = std::move(info);
+        }
+        if (realizations == 1 && sampled_estimate)
             result["realization_standard_errors"] = nullptr;
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
@@ -2041,6 +2070,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (operation == "execute" || operation == "checkpoint_batch")
         realizations = std::min(realizations, shots);
     size_t realization_workers = 1;
+    std::optional<ShotRecords> terminal_counts;
     if (operation == "execute")
     {
         Counts counts;
@@ -2049,7 +2079,21 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // realizations (SharedRuntimeCircuit).
         CircuitPtr first_realization;
         const CircuitPtr runtime_circuit = SharedRuntimeCircuit(plan, noise, rng, first_realization);
-        if (runtime_circuit)
+        if (!noise.enabled)
+            terminal_counts = SampleTerminalChannels(circuit, config, shots, false);
+        else if (noise.automatic && !noise.exact)
+        {
+            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            terminal_counts = SampleNoisyTerminalChannels(plan, runtime_circuit, layer, config, shots, realizations, false, noise.seed);
+        }
+        if (terminal_counts)
+        {
+            for (const auto &[bits, count] : terminal_counts->counts)
+                counts[Bits(bits, input.clbits)] += count;
+            if (noise.enabled)
+                realizations = terminal_counts->realizations;
+        }
+        else if (runtime_circuit)
         {
             context.network->Configure("seed", std::to_string(RuntimeNoiseSeed(*config.seed, noise.seed)).c_str());
             for (const auto &entry : context.network->RepeatedExecuteOnHost(runtime_circuit, 0, shots))
@@ -2062,7 +2106,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // layer drawn for each), the noise seed joins those seeds too (ExecutionSeed).
         RuntimeDraws draws = DrawsChannels(plan, noise, runtime_circuit, first_realization);
         size_t workers = 1;
-        if (!runtime_circuit && realizations > 1 && RunsRealizationWorkerBackends(config))
+        if (!terminal_counts && !runtime_circuit && realizations > 1 && RunsRealizationWorkerBackends(config))
         {
             // Each worker's network maps the circuit to its own register (at most
             // the declared qubits; the network's ancilla is never allocated),
@@ -2075,7 +2119,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                                                  NetworkRealizationCopies(config, realizations != shots));
         }
         realization_workers = workers;
-        if (runtime_circuit)
+        if (terminal_counts || runtime_circuit)
         {
             // Already run, above.
         }
@@ -2541,7 +2585,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     realizations > 1 ? std::sqrt(std::max(0.0, (squares - realizations * mean * mean) / (realizations - 1) / realizations)) : 0;
         }
     }
-    result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
+    if (terminal_counts)
+    {
+        auto metadata = ReductionMetadata(*terminal_counts, config);
+        metadata["sampling_strategy"] = terminal_counts->sampling_strategy;
+        result["execution_metadata"] = std::move(metadata);
+    }
+    else
+        result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
     if (operation == "execute")
         result["execution_metadata"].as_object()["realization_workers"] = realization_workers;
     // The realizations of an estimate and of a noisy fidelity run here one after another, on the request's simulator.

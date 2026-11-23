@@ -153,6 +153,12 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
         out["realization_workers"] = result.realization_workers;
     AddNoisePolicyMetadata(out, result.policy);
     const bool stochastic = result.policy.stochastic_noise || result.policy.stochastic_execution;
+    if (result.terminal_channels)
+    {
+        out["terminal_channels_averaged"] = true;
+        if (!stochastic)
+            out["noise_evaluation"] = "terminal_channels";
+    }
     out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
     out["realization_standard_errors"] = stochastic && result.realizations < 2 ? nb::object(nb::none()) : nb::cast(result.standard_errors);
     out["auto_reduced"] = result.auto_reduced;

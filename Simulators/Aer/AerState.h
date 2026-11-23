@@ -493,25 +493,21 @@ class AerState : public ISimulator
                 throw std::invalid_argument("Quantum-channel target qubits must be distinct");
         }
 
-        const auto toAer = [](const QuantumChannel::KrausOperators &operators) {
+        // Move the converted matrices into Aer's buffered instruction. apply_kraus takes
+        // them by const reference and copies all of them again before buffering.
+        const auto bufferKraus = [this](const AER::reg_t &qubits, const QuantumChannel::KrausOperators &operators) {
             std::vector<AER::cmatrix_t> aerOperators;
             aerOperators.reserve(operators.size());
             for (const Eigen::MatrixXcd &krausOperator : operators)
-            {
-                AER::cmatrix_t aerOperator(static_cast<size_t>(krausOperator.rows()), static_cast<size_t>(krausOperator.cols()));
-                for (Eigen::Index row = 0; row < krausOperator.rows(); ++row)
-                    for (Eigen::Index column = 0; column < krausOperator.cols(); ++column)
-                        aerOperator(static_cast<size_t>(row), static_cast<size_t>(column)) = krausOperator(row, column);
-                aerOperators.emplace_back(std::move(aerOperator));
-            }
-            return aerOperators;
+                aerOperators.emplace_back(ToAerMatrix(krausOperator));
+            state->buffer_op(AER::Operations::make_kraus(qubits, std::move(aerOperators)));
         };
 
         // Both QCSim and Aer treat targets[0] as local matrix bit zero (LSB), so
         // channel target order is preserved and matrices need no permutation.
         if (!sampled)
         {
-            state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+            bufferKraus(AER::reg_t(targets.begin(), targets.end()), channel.GetKrausOperators());
             NotifyObservers(targets);
             return;
         }
@@ -541,9 +537,9 @@ class AerState : public ISimulator
         {
             const QuantumChannel reduced = channel.OnActiveQubits();
             if (reduced.GetNumberOfQubits() == targets.size())
-                state->apply_kraus(AER::reg_t(targets.begin(), targets.end()), toAer(channel.GetKrausOperators()));
+                bufferKraus(AER::reg_t(targets.begin(), targets.end()), channel.GetKrausOperators());
             else
-                state->apply_kraus(AER::reg_t{targets[channel.HomeQubit()]}, toAer(reduced.GetKrausOperators()));
+                bufferKraus({targets[channel.HomeQubit()]}, reduced.GetKrausOperators());
             NotifyObservers(targets);
             return;
         }
@@ -623,17 +619,28 @@ class AerState : public ISimulator
                     if (index + 1 < factors.size() && MergesIntoTwoQubitKraus(factor, factors[index + 1]))
                     {
                         const auto &next = factors[index + 1];
-                        state->apply_kraus(AER::reg_t{qubits[0], targets[next.qubits[0]]}, toAer(TensorKraus(factor.operators, next.operators)));
+                        state->buffer_op(AER::Operations::make_kraus({qubits[0], targets[next.qubits[0]]}, TensorKraus(factor.operators, next.operators)));
                         ++index;
                         continue;
                     }
-                    state->apply_kraus(AER::reg_t(qubits.begin(), qubits.end()), toAer(factor.operators));
+                    if (qubits.size() == 2)
+                    {
+                        // Removing an exact identity spectator preserves every branch and its ordering.
+                        const auto &part = channel.FactorChannel(index);
+                        const auto reduced = part.OnActiveQubits();
+                        if (reduced.GetNumberOfQubits() == 1)
+                        {
+                            bufferKraus({qubits[part.HomeQubit()]}, reduced.GetFactors().front().operators);
+                            continue;
+                        }
+                    }
+                    bufferKraus(AER::reg_t(qubits.begin(), qubits.end()), factor.operators);
                     continue;
                 }
                 // A relaxation with T2 <= T1: nothing, a phase flip, or a reset, which alone reads the state.
                 const double random = ChannelUniform();
                 if (random >= mixture.identity + mixture.phaseFlip)
-                    state->apply_kraus(AER::reg_t(qubits.begin(), qubits.end()), toAer(QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation)));
+                    bufferKraus(AER::reg_t(qubits.begin(), qubits.end()), QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation));
                 else if (random >= mixture.identity)
                     ApplyZ(qubits[0]);
             }
@@ -669,14 +676,14 @@ class AerState : public ISimulator
     // The Kraus operators of two one-qubit channels side by side, the first on
     // the local bit zero (LSB). The first operators lead, so the likeliest
     // branch, both qubits' leading operator, is weighed first.
-    static QuantumChannel::KrausOperators TensorKraus(const QuantumChannel::KrausOperators &low, const QuantumChannel::KrausOperators &high)
+    static std::vector<AER::cmatrix_t> TensorKraus(const QuantumChannel::KrausOperators &low, const QuantumChannel::KrausOperators &high)
     {
-        QuantumChannel::KrausOperators product;
+        std::vector<AER::cmatrix_t> product;
         product.reserve(low.size() * high.size());
         for (const auto &a : low)
             for (const auto &b : high)
             {
-                QuantumChannel::Matrix op(4, 4);
+                AER::cmatrix_t op(4, 4);
                 for (int row = 0; row < 4; ++row)
                     for (int column = 0; column < 4; ++column)
                         op(row, column) = a(row & 1, column & 1) * b(row >> 1, column >> 1);

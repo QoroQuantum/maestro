@@ -504,7 +504,13 @@ class QuantumChannel
     // Whether a matrix is a multiple of the identity, compared exactly: as a gate it changes nothing but a global phase.
     static bool IsMultipleOfIdentity(const Matrix &matrix)
     {
-        return matrix.rows() > 0 && (matrix - matrix(0, 0) * Matrix::Identity(matrix.rows(), matrix.cols())).isZero(0.0);
+        if (matrix.rows() == 0 || matrix.rows() != matrix.cols())
+            return false;
+        for (Eigen::Index column = 0; column < matrix.cols(); ++column)
+            for (Eigen::Index row = 0; row < matrix.rows(); ++row)
+                if (matrix(row, column) != (row == column ? matrix(0, 0) : std::complex<double>{}))
+                    return false;
+        return true;
     }
 
     // The targets a two-qubit unitary acts on, found exactly, for a simulator
@@ -530,7 +536,9 @@ class QuantumChannel
         if (IsMultipleOfIdentity(unitary))
             return LocalPart::kNone;
         // Identity on the second target: two equal diagonal blocks, V0, and nothing off them.
-        if (unitary.block(0, 2, 2, 2).isZero(0.0) && unitary.block(2, 0, 2, 2).isZero(0.0) && unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
+        // Eigen's complex isZero(0) squares magnitudes and can underflow for a nonzero entry.
+        if ((unitary.block(0, 2, 2, 2).array() == std::complex<double>{}).all() && (unitary.block(2, 0, 2, 2).array() == std::complex<double>{}).all() &&
+            unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
         {
             local = unitary.block(0, 0, 2, 2);
             return LocalPart::kFirst;
@@ -1463,7 +1471,7 @@ class QuantumChannel
             if (!OperatorCounts(factor, index))
                 continue;
             const Matrix &op = factor.operators[index];
-            if (op.rows() == 0 || !(op - op(0, 0) * Matrix::Identity(op.rows(), op.cols())).isZero(0.0))
+            if (!IsMultipleOfIdentity(op))
                 return false;
         }
         return !factor.operators.empty();

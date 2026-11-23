@@ -18,6 +18,14 @@ class CompositeSimulator : public FusionSimulator<FusionState>
         return childType_ == SimulatorType::kQCSim ? 3 : 0;
     }
 
+#ifndef NO_QISKIT_AER
+    auto SampleAerComponents(const Types::qubits_vector &qubits, size_t shots)
+    {
+        Flush();
+        return static_cast<ImmediateCompositeSimulator &>(*immediate_).SampleAerComponents<true>(qubits, shots);
+    }
+#endif
+
     std::unique_ptr<ISimulator> Clone() override
     {
         auto copy = std::make_unique<CompositeSimulator>(childType_);

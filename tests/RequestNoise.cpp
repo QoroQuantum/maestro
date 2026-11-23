@@ -118,6 +118,12 @@ void TestThermalApproximation()
                     Check(std::abs(Real(result.at("expectation_values").at(0)) - std::exp(-0.3)) < 0.1,
                           "Sampled thermal coherence did not follow effective T2=T1");
                 }
+                else if (name == "statevector")
+                {
+                    Check(result.at("noise").at("evaluation") == "terminal_channels" && Real(result.at("realization_standard_errors").at(0)) == 0.,
+                          "Terminal thermal channel was sampled on the dense statevector");
+                    Near(Real(result.at("expectation_values").at(0)), std::exp(-0.3 / t2));
+                }
                 else if (trajectories)
                 {
                     // Trajectories of the channel: the calibrated coherence
@@ -295,10 +301,18 @@ void TestSampledChannelRequests()
         result = Call(mean);
         Check(std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.1 && std::abs(Real(result.at("expectation_values").at(1)) + 1.0) < 1e-9,
               "A sampled Kraus instruction gave the wrong expectation values");
-        // Without a noise block an estimate averages the branches as it averages measurement branches.
+        // An explicit trajectory request still samples each branch on both backends.
+        mean["noise"].as_object()["evaluation"] = "trajectories";
+        const auto trajectories = Call(mean);
+        Check(trajectories.at("noise").at("evaluation") == "trajectories" && Real(trajectories.at("realization_standard_errors").at(0)) > 0.,
+              "The requested Kraus trajectory estimate was averaged analytically");
+        // The dense statevector can instead average a terminal instruction on
+        // the observable in a plain estimate. MPS keeps its sampled branches.
         mean.erase("noise");
         result = Call(mean);
-        Check(result.at("execution_metadata").at("stochastic_execution").as_bool() && std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.35,
+        const bool sampled = std::string_view(method) != "statevector";
+        Check(result.at("execution_metadata").at("stochastic_execution").as_bool() == sampled &&
+                  std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < (sampled ? 0.35 : 1e-12),
               "A plain estimate did not average the branches of a Kraus instruction");
 
         // In a checkpoint suffix, after a saved prefix.
@@ -765,7 +779,7 @@ void TestLoweredChannelDraws()
         request["circuit"] = circuit({hadamard, entangle, *entry.instruction});
         request["observables"] = j::array{"ZZ"};
         request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
-        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == (entry.stochastic && std::string_view(entry.method) != "statevector"),
               ("An estimated channel instruction was miscounted" + where).c_str());
 
         request = Request("checkpoint_batch", 2, "", entry.method);

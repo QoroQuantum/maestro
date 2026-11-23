@@ -21,6 +21,7 @@
 
 #include "Individual.h"
 
+#include <map>
 #include <vector>
 
 #include "../Core/Configuration.h"
@@ -557,6 +558,10 @@ class ImmediateCompositeSimulator : public ISimulator
     {
         if (type == SimulatorType::kQCSim && config.GetConfiguration("sampling_policy") != "legacy")
             return SamplePrepared<false>(qubits, shots);
+#ifndef NO_QISKIT_AER
+        if (type == SimulatorType::kQiskitAer && nrQubits > std::numeric_limits<Types::qubit_t>::digits)
+            return SampleAerComponents<false>(qubits, shots);
+#endif
         if (qubits.empty() || !shots)
             return {};
         if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
@@ -638,6 +643,10 @@ class ImmediateCompositeSimulator : public ISimulator
     {
         if (type == SimulatorType::kQCSim && config.GetConfiguration("sampling_policy") != "legacy")
             return SamplePrepared<true>(qubits, shots);
+#ifndef NO_QISKIT_AER
+        if (type == SimulatorType::kQiskitAer && nrQubits > std::numeric_limits<Types::qubit_t>::digits)
+            return SampleAerComponents<true>(qubits, shots);
+#endif
         if (qubits.empty() || !shots)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
@@ -846,7 +855,17 @@ class ImmediateCompositeSimulator : public ISimulator
                     if (qubits.size() == 1)
                         ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
                     else
-                        ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                    {
+                        // A local branch need not tensor two independent components together.
+                        Eigen::Matrix2cd local;
+                        const auto part = QuantumChannel::LocalPartOfTwoQubitUnitary(unitary, local);
+                        if (part == QuantumChannel::LocalPart::kBoth)
+                            ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                        else if (part != QuantumChannel::LocalPart::kNone)
+                            ApplyGenericOneQubitGate(qubits[part == QuantumChannel::LocalPart::kSecond], local);
+                        else if (unitary(0, 0) != 1.)
+                            ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary(0, 0) * Eigen::Matrix2cd::Identity()));
+                    }
                     continue;
                 }
                 QuantumChannel::ThermalMixture mixture;
@@ -864,9 +883,19 @@ class ImmediateCompositeSimulator : public ISimulator
                         ApplyZ(qubits[0]);
                     continue;
                 }
+                const auto &part = channel.FactorChannel(f);
                 if (qubits.size() == 2)
+                {
+                    const auto reduced = part.OnActiveQubits();
+                    if (reduced.GetNumberOfQubits() == 1)
+                    {
+                        const auto target = qubits[part.HomeQubit()];
+                        GetSimulator(target)->ApplyQuantumChannel({target}, reduced);
+                        continue;
+                    }
                     JoinIfNeeded(qubits[0], qubits[1]);
-                GetSimulator(qubits[0])->ApplyQuantumChannel(qubits, channel.FactorChannel(f));
+                }
+                GetSimulator(qubits[0])->ApplyQuantumChannel(qubits, part);
             }
         }
         catch (...)
@@ -1559,6 +1588,68 @@ class ImmediateCompositeSimulator : public ISimulator
         return config.GetConfigMap();
     }
 
+#ifndef NO_QISKIT_AER
+    template <bool Many> Utils::Sampling::Counts<Many> SampleAerComponents(const Types::qubits_vector &qubits, size_t shots)
+    {
+        Utils::Sampling::Counts<Many> result;
+        if (qubits.empty() || !shots)
+            return result;
+        Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
+
+        struct Selection
+        {
+            Types::qubits_vector qubits;
+            std::vector<size_t> positions;
+        };
+
+        std::map<size_t, Selection> selected;
+        for (size_t bit = 0; bit < qubits.size(); ++bit)
+        {
+            auto &group = selected[qubitsMap[qubits[bit]]];
+            group.qubits.push_back(qubits[bit]);
+            group.positions.push_back(bit);
+        }
+        if (selected.size() == 1)
+        {
+            auto &component = *simulators.at(selected.begin()->first);
+            if constexpr (Many)
+                result = component.SampleCountsMany(qubits, shots);
+            else
+                result = component.SampleCounts(qubits, shots);
+            NotifyObservers(qubits);
+            return result;
+        }
+        // Aer returns independent samples in draw order. Pairing rows by index preserves the
+        // product distribution of the components and the joint distribution within each one.
+        // Keep only a bounded batch, even when a shot spans many machine words.
+        using Key = typename decltype(result)::key_type;
+        const size_t bytesPerRow = sizeof(Key) + (qubits.size() + 7) / 8;
+        const size_t capacity = std::min({shots, size_t{1024}, std::max(size_t{1}, (size_t{1} << 20) / bytesPerRow)});
+        std::vector<Key> joint(capacity);
+        if constexpr (Many)
+            for (auto &row : joint)
+                row.resize(qubits.size());
+        for (size_t done = 0; done < shots;)
+        {
+            const size_t count = std::min(capacity, shots - done);
+            if constexpr (!Many)
+                std::fill_n(joint.begin(), count, Key{0});
+            for (const auto &[id, group] : selected)
+                simulators.at(id)->ForEachAerSample(group.qubits, count, [&](size_t row, const std::vector<bool> &local) {
+                    for (size_t bit = 0; bit < local.size(); ++bit)
+                        if constexpr (Many)
+                            joint[row][group.positions[bit]] = local[bit];
+                        else
+                            joint[row] |= Key(local[bit]) << group.positions[bit];
+                });
+            for (size_t row = 0; row < count; ++row)
+                ++result[joint[row]];
+            done += count;
+        }
+        NotifyObservers(qubits);
+        return result;
+    }
+#endif
   private:
     template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
     {

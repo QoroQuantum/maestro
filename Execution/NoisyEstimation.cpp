@@ -2,15 +2,255 @@
 
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "CircuitHelpers.h"
+#include "PauliTransfer.h"
+#include "TerminalChannels.h"
+#include "TerminalExpectation.h"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace MaestroExecution
 {
+namespace
+{
+using Channel = Simulators::QuantumChannel;
+using PauliTerms = std::map<std::string, double>;
+namespace Transfer = QC::PauliDetail;
+constexpr char PauliLetters[] = "IXZY"; // QCSim interleaves the X and Z bits.
+
+struct TerminalFactor
+{
+    Types::qubits_vector targets;
+    Transfer::CompiledChannel transfer;
+};
+
+Eigen::MatrixXcd PauliBasis(unsigned qubits)
+{
+    const unsigned dim = 1U << qubits, count = dim * dim;
+    Eigen::MatrixXcd basis(count, count);
+    for (unsigned p = 0; p < count; ++p)
+    {
+        const auto matrix = Transfer::LabelMatrix(p, qubits);
+        for (unsigned row = 0; row < dim; ++row)
+            for (unsigned col = 0; col < dim; ++col)
+                basis(row + dim * col, p) = matrix[row * dim + col];
+    }
+    return basis;
+}
+
+std::optional<Transfer::CompiledChannel> CompileTerminalFactor(const Channel &channel, size_t index)
+{
+    const auto &factor = channel.GetFactors()[index];
+    const auto width = static_cast<unsigned>(factor.qubits.size());
+    // The factored view of raw Kraus input can recognize a Pauli or unitary
+    // mixture within numerical tolerance. Use the original superoperator
+    // when it is available, so even a small departure from the recognized
+    // channel survives in an exact terminal expectation.
+    const bool whole = channel.GetFactors().size() == 1 && width == channel.GetNumberOfQubits() && factor.qubits.front() == 0;
+    if (factor.kind == Channel::FactorKind::kThermal)
+        return Transfer::CompileRelaxation(factor.thermal.coherence, 1.0 - factor.thermal.decay,
+                                           factor.thermal.decay * (1.0 - 2.0 * factor.thermal.excitedStatePopulation));
+    if (factor.kind == Channel::FactorKind::kPauli && (!whole || !channel.GetPauliProbabilities().empty()))
+    {
+        std::array<double, 16> probabilities{};
+        std::copy(factor.probabilities.begin(), factor.probabilities.end(), probabilities.begin());
+        Transfer::CompiledChannel transfer;
+        transfer.eigenvalues = Transfer::PauliChannelEigenvalues(probabilities, width);
+        return transfer;
+    }
+    // Change the basis of the adjoint superoperator, keeping all coefficients
+    // down to working precision. The Pauli propagator's Kraus compiler snaps
+    // small values to zero to make its propagation sparse; a tiny rotation or
+    // a rare branch is observable here even on a single qubit.
+    static const Eigen::MatrixXcd one = PauliBasis(1), two = PauliBasis(2);
+    const auto &basis = width == 1 ? one : two;
+    const Channel &source = whole ? channel : channel.FactorChannel(index);
+    const auto &operation = source.Superoperator();
+    const Eigen::MatrixXd coefficients = (basis.adjoint() * operation.adjoint() * basis).real() / (1U << width);
+    // A rounded Kraus set accepted by the public channel validator can need
+    // state-dependent renormalization. In that case leave it on the trajectory.
+    constexpr double rounding = 32 * std::numeric_limits<double>::epsilon();
+    if (std::abs(coefficients(0, 0) - 1.) > rounding || coefficients.col(0).tail(coefficients.rows() - 1).cwiseAbs().maxCoeff() > rounding)
+        return std::nullopt;
+    Transfer::ChannelTransfer transfer{};
+    transfer[0][0] = 1.;
+    for (Eigen::Index input = 1; input < coefficients.cols(); ++input)
+        for (Eigen::Index output = 0; output < coefficients.rows(); ++output)
+            transfer[input][output] = coefficients(output, input);
+    return Transfer::CompileChannel(transfer, width);
+}
+
+// Pull back one local channel factor. Keep tiny nonzero terms. If the sum
+// grows too wide, abandon the transformation and use the original circuit.
+bool PullBack(PauliTerms &terms, const TerminalFactor &factor, size_t limit)
+{
+    PauliTerms next;
+    for (const auto &[word, coefficient] : terms)
+    {
+        unsigned input = 0;
+        for (size_t j = 0; j < factor.targets.size(); ++j)
+        {
+            const auto q = factor.targets[j];
+            if (q < word.size())
+                input |= static_cast<unsigned>(std::string_view(PauliLetters).find(word[q])) << (2 * j);
+        }
+        if (factor.transfer.diagonal || input == 0)
+        {
+            const double value = input == 0 ? coefficient : coefficient * factor.transfer.eigenvalues[input];
+            if (value != 0.)
+                next[word] += value;
+            continue;
+        }
+        const auto &table = *factor.transfer.table;
+        for (auto pos = table.offsets[input]; pos < table.offsets[input + 1]; ++pos)
+        {
+            const auto &entry = table.entries[pos];
+            std::string updated = word;
+            for (size_t j = 0; j < factor.targets.size(); ++j)
+            {
+                const auto q = factor.targets[j];
+                const char axis = PauliLetters[(entry.pauli >> (2 * j)) & 3];
+                if (q >= updated.size())
+                {
+                    if (axis == 'I')
+                        continue;
+                    updated.resize(size_t(q) + 1, 'I');
+                }
+                updated[q] = axis;
+            }
+            next[updated] += coefficient * entry.coefficient;
+            if (next.size() > limit)
+                return false;
+        }
+    }
+    terms = std::move(next);
+    return true;
+}
+} // namespace
+
+std::optional<TerminalExpectation> PrepareTerminalExpectation(const RecordCircuitPtr &circuit, const std::vector<std::string> &observables,
+                                                              const SimulatorConfig &config)
+{
+    if (!UsesChannelSamplingStatevector(config) || observables.empty() || !circuit)
+        return std::nullopt;
+    auto tail = SplitTerminalChannels(circuit);
+    if (!tail.prefix || tail.channels.empty())
+        return std::nullopt;
+    if (std::none_of(tail.channels.begin(), tail.channels.end(), [](const auto &op) { return !op->IsDeterministic(); }))
+        return std::nullopt;
+
+    // An exact adjoint expansion of high-weight Z observables under damping
+    // can double at each qubit. Bound work by switching back to trajectories;
+    // short diagonal or disjoint channels never grow the sum.
+    TerminalExpectation plan;
+    plan.stochastic_prefix = HasStochasticEvolution(tail.prefix, false);
+    const size_t limit = plan.stochastic_prefix ? 4 : 64;
+    const bool clusters_sampled_cones =
+        plan.stochastic_prefix && config.allow_reset_marginalization && config.enable_causal_cone_reduction && config.enable_observable_clustering;
+    std::vector<TerminalFactor> factors;
+    std::unordered_map<const Channel::Factor *, Transfer::CompiledChannel> transfers;
+    for (auto op = tail.channels.rbegin(); op != tail.channels.rend(); ++op)
+    {
+        const auto targets = (*op)->AffectedQubits();
+        const auto &channel = (*op)->GetChannel();
+        const auto &parts = channel.GetFactors();
+        for (size_t j = parts.size(); j-- > 0;)
+        {
+            TerminalFactor local;
+            for (const auto index : parts[j].qubits)
+                local.targets.push_back(targets[index]);
+            const auto [entry, inserted] = transfers.try_emplace(&parts[j]);
+            if (inserted)
+            {
+                auto transfer = CompileTerminalFactor(channel, j);
+                if (!transfer)
+                    return std::nullopt;
+                entry->second = std::move(*transfer);
+            }
+            local.transfer = entry->second;
+            factors.push_back(std::move(local));
+        }
+    }
+    plan.original_width = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
+    plan.prefix = std::move(tail.prefix);
+    std::map<std::string, size_t> unique;
+    for (auto observable : observables)
+    {
+        if (observable.find_first_not_of("IXZYixzy") != std::string::npos)
+            return std::nullopt;
+        std::transform(observable.begin(), observable.end(), observable.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        plan.original_width = std::max(plan.original_width, observable.size());
+        PauliTerms terms{{std::move(observable), 1.}};
+        for (const auto &factor : factors)
+            if (!PullBack(terms, factor, limit))
+                return std::nullopt;
+        // Marginalization allows the planner to run separate sampled cones.
+        // Several nonconstant terms in a row would need a common trajectory
+        // for their covariance. Forcing all requested cones into one group
+        // could require an exponentially larger state than the caller chose.
+        if (clusters_sampled_cones && std::count_if(terms.begin(), terms.end(), [](const auto &term) {
+                                          return term.second != 0. && term.first.find_first_not_of('I') != std::string::npos;
+                                      }) > 1)
+            return std::nullopt;
+        auto &row = plan.rows.emplace_back();
+        for (const auto &[word, coefficient] : terms)
+        {
+            if (coefficient == 0.)
+                continue;
+            const auto [found, added] = unique.emplace(word, plan.prefix_observables.size());
+            if (added)
+                plan.prefix_observables.push_back(word);
+            row.emplace_back(found->second, coefficient);
+        }
+    }
+    return plan;
+}
+
+EstimationResult EstimateTerminalExpectation(const TerminalExpectation &plan, const SimulatorConfig &config, EstimationCache *cache)
+{
+    auto result = EstimateCircuit(plan.prefix, plan.prefix_observables, config, cache);
+    const auto values = std::move(result.values);
+    const auto bounds = std::move(result.plan.error_bounds);
+    result.values.assign(plan.rows.size(), 0.);
+    result.plan.error_bounds.assign(plan.rows.size(), 0.);
+    result.plan.qubits_before = plan.original_width;
+    for (size_t i = 0; i < plan.rows.size(); ++i)
+        for (const auto &[index, weight] : plan.rows[i])
+        {
+            result.values[i] += weight * values[index];
+            result.plan.error_bounds[i] += std::abs(weight) * bounds[index];
+        }
+    return result;
+}
+
+std::optional<TerminalExpectation> PrepareTerminalNoiseExpectation(const noise::NoiseInjectionPlan &plan, NoiseLayer layer,
+                                                                   const RecordCircuitPtr &runtime_circuit, const std::vector<std::string> &observables,
+                                                                   const SimulatorConfig &config)
+{
+    if (!UsesChannelSamplingStatevector(config))
+        return std::nullopt;
+    if (runtime_circuit)
+        return PrepareTerminalExpectation(runtime_circuit, observables, config);
+    const auto &model = plan.model();
+    if ((layer != NoiseLayer::kPauli && model.has_coherent()) || (layer == NoiseLayer::kCombined && model.has_correlated()) ||
+        (!plan.circuit()->HasQuantumChannels() && !model.has_non_readout_noise()))
+        return std::nullopt;
+    // Pauli and short-T2 noise may already have been drawn into gates when the
+    // first realization was prepared. Recover their distribution only if that
+    // eliminates the sampled prefix too. Otherwise its draws and seeds stay as
+    // they were in the scheduled realizations.
+    auto candidate = PrepareTerminalExpectation(RecoverTerminalNoise(plan, layer), observables, config);
+    if (candidate && !candidate->stochastic_prefix)
+        return candidate;
+    return std::nullopt;
+}
+
 RecordCircuitPtr WithoutCircuitChannels(const RecordCircuitPtr &circuit)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
@@ -35,8 +275,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyEstimate out;
     out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels);
-    const size_t noise_realizations = out.policy.realizations;
-    out.realizations = noise_realizations;
+    out.realizations = out.policy.realizations;
     if (observables.empty())
     {
         out.ideal = EstimateCircuit(WithoutCircuitChannels(circuit), observables, config);
@@ -57,10 +296,29 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     // runs (ResolveRuntimeNoise): they then share one circuit and differ by seed.
     RecordCircuitPtr runtime_circuit, first_realization;
     ResolveRuntimeNoise(layer, plan, rng, runtime_circuit, first_realization);
+    const auto terminal = exact_channels.has_value() ? std::nullopt : PrepareTerminalNoiseExpectation(plan, layer, runtime_circuit, observables, config);
+    bool deterministic_tail = false;
+    if (terminal)
+    {
+        out.terminal_channels = true;
+        deterministic_tail = !terminal->stochastic_prefix;
+        if (deterministic_tail)
+        {
+            out.policy.stochastic_execution = false;
+            out.policy.stochastic_noise = false;
+            out.policy.realizations = requested_realizations.value_or(1);
+            out.realizations = out.policy.realizations;
+        }
+    }
+    // Even an explicit request for several copies of one deterministic
+    // result needs only one physical evolution. Report its requested schedule.
+    const size_t noise_realizations = deterministic_tail ? 1 : out.realizations;
     // Whether the executions draw channel branches, shared circuit or not: the noise seed then joins their seeds.
     RuntimeDraws draws(&plan, runtime_circuit, first_realization);
     // Called once per realization, in order: the one drawn to decide is the first.
     const auto realize = [&]() -> RecordCircuitPtr {
+        if (terminal)
+            return terminal->prefix;
         RecordCircuitPtr noisy = runtime_circuit     ? runtime_circuit
                                  : first_realization ? std::exchange(first_realization, nullptr)
                                                      : InjectPlanned(layer, plan, rng, exact);
@@ -92,8 +350,9 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     // A cache serves one thread (EstimationCache).
     std::vector<EstimationCache> caches(workers);
     const auto run = [&](EstimationCache &cache, size_t r, const RecordCircuitPtr &noisy) {
-        auto result = EstimateCircuit(noisy, observables,
-                                      draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r), &cache);
+        const auto execution_config = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r);
+        auto result =
+            terminal ? EstimateTerminalExpectation(*terminal, execution_config, &cache) : EstimateCircuit(noisy, observables, execution_config, &cache);
         auto &record = realizations[r];
         record.values = std::move(result.values);
         record.bounds = std::move(result.plan.error_bounds);

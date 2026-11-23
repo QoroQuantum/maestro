@@ -1,6 +1,7 @@
 #include "Execution/Estimation.h"
 #include "Execution/ReferenceFrameSampler.h"
 #include "Execution/Sampling.h"
+#include "Execution/TerminalExpectation.h"
 #include "core.h"
 #include "runtime.h"
 #include "samples.h"
@@ -119,7 +120,12 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     // branch per execution, on every backend. As the native estimate request
     // does, average a fixed number of measurement trajectories instead of
     // returning one random branch; seeded trajectories derive their seeds.
-    const bool stochastic = MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(config));
+    const auto terminal = [&] {
+        nb::gil_scoped_release release;
+        return MaestroExecution::PrepareTerminalExpectation(circuit, observables, config);
+    }();
+    const bool stochastic =
+        terminal ? terminal->stochastic_prefix : MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(config));
     const size_t trajectories = stochastic && !observables.empty() ? MaestroExecution::kMeasurementTrajectories : 1;
     std::vector<double> sums(observables.size(), 0.0), squares(observables.size(), 0.0), bounds(observables.size(), 0.0);
     double time_taken = 0;
@@ -130,7 +136,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
             auto trajectory_config = config;
             if (trajectories > 1 && config.seed)
                 trajectory_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
-            result = MaestroExecution::EstimateCircuit(circuit, observables, trajectory_config, cache);
+            result = terminal ? MaestroExecution::EstimateTerminalExpectation(*terminal, trajectory_config, cache)
+                              : MaestroExecution::EstimateCircuit(circuit, observables, trajectory_config, cache);
             time_taken += result.time_taken;
             for (size_t i = 0; i < observables.size(); ++i)
             {
@@ -153,6 +160,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     out["stochastic_execution"] = stochastic;
     out["measurement_trajectories"] = stochastic ? trajectories : size_t{0};
     out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
+    if (terminal)
+        out["terminal_channels_averaged"] = true;
     if (stochastic)
         out["realization_standard_errors"] = nb::cast(errors);
     out["auto_reduced"] = plan.auto_reduced;

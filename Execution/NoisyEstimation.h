@@ -40,6 +40,8 @@ struct NoisyEstimate
     size_t realizations = 0;
     // Workers the realizations ran on.
     size_t realization_workers = 0;
+    // The final channel layer is averaged exactly for each prefix realization.
+    bool terminal_channels = false;
     NoiseRealizationPolicy policy;
     bool auto_reduced = false;
     size_t bounded_observables = 0;

@@ -171,6 +171,27 @@ def test_pure_state_default_keeps_trajectory_budget():
     assert result["noise_evaluation"] == "trajectories"
 
 
+@pytest.mark.parametrize("backend", ["QCSim", "CompositeQCSim", "QiskitAer", "CompositeQiskitAer"])
+def test_statevector_terminal_channels_average_on_the_observable(backend):
+    cfg = config((backend, maestro.SimulationType.Statevector))
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    model = maestro.NoiseModel()
+    model.set_t1(0, 0.3)
+    noisy = circuit.full_noise_estimate(["Z"], model, config=cfg)
+    assert noisy["noise_realizations"] == 1
+    assert noisy["noise_evaluation"] == "terminal_channels"
+    assert noisy["expectation_values"] == pytest.approx([-0.4], abs=1e-12)
+    assert noisy["ideal_expectation_values"] == [-1.0]
+    assert noisy["realization_standard_errors"] == [0.0]
+
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    plain = circuit.estimate(["Z"], config=cfg)
+    assert plain["terminal_channels_averaged"]
+    assert plain["measurement_trajectories"] == 0
+    assert plain["expectation_values"] == pytest.approx(noisy["expectation_values"], abs=1e-12)
+
+
 def test_fidelity_does_not_drop_measurement_before_inline_channel():
     circuit = QuantumCircuit()
     circuit.h(0)

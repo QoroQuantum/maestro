@@ -756,6 +756,16 @@ count is specified, including estimates without an external noise model.
 estimate with one explicit realization returns `null` standard errors rather than
 claiming zero uncertainty; `noisy_fidelity` with one sampled realization likewise
 returns a `null` `standard_error`. Distributed-GPU estimates follow the same rules.
+
+On QCSim and Aer statevectors, including composite statevectors, automatic
+estimation can evaluate eligible final noise channels exactly on each incoming
+trajectory. These requests set `execution_metadata.terminal_channels_averaged`.
+With a deterministic prefix, `noise.evaluation` is `terminal_channels`, the
+standard errors are zero, and one preparation suffices for the noisy estimate.
+An explicit `noise.evaluation` of `trajectories` keeps branch sampling. For
+computational-basis counts, `terminal_v1` can sample eligible final channels
+from one prepared prefix. Each result still contains the requested number of shots.
+
 On pure-state backends a reset that precedes every other operation on its qubit
 leaves `|0>` and does not make an estimate stochastic; a later reset does.
 Analytical damping requires deterministic evolution.

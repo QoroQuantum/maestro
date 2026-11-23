@@ -1314,6 +1314,68 @@ BOOST_AUTO_TEST_CASE(CompositeSamplesChannelsInItsComponents)
     BOOST_CHECK_THROW(composite->ApplyQuantumChannel({qubits}, damping), std::invalid_argument);
 }
 
+// In two independent Bell pairs, a channel on one pair must use that pair's
+// trajectory stream even when its matrices include the identity on the other.
+BOOST_AUTO_TEST_CASE(LocalKrausFactorsKeepIndependentComponents)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Type = Simulators::SimulatorType;
+    std::vector<Type> backends{Type::kCompositeQCSim};
+#ifndef NO_QISKIT_AER
+    backends.push_back(Type::kQiskitAer);
+    backends.push_back(Type::kCompositeQiskitAer);
+#endif
+    const Channel damping = Channel::AmplitudeDamping(0.45);
+    // The spectator check compares entries, including amplitudes whose squared magnitudes underflow.
+    Eigen::MatrixXcd joint = Eigen::MatrixXcd::Identity(4, 4);
+    joint(3, 0) = 1e-200;
+    joint(0, 3) = -1e-200;
+    Eigen::Matrix2cd localPart;
+    BOOST_TEST(!Channel::IsMultipleOfIdentity(joint));
+    BOOST_CHECK(Channel::LocalPartOfTwoQubitUnitary(joint, localPart) == Channel::LocalPart::kBoth);
+    joint.row(1) *= -1.;
+    joint.row(3) *= -1.;
+    BOOST_CHECK(Channel::LocalPartOfTwoQubitUnitary(joint, localPart) == Channel::LocalPart::kBoth);
+    Eigen::MatrixXcd rotation(2, 2);
+    rotation << 0.6, -0.8, 0.8, 0.6;
+    const auto make = [](Type backend, uint64_t seed) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(backend, Simulators::SimulationType::kStatevector);
+        sim->AllocateQubits(4);
+        sim->Initialize();
+        sim->SetSeed(seed);
+        sim->ApplyH(0);
+        sim->ApplyCX(0, 1);
+        sim->ApplyH(2);
+        sim->ApplyCX(2, 3);
+        return sim;
+    };
+    for (const auto backend : backends)
+        for (size_t home = 0; home < 2; ++home)
+        {
+            // Rebuilding from the matrices hides the one-target placement metadata.
+            const Channel padded(Channel::OnQubit(damping, home).GetKrausOperators());
+            const auto placedRotation = Channel::OnQubit(Channel::UnitaryMixture({1.0}, {rotation}), home);
+            const auto paddedRotation = Channel::UnitaryMixture({1.0}, placedRotation.GetKrausOperators());
+            const Types::qubits_vector targets = home == 0 ? Types::qubits_vector{3, 0} : Types::qubits_vector{0, 3};
+            for (uint64_t seed = 1; seed <= 12; ++seed)
+            {
+                auto local = make(backend, seed), embedded = make(backend, seed);
+                local->ApplyQuantumChannel({3}, Channel::UnitaryMixture({1.0}, {rotation}));
+                embedded->ApplyQuantumChannel(targets, paddedRotation);
+                local->ApplyQuantumChannel({3}, damping);
+                embedded->ApplyQuantumChannel(targets, padded);
+                // Later stochastic operations on both components expose an unintended join or consumed draw.
+                for (const Types::qubit_t q : {0u, 3u})
+                {
+                    local->ApplyQuantumChannel({q}, damping);
+                    embedded->ApplyQuantumChannel({q}, damping);
+                }
+                for (size_t basis = 0; basis < 16; ++basis)
+                    BOOST_TEST(std::abs(local->Amplitude(basis) - embedded->Amplitude(basis)) < 1e-10);
+            }
+        }
+}
+
 // A matrix product state that samples channels keeps the environments of its
 // bonds, and pays for every site between two operations that read them. The
 // chain order runs the operations of a circuit so that they stay close: any
