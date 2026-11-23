@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -323,6 +324,13 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
 EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
                                            const SimulatorConfig &config, EstimationCache *cache)
 {
+    return EstimateCircuitTrajectory(circuit, observables, config, cache, {});
+}
+
+EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
+                                           const SimulatorConfig &config, EstimationCache *cache,
+                                           const std::function<std::shared_ptr<Circuits::Circuit<double>>(const EstimationGroup &)> &execution_circuit)
+{
     EstimationResult result;
     result.values.assign(observables.size(), 0.0);
     result.simulator = config.simulator_type;
@@ -362,7 +370,7 @@ EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circu
             network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto start = Clock::now();
-        Scatter(result.values, group, network->ExecuteOnHostExpectations(group.circuit, 0, group.observables));
+        Scatter(result.values, group, network->ExecuteOnHostExpectations(execution_circuit ? execution_circuit(group) : group.circuit, 0, group.observables));
         result.time_taken += std::chrono::duration<double>(Clock::now() - start).count();
         if (network->GetLastSimulatorType() == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
             network->GetLastGpuDevice() != std::stoi(config.native_options.at("gpu_device")))

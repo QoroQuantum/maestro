@@ -726,7 +726,9 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
           "A wide fallback row disturbed an exact damping estimate or its seeded fallback");
 
     auto stochastic = CF::CreateCircuit();
-    for (size_t q = 0; q < 3; ++q)
+    auto prefix_calls = std::make_shared<std::atomic<size_t>>(0);
+    stochastic->AddOperation(std::make_shared<CountedX>(0, prefix_calls));
+    for (size_t q = 1; q < 3; ++q)
         stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, q));
     stochastic->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(.5)));
     stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
@@ -739,6 +741,45 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
               std::abs(hybrid_prefix.standard_errors[0] - std::sqrt(hybrid_mean * (1. - hybrid_mean) / (samples - 1))) < 1e-12 &&
               hybrid_prefix.values[1] == all_sampled.values[0] && hybrid_prefix.standard_errors[1] == all_sampled.standard_errors[0],
           "A sampled prefix lost the conditional expectation or reproducibility of a mixed request");
+
+    const auto together = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, config);
+    if (backend == Simulators::SimulatorType::kQCSim
+#ifndef NO_QISKIT_AER
+        || backend == Simulators::SimulatorType::kQiskitAer
+#endif
+    )
+    {
+        Check(together && together->RequiresTrajectories(), "A mixed terminal request lost its sampled rows");
+        for (bool fixed : {false, true})
+        {
+            auto scheduled = config;
+            scheduled.fixed_backend = fixed;
+            const auto joint = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, scheduled);
+            for (size_t seed = 0; seed < 8; ++seed)
+            {
+                scheduled.seed = seed;
+                const auto prefix = EstimateCircuitTrajectory(joint->prefix, joint->prefix_observables, scheduled);
+                const auto full = EstimateCircuitTrajectory(stochastic, joint->sampled_observables, scheduled);
+                prefix_calls->store(0);
+                const auto actual = EstimateTerminalExpectation(*joint, scheduled);
+                Check(prefix_calls->load() == 1 && actual.values == joint->Combine(prefix.values, full.values),
+                      "Mixed rows repeated the sampled prefix or changed its seeded branches");
+            }
+            scheduled.seed.reset();
+            prefix_calls->store(0);
+            EstimateTerminalExpectation(*joint, scheduled);
+            Check(prefix_calls->load() == 1, "An unseeded mixed request ran its prefix twice");
+        }
+        // The q2 damping is still terminal on its wire, but moving its physical
+        // draw past the interior q0 damping would exchange their random numbers.
+        auto reordered = stochastic->GetOperations();
+        std::rotate(reordered.begin() + 3, reordered.end() - 1, reordered.end());
+        auto interleaved = CF::CreateCircuit(reordered);
+        const auto split = PrepareTerminalExpectation(interleaved, {"Z", "ZZZ"}, config);
+        Check(split && !split->prefix_read_position, "Interleaved channel draws were reordered to share a trajectory");
+        const auto full = EstimateCircuitTrajectory(interleaved, split->sampled_observables, config);
+        Check(EstimateTerminalExpectation(*split, config).values[1] == full.values[0], "Per-wire folding changed an interleaved trajectory's seed");
+    }
 
     if (backend == Simulators::SimulatorType::kQCSim)
     {
@@ -773,6 +814,11 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
         wide->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(0.2)));
     Check(!PrepareTerminalExpectation(wide, {std::string(12, 'Z')}, config), "Wide damping expansion did not switch back to trajectories");
     Check(PrepareTerminalExpectation(wide, {std::string(12, 'X')}, config).has_value(), "A wide diagonal observable was needlessly sampled");
+    wide->AddOperation(CF::CreateGate(Gate::kXGateType, 15));
+    Check(PrepareTerminalExpectation(wide, {std::string(8, 'Z')}, config).has_value(), "A 256-term deterministic row was sampled on 16 qubits");
+    wide->AddOperation(CF::CreateGate(Gate::kXGateType, 19));
+    Check(PrepareTerminalExpectation(wide, {std::string(7, 'Z')}, config).has_value(), "A 128-term deterministic row was sampled on 20 qubits");
+    Check(!PrepareTerminalExpectation(wide, {std::string(8, 'Z')}, config), "A wide dense deterministic row exceeded its bounded scan budget");
 
     if (backend == Simulators::SimulatorType::kCompositeQCSim
 #ifndef NO_QISKIT_AER

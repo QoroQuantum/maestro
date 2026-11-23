@@ -206,9 +206,9 @@ std::optional<TerminalExpectation> PrepareTerminalExpectation(const RecordCircui
             return std::nullopt;
         std::transform(observable.begin(), observable.end(), observable.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         plan.original_width = std::max(plan.original_width, observable.size());
-        // A deterministic register through 12 qubits can scan 256 Pauli terms within
-        // a million basis entries. Larger registers and repeated trajectories have a tighter budget.
-        const size_t deterministic_limit = std::max(circuit_width, observable.size()) <= 12 ? 256 : 64;
+        // One deterministic preparation replaces up to 100 trajectories. Allow 256 terms
+        // through 16 million basis entries, then cap each row at 128 full-register scans.
+        const size_t deterministic_limit = std::max(circuit_width, observable.size()) <= 16 ? 256 : 128;
         const size_t limit = plan.stochastic_prefix ? 4 : deterministic_limit;
         PauliTerms terms{{observable, 1.}};
         const bool fits = std::all_of(factors.begin(), factors.end(), [&](const auto &factor) { return PullBack(terms, factor, limit); });
@@ -238,7 +238,29 @@ std::optional<TerminalExpectation> PrepareTerminalExpectation(const RecordCircui
     if (plan.sampled_indices.size() == observables.size())
         return std::nullopt;
     if (!plan.sampled_indices.empty())
+    {
         plan.full_circuit = circuit;
+        // The full shot must see the same stochastic operation order, physical register and
+        // observable group as a standalone prefix shot. Composites can reschedule channels,
+        // and independently marginalized cones can have different wires or branch streams.
+        if (plan.stochastic_prefix && !HasCandidateList(config) && !config.allow_reset_marginalization &&
+            (config.simulator_type == Simulators::SimulatorType::kQCSim
+#ifndef NO_QISKIT_AER
+             || config.simulator_type == Simulators::SimulatorType::kQiskitAer
+#endif
+             ) &&
+            plan.prefix->HasDrawnChannels() && plan.prefix->GetQubits().size() == plan.original_width)
+        {
+            const auto &operations = circuit->GetOperations();
+            auto end = operations.end();
+            while (end != operations.begin() && (*(end - 1))->GetType() == Circuits::OperationType::kMeasurement)
+                --end;
+            const auto first = end - tail.channels.size();
+            if (std::equal(first, end, tail.channels.begin()) &&
+                std::none_of(tail.channels.begin(), tail.channels.end(), [](const auto &channel) { return channel->IsDeterministic(); }))
+                plan.prefix_read_position = static_cast<size_t>(first - operations.begin());
+        }
+    }
     return plan;
 }
 
@@ -255,6 +277,59 @@ std::vector<double> TerminalExpectation::Combine(const std::vector<double> &pref
 
 namespace
 {
+using ChannelOp = Circuits::QuantumChannelOperation<double>;
+
+// Keep the original trajectory's operations, including the channel draw itself. Read the
+// folded Paulis just before its terminal layer. Clones created by the host share only the
+// scalar readout for this realization. A remap or a pending fused channel keeps two runs:
+// synchronizing deferred state-dependent branches can change their seeded correlations.
+class ReadPrefixBeforeChannel final : public ChannelOp
+{
+  public:
+    ReadPrefixBeforeChannel(const std::shared_ptr<ChannelOp> &channel, const std::vector<std::string> &words, size_t width, Simulators::SimulatorType backend,
+                            std::vector<double> &values)
+        : ChannelOp(*channel), channel_(channel), words_(words), width_(width), backend_(backend), values_(values)
+    {
+    }
+
+    void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
+    {
+        if (sim->GetNumberOfQubits() == width_ && sim->GetType() == backend_ && sim->GetSimulationType() == Simulators::SimulationType::kStatevector &&
+            !sim->FusesQuantumChannels())
+        {
+            values_ = sim->ExpectationValues(words_);
+            for (size_t i = 0; i < words_.size(); ++i)
+                if (words_[i].find_first_not_of('I') == std::string::npos)
+                    values_[i] = 1.; // PrepareEstimation resolves identity exactly.
+        }
+        channel_->Execute(sim, state);
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Clone() const override
+    {
+        auto copy = channel_->Clone();
+        const auto channel = std::dynamic_pointer_cast<ChannelOp>(copy);
+        return channel ? std::make_shared<ReadPrefixBeforeChannel>(channel, words_, width_, backend_, values_) : copy;
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Remap(const Circuits::Circuit<double>::BitMapping &qubits,
+                                                  const Circuits::Circuit<double>::BitMapping &bits) const override
+    {
+        auto mapped = channel_->Remap(qubits, bits);
+        const auto channel = std::dynamic_pointer_cast<ChannelOp>(mapped);
+        if (!channel || std::any_of(qubits.begin(), qubits.end(), [](const auto &entry) { return entry.first != entry.second; }))
+            return mapped;
+        return std::make_shared<ReadPrefixBeforeChannel>(channel, words_, width_, backend_, values_);
+    }
+
+  private:
+    std::shared_ptr<ChannelOp> channel_;
+    const std::vector<std::string> &words_;
+    size_t width_;
+    Simulators::SimulatorType backend_;
+    std::vector<double> &values_;
+};
+
 EstimationResult EstimateFoldedRows(const TerminalExpectation &plan, const SimulatorConfig &config, EstimationCache *cache)
 {
     auto result = EstimateCircuitTrajectory(plan.prefix, plan.prefix_observables, config, cache);
@@ -277,19 +352,42 @@ EstimationResult EstimateTerminalExpectation(const TerminalExpectation &plan, co
 {
     if (plan.sampled_indices.empty())
         return EstimateFoldedRows(plan, config, cache);
-    // Reuse the realization's seed for the two subsets. Each EstimateCircuitTrajectory
-    // releases its simulator before the next starts. Only the prefix's scalar estimates
-    // and planning metadata are retained between calls.
+    // Both parts use the same realization seed, including on layouts that need two evolutions.
     auto trajectory = config;
     if (plan.stochastic_prefix && !trajectory.seed)
         trajectory.seed = Utils::RandomStream::FreshSeed();
+    const auto &full = sampled_circuit ? sampled_circuit : plan.full_circuit;
+    std::optional<EstimationResult> sampled;
+    if (plan.prefix_read_position && full == plan.full_circuit)
+    {
+        std::vector<double> prefix_values;
+        const auto observe = [&](const EstimationGroup &group) {
+            const auto position = *plan.prefix_read_position;
+            const auto &original = group.circuit->GetOperations();
+            if (group.qubits != plan.original_width || original.size() <= position ||
+                !std::equal(original.begin(), original.begin() + position + 1, full->GetOperations().begin()))
+                return group.circuit;
+            auto operations = original;
+            operations[position] = std::make_shared<ReadPrefixBeforeChannel>(std::static_pointer_cast<ChannelOp>(original[position]), plan.prefix_observables,
+                                                                             plan.original_width, config.simulator_type, prefix_values);
+            return std::make_shared<Circuits::Circuit<double>>(operations);
+        };
+        sampled = EstimateCircuitTrajectory(full, plan.sampled_observables, trajectory, cache, observe);
+        if (!prefix_values.empty())
+        {
+            sampled->values = plan.Combine(prefix_values, sampled->values);
+            sampled->plan.error_bounds = plan.Combine(std::vector<double>(prefix_values.size()), sampled->plan.error_bounds, true);
+            sampled->plan.qubits_before = plan.original_width;
+            return std::move(*sampled);
+        }
+    }
     std::optional<EstimationResult> local;
     if (!deterministic_prefix)
     {
         local = EstimateFoldedRows(plan, trajectory, nullptr);
         deterministic_prefix = &*local;
     }
-    auto result = EstimateCircuitTrajectory(sampled_circuit ? sampled_circuit : plan.full_circuit, plan.sampled_observables, trajectory, cache);
+    auto result = sampled ? std::move(*sampled) : EstimateCircuitTrajectory(full, plan.sampled_observables, trajectory, cache);
     auto values = deterministic_prefix->values;
     auto bounds = deterministic_prefix->plan.error_bounds;
     for (size_t j = 0; j < plan.sampled_indices.size(); ++j)

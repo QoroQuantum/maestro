@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -29,6 +30,8 @@ struct TerminalExpectation
     std::vector<std::vector<std::pair<size_t, double>>> rows;
     std::vector<size_t> sampled_indices;
     std::vector<std::string> sampled_observables;
+    // First channel after an unbroken sampled prefix, when one evolution can serve both subsets.
+    std::optional<size_t> prefix_read_position;
     size_t original_width = 0;
     bool stochastic_prefix = false;
 
@@ -57,6 +60,10 @@ MAESTRO_TRANSFORM_API std::optional<TerminalExpectation> PrepareTerminalNoiseExp
                                                                                          const SimulatorConfig &config);
 // For a mixed request with a deterministic prefix, evaluate its folded subset once before starting the trajectory workers.
 MAESTRO_TRANSFORM_API std::optional<EstimationResult> EstimateDeterministicTerminalPrefix(const TerminalExpectation &plan, const SimulatorConfig &config);
+// Observe a group during execution while retaining the caller's original circuits in the estimation plan.
+EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
+                                           const SimulatorConfig &config, EstimationCache *cache,
+                                           const std::function<std::shared_ptr<Circuits::Circuit<double>>(const EstimationGroup &)> &execution_circuit);
 MAESTRO_TRANSFORM_API EstimationResult EstimateTerminalExpectation(const TerminalExpectation &plan, const SimulatorConfig &config,
                                                                    EstimationCache *cache = nullptr, const EstimationResult *deterministic_prefix = nullptr,
                                                                    const std::shared_ptr<Circuits::Circuit<double>> &sampled_circuit = {});
