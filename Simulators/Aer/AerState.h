@@ -27,6 +27,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "../../Utils/Sampling/MeasurementTargets.h"
 #include "../Interfaces/Simulator.h"
 #include "QubitRegister.h"
 
@@ -414,7 +415,7 @@ class AerState : public ISimulator
                          "number of bits in the size_t type, the outcome will be undefined"
                       << std::endl;
 
-        const size_t res = state->apply_measure(qubits);
+        const size_t res = Utils::MeasurementTargets::Read(qubits, [&](const auto &targets) { return state->apply_measure(targets); });
 
         NotifyObservers(qubits);
 
@@ -429,7 +430,7 @@ class AerState : public ISimulator
      */
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
-        auto res = state->apply_measure_many(qubits);
+        auto res = Utils::MeasurementTargets::Read(qubits, [&](const auto &targets) { return state->apply_measure_many(targets); });
 
         NotifyObservers(qubits);
 
@@ -444,7 +445,8 @@ class AerState : public ISimulator
      */
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        state->apply_reset(qubits);
+        const Utils::MeasurementTargets targets(qubits);
+        state->apply_reset(targets.Physical(qubits));
 
         NotifyObservers(qubits);
     }

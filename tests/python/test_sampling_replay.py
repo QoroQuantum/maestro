@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 import maestro
@@ -107,7 +108,7 @@ def _native_library_directories():
     return folders
 
 
-_FRESH_PROCESS_REPLAY = """
+_FRESH_PROCESS_CALL = """
 import importlib.util
 import json
 import os
@@ -127,26 +128,115 @@ sys.modules["maestro"] = maestro
 spec.loader.exec_module(maestro)
 assert Path(maestro._raw_maestro.__file__).resolve() == Path(payload["extension_file"]).resolve()
 suite = runpy.run_path(payload["test_file"])
-print(json.dumps(suite["_fresh_process_results"](), sort_keys=True))
+print(json.dumps(suite[payload["function"]](*payload["args"]), sort_keys=True))
 """
 
 
-def test_seeded_counts_replay_in_fresh_processes():
-    expected = _fresh_process_results()
+def _in_fresh_process(function, *args):
     payload = json.dumps({
         "package_file": maestro.__file__,
         "package_paths": list(maestro.__path__),
         "extension_file": maestro._raw_maestro.__file__,
         "test_file": str(Path(__file__).resolve()),
+        "function": function.__name__,
+        "args": args,
         "dll_directories": _native_library_directories(),
     })
+    result = subprocess.run(
+        [sys.executable, "-c", _FRESH_PROCESS_CALL],
+        input=payload, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    return json.loads(result.stdout)
+
+
+def test_seeded_counts_replay_in_fresh_processes():
+    expected = _fresh_process_results()
     for _ in range(2):
-        result = subprocess.run(
-            [sys.executable, "-c", _FRESH_PROCESS_REPLAY],
-            input=payload, capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode == 0, result.stderr or result.stdout
-        assert json.loads(result.stdout) == expected
+        assert _in_fresh_process(_fresh_process_results) == expected
+
+
+def _check_joint_measurement(backend, layout):
+    from maestro.circuits import QuantumCircuit
+
+    cfg = maestro.SimulatorConfig(simulator_type=getattr(maestro.SimulatorType, backend),
+                                  simulation_type=maestro.SimulationType.Statevector, fixed_backend=True, seed=29)
+    circuit = QuantumCircuit()
+    circuit.ry(0, 0.9)
+    circuit.x(1)
+    if layout == "interior_channel":
+        circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.2))
+        circuit.z(0)
+    # The same physical result is written three times, including the final write to bit 6.
+    circuit.measure([(1, 3), (0, 0), (1, 1), (0, 5), (1, 6), (0, 6)])
+    if layout != "terminal":
+        if layout == "reset":
+            circuit.reset(0)
+        else:
+            circuit.x(0)
+        circuit.measure([(0, 4)])
+    rows = circuit.execute(config=cfg, shots=129, return_samples=True)["samples"]
+    for bit in (5, 6):
+        np.testing.assert_array_equal(rows[:, bit], rows[:, 0])
+    assert rows[:, 1].all() and rows[:, 3].all() and not rows[:, 2].any()
+    assert 0 < rows[:, 0].sum() < 129
+    if layout in ("dynamic", "interior_channel"):
+        np.testing.assert_array_equal(rows[:, 4], 1 - rows[:, 0])
+    else:
+        assert not rows[:, 4].any()
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=129, return_samples=True)["samples"])
+    # One shot also exercises the public counts path, which can select direct collapse.
+    counts = circuit.execute(config=cfg, shots=1)["counts"]
+    assert sum(counts.values()) == 1
+    outcome = next(iter(counts))
+    assert outcome[0] == outcome[5] == outcome[6]
+    assert outcome[1:4] == "101"
+
+    if layout == "dynamic":
+        reference = QuantumCircuit()
+        reference.ry(0, 0.9)
+        reference.x(1)
+        reference.measure([(1, 3), (0, 0)])
+        reference.x(0)
+        reference.measure([(0, 4)])
+        # A later random measurement observes any extra draw consumed by the fanout.
+        for candidate in (circuit, reference):
+            candidate.h(0)
+            candidate.measure([(0, 2)])
+        repeated = circuit.execute(config=cfg, shots=129, return_samples=True)["samples"]
+        once = reference.execute(config=cfg, shots=129, return_samples=True)["samples"]
+        np.testing.assert_array_equal(repeated[:, [0, 2, 3, 4]], once[:, [0, 2, 3, 4]])
+
+
+def _check_raw_aer_duplicate_measurement():
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(maestro.SimulatorType.QiskitAer, maestro.SimulationType.Statevector)
+    try:
+        sim = owner.get_simulator(handle)
+        sim.AllocateQubits(2)
+        sim.Initialize()
+        sim.ApplyX(1)
+        assert sim.Measure([1, 0, 1]) == 5
+        assert sim.MeasureMany([1, 0, 1]) == [True, False, True]
+        sim.ApplyReset([1, 1])
+        assert sim.Measure([1, 0, 1]) == 0
+    finally:
+        owner.destroy_simulator(handle)
+
+
+def _check_duplicate_measurements(backend):
+    for layout in ("dynamic", "reset", "interior_channel", "terminal"):
+        _check_joint_measurement(backend, layout)
+    if backend == "QiskitAer":
+        _check_raw_aer_duplicate_measurement()
+
+
+@pytest.mark.parametrize("backend", ["QCSim", "QiskitAer", "CompositeQCSim", "CompositeQiskitAer"])
+def test_one_joint_measurement_can_write_a_wire_to_several_bits(backend):
+    if not hasattr(maestro.SimulatorType, backend):
+        pytest.skip(f"{backend} is not compiled in")
+    # A self-dependent composite schedule used to hang, and Aer could crash in its collapse kernel.
+    _in_fresh_process(_check_duplicate_measurements, backend)
 
 
 @pytest.mark.parametrize("policy", ["auto", "legacy", "frame_v1", "multinomial_v1"])

@@ -1634,7 +1634,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
         for (const auto &op : operations)
         {
-            std::unordered_set<OperationPtr> dependencies;
+            // This planner keys queues by operation identity. A reused operation
+            // object represents distinct occurrences and must keep its input order.
+            auto [entry, inserted] = dependenciesMap.try_emplace(op);
+            if (!inserted)
+                return;
+            auto &dependencies = entry->second;
 
             const auto cbits = GetReferencedBits(op);
             for (auto c : cbits)
@@ -1647,9 +1652,10 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
             const auto qubits = op->AffectedQubits();
             for (auto q : qubits)
             {
-                qubitOps[q].push_back(op);
-
                 const auto lastOp = lastOps[q];
+                if (lastOp == op)
+                    continue; // multiple classical writes can measure the same wire
+                qubitOps[q].push_back(op);
                 if (lastOp)
                     dependencies.insert(lastOp);
 
@@ -1658,8 +1664,6 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             for (auto c : cbits)
                 lastOps[c] = op;
-
-            dependenciesMap[op] = dependencies;
         }
         lastOps.clear();
 
@@ -1700,24 +1704,8 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 }
             }
 
-            if (nextOp)
-            {
-                dependenciesMap.erase(nextOp);
-
-                const auto qubits = nextOp->AffectedQubits();
-                for (auto q : qubits)
-                {
-                    ++indices[q];
-                    if (indices[q] >= qubitOps[q].size())
-                        qubitOps.erase(q);
-                }
-
-                newops.emplace_back(std::move(nextOp));
-                continue;
-            }
-
             // if there is no measurement or reset, add the next gate
-            for (Types::qubit_t q = 0; q < qubitsNo; ++q)
+            for (Types::qubit_t q = 0; !nextOp && q < qubitsNo; ++q)
             {
                 if (qubitOps.find(q) == qubitOps.end()) // no operation left on this qubit
                     continue;
@@ -1742,20 +1730,19 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 }
             }
 
-            if (nextOp)
+            if (!nextOp)
+                return; // No schedulable wire; the original operation order is valid.
+            dependenciesMap.erase(nextOp);
+            for (auto q : nextOp->AffectedQubits())
             {
-                dependenciesMap.erase(nextOp);
-
-                const auto qubits = nextOp->AffectedQubits();
-                for (auto q : qubits)
-                {
-                    ++indices[q];
-                    if (indices[q] >= qubitOps[q].size())
-                        qubitOps.erase(q);
-                }
-
-                newops.emplace_back(std::move(nextOp));
+                const auto queue = qubitOps.find(q);
+                // Advance each wire once even if the operation lists it repeatedly.
+                if (queue == qubitOps.end() || queue->second[indices[q]] != nextOp)
+                    continue;
+                if (++indices[q] == queue->second.size())
+                    qubitOps.erase(queue);
             }
+            newops.emplace_back(std::move(nextOp));
         }
 
         assert(newops.size() == operations.size());
