@@ -344,6 +344,13 @@ struct ShotRecords
     double time_taken = 0;
 };
 
+// Sample terminal channel populations on one prepared statevector. A disengaged result leaves the ordinary executor in charge.
+MAESTRO_TRANSFORM_API std::optional<ShotRecords> SampleTerminalChannels(const RecordCircuitPtr &circuit, const SimulatorConfig &config, size_t shots, bool rows,
+                                                                        std::optional<uint64_t> noise_seed = std::nullopt, bool identity_only = false);
+MAESTRO_TRANSFORM_API std::optional<ShotRecords> SampleNoisyTerminalChannels(const noise::NoiseInjectionPlan &plan, const RecordCircuitPtr &runtime_circuit,
+                                                                             NoiseLayer layer, const SimulatorConfig &config, size_t shots, size_t realizations,
+                                                                             bool rows, std::optional<uint64_t> noise_seed);
+
 // A shots x ClassicalWidth(circuit) row matrix of a noiseless circuit, drawn
 // by the cheapest exact sampler: reference frames for Clifford circuits the
 // configuration admits, one prepared state for terminal measurements, or
@@ -358,6 +365,8 @@ struct NoisyExecutionOptions
     // Exact channels instead of sampled trajectories; by default
     // UsesExactQuantumChannels(config).
     std::optional<bool> exact_channels;
+    // False for an explicit request to replay trajectories even if terminal channels could be sampled as populations.
+    bool allow_terminal_channels = true;
 };
 
 // Splits shots across min(shots, noise_realizations) realizations, each with

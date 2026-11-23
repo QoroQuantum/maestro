@@ -27,6 +27,9 @@
 
 #include "Factory.h"
 
+#include <unordered_map>
+#include <vector>
+
 namespace Simulators::FactoryBackends
 {
 
@@ -44,6 +47,10 @@ std::unique_ptr<ISimulator> CreateAerSimulator(SimulationType method);
 #endif
 std::unique_ptr<ISimulator> CreateCompositeSimulator(SimulatorType type);
 std::unique_ptr<ISimulator> CreateImmediateCompositeSimulator(SimulatorType type);
+
+// Read a prepared state without saving a mutable copy of a composite register.
+MAESTRO_FACTORY_EXPORT std::unordered_map<std::vector<bool>, Types::qubit_t> SamplePreparedStatevector(ISimulator &simulator,
+                                                                                                       const Types::qubits_vector &qubits, size_t shots);
 
 #ifdef __linux__
 // FactoryGpu.cpp

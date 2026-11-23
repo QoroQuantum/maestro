@@ -736,6 +736,10 @@ def test_set_t1_differs_from_exact_damping_only_in_coherence():
     for method in (S.Statevector, S.MatrixProductState, S.TensorNetwork):
         sampled = circuit.noisy_estimate_montecarlo(["Z", "X"], model, 4000, _config(method, seed=97), noise_seed=101)
         (z, x), (ez, ex) = sampled["expectation_values"], sampled["realization_standard_errors"]
+        if method == S.Statevector:
+            assert (ez, ex) == (0.0, 0.0)
+            assert (z, x) == pytest.approx((gamma, math.sqrt(1 - gamma)), abs=1e-14, rel=0)
+            continue
         assert abs(z - gamma) <= Z_BOUND * ez, method.name
         if method != S.TensorNetwork:
             assert abs(x - math.sqrt(1 - gamma)) <= Z_BOUND * ex, method.name
@@ -1546,7 +1550,7 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
     x, identity = [[0, 1], [1, 0]], [[1, 0], [0, 1]]
     as_channel, drawn = Channel.unitary_mixture([1.0], [x]), Channel.unitary_mixture([0.5, 0.5], [identity, x])
 
-    def circuit(third, measure=True):
+    def circuit(third, measure=True, rotation_target=0):
         c = QuantumCircuit()
         c.h(0)
         c.cx(0, 1)
@@ -1554,7 +1558,7 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
             c.x(0)
         else:
             c.channel([0], third)
-        c.ry(1, 0.4)
+        c.ry(rotation_target, 0.4)
         c.cx(1, 2)
         if measure:
             c.measure_all()
@@ -1572,6 +1576,14 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
     assert not estimated["stochastic_execution"] and not expected["stochastic_execution"]
     assert circuit(drawn, measure=False).estimate(observables, config=config)["stochastic_execution"]
     assert estimated["expectation_values"] == pytest.approx(expected["expectation_values"], abs=1e-12)
+
+    if method == S.Statevector:
+        # Moving the rotation to the other Bell qubit leaves the two-branch channel terminal on its wire.
+        terminal = circuit(drawn, measure=False, rotation_target=1)
+        averaged = terminal.estimate(observables, config=config)
+        exact = terminal.estimate(observables, config=_config(S.DensityMatrix))
+        assert averaged["terminal_channels_averaged"] and not averaged["stochastic_execution"]
+        assert averaged["expectation_values"] == pytest.approx(exact["expectation_values"], abs=1e-12)
 
     readout = maestro.NoiseModel()
     readout.set_readout_error(0, 0.02, 0.03)
@@ -2105,7 +2117,13 @@ def test_a_mixture_of_unitaries_is_drawn_into_a_gate_where_no_channel_is_sampled
             "request estimate": native_estimate["noise"]["stochastic_execution"],
             "request suffix": suffix["results"][0]["stochastic_execution"],
         }
-        assert reported == dict.fromkeys(reported, expected), f"{label} on {name}: {reported}"
+        expected_reports = dict.fromkeys(reported, expected)
+        if method == S.Statevector:
+            # Both estimators average the terminal channel on the observables.
+            expected_reports["Python estimate"] = expected_reports["request estimate"] = False
+            assert estimated["estimate_evaluation"] == "deterministic"
+            assert estimated["realization_standard_errors"] == [0.]
+        assert reported == expected_reports, f"{label} on {name}: {reported}"
         if label == "mixture":
             # The Hadamard branch, drawn in 0.4 of the realizations, sends half of the pair to odd parity.
             for where, counts in (("Python", executed["counts"]), ("request", native["counts"])):

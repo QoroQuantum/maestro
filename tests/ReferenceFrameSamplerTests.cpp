@@ -619,6 +619,37 @@ void SparseQubitsCompact()
 
 void KrausPauliMixtures()
 {
+    // At half excitation with T1 = T2, thermal relaxation shrinks all three
+    // Bloch components by exp(-duration/T1). Recover its Pauli weights from
+    // the raw Kraus operators, as both frame compilers do.
+    using Channel = Simulators::QuantumChannel;
+    for (const double t : {1., 0.2, 0.05})
+    {
+        const auto thermal = Channel::ThermalRelaxation(1., t, t, 0.5);
+        const auto weights = Channel::PauliMixtureOf(thermal.GetKrausOperators(), 1);
+        Require(weights.size() == 4, "balanced thermal relaxation did not compile as a Pauli channel");
+        const double error = -0.25 * std::expm1(-1. / t);
+        for (size_t i = 0; i < weights.size(); ++i)
+            Require(std::abs(weights[i] - (i == 0 ? 1. - 3. * error : error)) < 1e-14, "incorrect thermal Pauli probability");
+    }
+    const auto biased = Channel::ThermalRelaxation(1., 1., 1., 0.5 + 3e-13);
+    Require(Channel::PauliMixtureOf(biased.GetKrausOperators(), 1).empty(), "weak thermal population bias was discarded by frame sampling");
+
+    for (int i = 1; i < 500; ++i)
+    {
+        const auto gamma = i / 10000.;
+        const auto kraus = Channel::PhaseDamping(gamma).GetKrausOperators();
+        const auto weights = Channel::PauliMixtureOf(kraus, 1);
+        Require(weights.size() == 4 && std::abs(weights[3] - 0.5 * gamma / (1. + std::sqrt(1. - gamma))) < 1e-16, "raw dephasing lost its frame weights");
+    }
+    const auto weak = Channel::OnQubit(Channel::PhaseDamping(1e-17), 1).PauliMixture();
+    Require(weak.size() == 16 && weak[12] == 2.5e-18, "placed phase damping lost a microscopic Z-flip probability");
+    Require(Channel::PauliMixtureOf({Channel::Matrix::Identity(2, 2), Channel::Matrix::Zero(2, 3)}, 1).empty(), "inconsistent Kraus dimensions accepted");
+    Channel::Matrix jump = Channel::Matrix::Zero(2, 2);
+    jump(0, 0) = jump(1, 0) = std::sqrt(0.5e-17);
+    const auto rare = Channel({Channel::Matrix::Identity(2, 2), jump}).Then(Channel::PhaseFlip(0.25));
+    Require(rare.PauliMixture().empty(), "a composed rare non-Pauli jump disappeared during frame classification");
+
     // Phase damping is a Z flip with p = (1 - sqrt(1 - gamma)) / 2: H, damping,
     // H makes that flip a measured X error. Here gamma = 0.36 gives p = 0.1.
     auto damped = std::make_shared<Circuit>();

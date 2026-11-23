@@ -1,14 +1,25 @@
 #include "Estimation.h"
 
+#include "NoisePolicy.h"
 #include "SimulatorConfig.h"
+#include "TerminalExpectation.h"
 #include "Transforms/BoundedPauli.h"
 #include "Transforms/ConeAnalysis.h"
 #include "Transforms/ObservableClustering.h"
 #include "Transforms/TransformPipeline.h"
 #include "Json/Json.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <functional>
+#include <memory>
 #include <numeric>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace MaestroExecution
 {
@@ -116,8 +127,8 @@ bool PrepareCached(const std::shared_ptr<Circuits::Circuit<double>> &circuit, co
         cache.groups.clear();
         cache.mappings.clear();
         if (config.enable_observable_clustering && BenefitsFromObservableClustering(config.simulator_type, config.simulation_type))
-            cache.groups = ClusterObservables(circuit, observables, ClusterBudget(config), HasEnsembleState(config), config.min_cluster_qubits,
-                                              false, config.allow_reset_marginalization);
+            cache.groups = ClusterObservables(circuit, observables, ClusterBudget(config), HasEnsembleState(config), config.min_cluster_qubits, false,
+                                              config.allow_reset_marginalization);
         else
         {
             cache.groups.emplace_back(observables.size());
@@ -263,6 +274,63 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
 EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
                                  const SimulatorConfig &config, EstimationCache *cache)
 {
+    if (!circuit)
+        throw std::invalid_argument("Circuit is null.");
+    config.Validate();
+    const auto terminal = PrepareTerminalExpectation(circuit, observables, config);
+    const bool stochastic = terminal ? terminal->RequiresTrajectories() : HasStochasticEvolution(circuit, UsesExactQuantumChannels(config));
+    const size_t trajectories = stochastic && !observables.empty() ? kMeasurementTrajectories : 1;
+    const auto prefix = terminal ? EstimateDeterministicTerminalPrefix(*terminal, config) : std::nullopt;
+    const auto evaluate = [&](const SimulatorConfig &next) {
+        return terminal ? EstimateTerminalExpectation(*terminal, next, cache, prefix ? &*prefix : nullptr)
+                        : EstimateCircuitTrajectory(circuit, observables, next, cache);
+    };
+    if (trajectories == 1)
+    {
+        auto result = evaluate(config);
+        result.terminal_channels_averaged = terminal.has_value();
+        return result;
+    }
+
+    EstimationResult result;
+    std::vector<double> means(observables.size()), m2(observables.size()), bounds(observables.size());
+    double elapsed = prefix ? prefix->time_taken : 0.;
+    auto next = config;
+    for (size_t r = 0; r < trajectories; ++r)
+    {
+        if (config.seed)
+            next.seed = Simulators::IState::DeriveSeed(*config.seed, r);
+        result = evaluate(next);
+        elapsed += result.time_taken;
+        for (size_t i = 0; i < means.size(); ++i)
+        {
+            const double delta = result.values[i] - means[i];
+            means[i] += delta / (r + 1);
+            m2[i] += delta * (result.values[i] - means[i]);
+            bounds[i] += result.plan.error_bounds[i] / trajectories;
+        }
+    }
+    result.standard_errors.resize(means.size());
+    for (size_t i = 0; i < means.size(); ++i)
+        result.standard_errors[i] = std::sqrt(std::max(0.0, m2[i]) / (trajectories - 1) / trajectories);
+    result.values = std::move(means);
+    result.plan.error_bounds = std::move(bounds);
+    result.time_taken = elapsed;
+    result.measurement_trajectories = trajectories;
+    result.terminal_channels_averaged = terminal.has_value();
+    return result;
+}
+
+EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
+                                           const SimulatorConfig &config, EstimationCache *cache)
+{
+    return EstimateCircuitTrajectory(circuit, observables, config, cache, {});
+}
+
+EstimationResult EstimateCircuitTrajectory(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
+                                           const SimulatorConfig &config, EstimationCache *cache,
+                                           const std::function<std::shared_ptr<Circuits::Circuit<double>>(const EstimationGroup &)> &execution_circuit)
+{
     EstimationResult result;
     result.values.assign(observables.size(), 0.0);
     result.simulator = config.simulator_type;
@@ -290,6 +358,8 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
         auto network = ConfigureNetwork(handle, config);
         if (!network)
             throw std::runtime_error("Failed to configure network");
+        // The caller has already chosen the terminal plan or requested this raw trajectory.
+        network->Configure("terminal_channel_policy", "trajectories");
         if (config.fixed_backend &&
             (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
             throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
@@ -300,7 +370,7 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
             network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto start = Clock::now();
-        Scatter(result.values, group, network->ExecuteOnHostExpectations(group.circuit, 0, group.observables));
+        Scatter(result.values, group, network->ExecuteOnHostExpectations(execution_circuit ? execution_circuit(group) : group.circuit, 0, group.observables));
         result.time_taken += std::chrono::duration<double>(Clock::now() - start).count();
         if (network->GetLastSimulatorType() == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
             network->GetLastGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
@@ -319,6 +389,50 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
     return result;
 }
 
+SimulatorConfig NetworkEstimateConfig(const Network::INetwork<double> &network)
+{
+    // Plan for every backend the network may run: its simulator's while
+    // selection keeps it, else any candidate selection may choose (a
+    // configured list, or the whole set a cost model ranks).
+    SimulatorConfig config;
+    config.simulator_type = network.GetSimulator()->GetType();
+    config.simulation_type = network.GetSimulator()->GetSimulationType();
+    config.fixed_backend = true;
+    if (network.GetOptimizeSimulator() && !Simulators::IsDistributedGpuSimulator(network.GetSimulator()->GetType()))
+    {
+        auto candidates = network.GetOptimizationCandidates();
+        if (candidates.empty() && network.HasCostModel())
+        {
+            const auto &set = network.GetSimulatorsSet();
+            candidates.assign(set.begin(), set.end());
+            std::sort(candidates.begin(), candidates.end());
+        }
+        if (!candidates.empty())
+        {
+            config.fixed_backend = false;
+            config.optimization_candidates = std::move(candidates);
+        }
+    }
+    const auto terminal_policy = network.GetSimulator()->GetConfiguration("terminal_channel_policy");
+    if (!terminal_policy.empty())
+        config.terminal_channel_policy = terminal_policy;
+    return config;
+}
+
+std::optional<std::vector<double>> TryNetworkTerminalExpectation(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
+                                                                 const std::vector<std::string> &observables, const Network::INetwork<double> &network,
+                                                                 const NetworkExpectationEvaluator &evaluate)
+{
+    if (!circuit || observables.empty() || !circuit->HasQuantumChannels() || !network.GetSimulator())
+        return std::nullopt;
+    const auto terminal = PrepareTerminalExpectation(circuit, observables, NetworkEstimateConfig(network));
+    if (!terminal)
+        return std::nullopt;
+    const auto prefix = terminal->prefix_observables.empty() ? std::vector<double>{} : evaluate(terminal->prefix, terminal->prefix_observables);
+    const auto sampled = terminal->sampled_indices.empty() ? std::vector<double>{} : evaluate(circuit, terminal->sampled_observables);
+    return terminal->Combine(prefix, sampled);
+}
+
 std::vector<double> EstimateOnNetwork(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
                                       const std::shared_ptr<Network::INetwork<double>> &network, std::optional<size_t> host, bool auto_reduce,
                                       EstimationCache *cache, bool *executed)
@@ -335,28 +449,7 @@ std::vector<double> EstimateOnNetwork(const std::shared_ptr<Circuits::Circuit<do
             *executed = simulator != nullptr;
         return host ? network->ExecuteOnHostExpectations(circuit, *host, observables) : network->ExecuteExpectations(circuit, observables);
     }
-    // Plan for every backend the network may run: its simulator's while
-    // selection keeps it, else any candidate selection may choose (a
-    // configured list, or the whole set a cost model ranks).
-    SimulatorConfig config;
-    config.simulator_type = simulator->GetType();
-    config.simulation_type = simulator->GetSimulationType();
-    config.fixed_backend = true;
-    if (network->GetOptimizeSimulator() && !Simulators::IsDistributedGpuSimulator(simulator->GetType()))
-    {
-        auto candidates = network->GetOptimizationCandidates();
-        if (candidates.empty() && network->HasCostModel())
-        {
-            const auto &set = network->GetSimulatorsSet();
-            candidates.assign(set.begin(), set.end());
-            std::sort(candidates.begin(), candidates.end());
-        }
-        if (!candidates.empty())
-        {
-            config.fixed_backend = false;
-            config.optimization_candidates = std::move(candidates);
-        }
-    }
+    auto config = NetworkEstimateConfig(*network);
     config.auto_reduce = auto_reduce;
     const auto plan = PrepareEstimation(circuit, observables, config, cache);
     auto values = plan.resolved_values;

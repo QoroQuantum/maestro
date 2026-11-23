@@ -132,17 +132,44 @@ static bool ConfigureLegacyRouting(Network::INetwork<> &network, const boost::js
     return true;
 }
 
-// Explicitly forward trajectory controls: legacy SimpleExecute does not pass
-// arbitrary JSON keys through to the network. A missing policy resets to shot_v1.
+static std::shared_ptr<Circuits::Circuit<>> ParseLegacyCircuit(const char *source)
+{
+    if (source[0] == '{' || source[0] == '[')
+    {
+        try
+        {
+            return Json::JsonParserMaestro<>{}.ParseCircuit(source);
+        }
+        catch (const std::exception &)
+        {
+            return nullptr;
+        }
+    }
+    qasm::QasmToCirc<> parser;
+    std::string input(source);
+    auto circuit = parser.ParseAndTranslate(input);
+    return parser.Failed() ? nullptr : circuit;
+}
+
+// Reused legacy handles start each request with the default policies unless the caller supplies an override.
 static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boost::json::value &config)
 {
     try
     {
         std::string policy = "shot_v1";
+        std::string terminal_policy = "auto";
         uint64_t workers = 0;
         uint64_t memoryMb = 1024;
         if (config.is_object())
         {
+            if (const auto *value = config.as_object().if_contains("terminal_channel_policy"))
+            {
+                if (!value->is_string())
+                    return false;
+                terminal_policy = std::string(value->as_string());
+                if (terminal_policy != "auto" && terminal_policy != "trajectories")
+                    return false;
+            }
             if (const auto *value = config.as_object().if_contains("trajectory_policy"))
             {
                 if (!value->is_string())
@@ -180,6 +207,7 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
             network.SetMaxSimulators(static_cast<size_t>(workers));
         network.Configure("trajectory_max_memory_mb", std::to_string(memoryMb).c_str());
         network.Configure("trajectory_policy", policy.c_str());
+        network.Configure("terminal_channel_policy", terminal_policy.c_str());
         return true;
     }
     catch (const std::exception &)
@@ -907,28 +935,9 @@ extern "C"
         // "classical_registers": {"c": [0, 1], "other_measure_name": [2], "meas":
         // [3]}}
 
-        std::shared_ptr<Circuits::Circuit<>> circuit;
-
-        if (circuitStr[0] == '{' || circuitStr[0] == '[')
-        {
-            // assume JSON format only if either object or array
-            Json::JsonParserMaestro<> jsonParser;
-            circuit = jsonParser.ParseCircuit(circuitStr);
-        }
-        else
-        {
-            // QASM 2.0 format
-            qasm::QasmToCirc<> parser;
-            std::string qasmInput(circuitStr);
-            circuit = parser.ParseAndTranslate(qasmInput);
-            if (parser.Failed())
-                return nullptr;
-        }
-
-        // check if the circuit has measurements only at the end
-
-        // get the number of shots from the configuration
-        size_t nrShots = 1; // default value
+        auto circuit = ParseLegacyCircuit(circuitStr);
+        if (!circuit)
+            return nullptr;
 
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
         if (!ConfigureLegacyTrajectories(*network, configJson))
@@ -941,6 +950,7 @@ extern "C"
         if (!ParseLegacyCountsPolicy(configJson, countsPolicy))
             return nullptr;
 
+        size_t nrShots = 1;
         if (configJson.is_object())
         {
             const auto configObject = configJson.as_object();
@@ -1143,21 +1153,9 @@ extern "C"
 
         auto network = maestroInstance->GetSimpleSimulator(simpleSim);
 
-        std::shared_ptr<Circuits::Circuit<>> circuit;
-
-        if (circuitStr[0] == '{' || circuitStr[0] == '[')
-        {
-            Json::JsonParserMaestro<> jsonParser;
-            circuit = jsonParser.ParseCircuit(circuitStr);
-        }
-        else
-        {
-            qasm::QasmToCirc<> parser;
-            std::string qasmInput(circuitStr);
-            circuit = parser.ParseAndTranslate(qasmInput);
-            if (parser.Failed())
-                return nullptr;
-        }
+        auto circuit = ParseLegacyCircuit(circuitStr);
+        if (!circuit)
+            return nullptr;
 
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
         if (!ConfigureLegacyTrajectories(*network, configJson))

@@ -692,6 +692,31 @@ void TrajectoryBlocks()
               !Make(Method::kMatrixProductState, true)->FusesQuantumChannels(),
           "trajectory block capability");
 
+    // The thermal block sees populations on two nonadjacent qubits, one entangled
+    // with a spectator. An optional Hadamard before the next draw makes the
+    // coherences matter again. Compare the full conditional state in both cases.
+    for (bool mix : {false, true})
+        for (uint64_t seed = 0; seed < 32; ++seed)
+        {
+            const auto evolve = [&](bool fusion) {
+                auto sim = Make(Method::kStatevector, fusion, Backend::kQCSim, 6);
+                sim->Configure("trajectory_blocks_read_first", "true");
+                sim->SetSeed(seed);
+                sim->ApplyH(5);
+                sim->ApplyCX(5, 1);
+                sim->ApplyRy(0, 1.2);
+                sim->Flush();
+                sim->ApplyQuantumChannel({5}, generalized);
+                sim->ApplyCX(5, 0);
+                sim->ApplyRz(0, .7);
+                if (mix)
+                    sim->ApplyH(0);
+                sim->ApplyQuantumChannel({0}, damping);
+                return State(*sim);
+            };
+            Close(evolve(true), evolve(false), "thermal block with an entangled spectator", 1e-12);
+        }
+
     // A register no wider than a block holds one block, whose channels draw in
     // circuit order: with factors drawn from the state only, the fused run
     // takes the branches of the unfused one and ends in the same state.

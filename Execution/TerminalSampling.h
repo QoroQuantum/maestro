@@ -73,6 +73,16 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
 }
 
 using TerminalCountSink = std::function<void(size_t, const Circuits::OperationState &)>;
+using TerminalHistogram = std::unordered_map<std::vector<bool>, Types::qubit_t>;
+using TerminalSampler = std::function<TerminalHistogram(const Types::qubits_vector &)>;
+using TerminalRowSink = std::function<void(size_t, const Circuits::OperationState &)>;
+
+// Sample a suffix on the restored checkpoint. Its incoming state can be entangled and its
+// save slot belongs to the caller. A false result leaves both the register and the slot untouched.
+bool SampleCheckpointTerminal(const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, const SimulatorConfig &config,
+                              size_t shots, Circuits::OperationState &state, std::optional<uint64_t> seed, const TerminalRowSink &write,
+                              size_t *maxBondDimension, const TerminalCountSink &writeCounts);
+bool HasCheckpointTerminalPopulations(const RecordCircuitPtr &circuit, const Simulators::ISimulator &simulator, size_t classical_width);
 
 // On success, evolves the deterministic part exactly once from the CURRENT
 // simulator state, then emits (row index, classical state) for every sample.
@@ -88,7 +98,7 @@ using TerminalCountSink = std::function<void(size_t, const Circuits::OperationSt
 template <class RowSink>
 bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots,
                             Circuits::OperationState &state, std::optional<uint64_t> seed, RowSink &&write, size_t *maxBondDimension = nullptr,
-                            bool known_zero_initial_state = false, const TerminalCountSink &writeCounts = {})
+                            bool known_zero_initial_state = false, const TerminalCountSink &writeCounts = {}, const TerminalSampler &sample = {})
 {
     const auto inlined = InlinedForSampling(input);
     const auto &circuit = inlined ? *inlined : input;
@@ -113,7 +123,7 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
     const Circuits::OperationState initial(state);
     const bool aggregate = writeCounts && !measurements->HasReadout();
     const auto order = writeCounts ? std::vector<size_t>{} : SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
-    const auto histogram = simulator->SampleCountsMany(qubits, shots);
+    const auto histogram = sample ? sample(qubits) : simulator->SampleCountsMany(qubits, shots);
     if (aggregate)
     {
         size_t remaining = shots;

@@ -1,13 +1,25 @@
 #include "SampleRecords.h"
 #include "ExtendedFrameSampler.h"
+#include "NetworkTerminal.h"
+#include "TerminalPopulations.h"
 #include "TerminalSampling.h"
 
 #include "../Utils/Threads/RealizationWorkers.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace MaestroExecution
 {
@@ -234,7 +246,173 @@ void RecordFusion(ShotRecords &records, const SamplingResult &result)
     if (result.gpu_device >= 0)
         records.gpu_device = result.gpu_device;
 }
+
+TerminalChannels FindTerminalPopulationLayer(const RecordCircuitPtr &circuit, bool fresh_register = true)
+{
+    auto layer = SplitTerminalChannels(circuit);
+    size_t measured = 0;
+    if (!layer.prefix || layer.prefix->HasOpsAfterMeasurementsWithWidth(false, measured) || !measured ||
+        HasStochasticEvolution(layer.prefix, false, fresh_register) ||
+        std::all_of(layer.channels.begin(), layer.channels.end(), [](const auto &op) { return op->IsDeterministic(); }))
+        return {};
+    return layer;
+}
+
+bool CompileTerminalPopulations(const TerminalChannels &layer, TerminalPopulations &populations)
+{
+    Circuits::OperationState dry;
+    const auto mask = layer.prefix->ExecuteNonMeasurements(nullptr, dry);
+    const auto measurements = layer.prefix->GetLastMeasurements(mask, false);
+    return populations.Compile(layer, measurements->GetQubits());
+}
+
+TerminalSampler TerminalPopulationSampler(const TerminalPopulations &populations, Simulators::ISimulator &simulator, size_t shots, uint64_t seed,
+                                          std::optional<uint64_t> noise_seed = std::nullopt)
+{
+    if (populations.IsIdentity())
+        return [&simulator, shots](const Types::qubits_vector &qubits) {
+            return Simulators::FactoryBackends::SamplePreparedStatevector(simulator, qubits, shots);
+        };
+    const uint64_t channel_seed = Utils::RandomStream::Derive(noise_seed ? JoinNoiseSeed(seed, *noise_seed) : seed, 0x5445524d4348414eULL);
+    return [&populations, &simulator, shots, channel_seed](const Types::qubits_vector &qubits) {
+        return populations.Sample(simulator, qubits, shots, channel_seed);
+    };
+}
 } // namespace
+
+bool HasCheckpointTerminalPopulations(const RecordCircuitPtr &circuit, const Simulators::ISimulator &simulator, size_t classical_width)
+{
+    auto layer = FindTerminalPopulationLayer(circuit, false);
+    TerminalPopulations populations;
+    return layer.prefix && CanSampleTerminal(*layer.prefix, simulator, classical_width, false) && CompileTerminalPopulations(layer, populations);
+}
+
+bool SampleCheckpointTerminal(const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, const SimulatorConfig &config,
+                              size_t shots, Circuits::OperationState &state, std::optional<uint64_t> seed, const TerminalRowSink &write,
+                              size_t *maxBondDimension, const TerminalCountSink &writeCounts)
+{
+    if (shots < 2 || !PreservesSavedStateWhileSampling(*simulator, EffectiveCountsPolicy(config) == "legacy"))
+        return false;
+    if (SamplePreparedTerminal(*circuit, simulator, shots, state, seed, write, maxBondDimension, false, writeCounts))
+        return true;
+    if (!AllowsTerminalPopulationSampling(config))
+        return false;
+    auto layer = FindTerminalPopulationLayer(circuit, false);
+    TerminalPopulations populations;
+    if (!layer.prefix || !CompileTerminalPopulations(layer, populations))
+        return false;
+    const uint64_t stream = seed ? *seed : Utils::RandomStream::FreshSeed();
+    return SamplePreparedTerminal(*layer.prefix, simulator, shots, state, seed, write, maxBondDimension, false, writeCounts,
+                                  TerminalPopulationSampler(populations, *simulator, shots, stream));
+}
+
+bool SampleNetworkTerminalChannels(const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots,
+                                   size_t classical_width, size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
+                                   Circuits::Circuit<double>::ExecuteResults &counts)
+{
+    auto layer = FindTerminalPopulationLayer(circuit);
+    TerminalPopulations populations;
+    if (!layer.prefix || !CanSampleTerminal(*layer.prefix, *simulator, classical_width, true) || !CompileTerminalPopulations(layer, populations))
+        return false;
+    prepare();
+    const uint64_t stream = seed ? *seed : Utils::RandomStream::FreshSeed();
+    simulator->SetSeed(stream);
+    Circuits::OperationState state(classical_width);
+    const auto count = [&](size_t n, const Circuits::OperationState &outcome) {
+        auto bits = outcome.GetAllBits();
+        bits.resize(result_width, false);
+        counts[bits] += n;
+    };
+    return SamplePreparedTerminal(
+        *layer.prefix, simulator, shots, state, stream, [](size_t, const Circuits::OperationState &) {}, nullptr, true, count,
+        TerminalPopulationSampler(populations, *simulator, shots, stream));
+}
+
+std::optional<ShotRecords> SampleTerminalChannels(const RecordCircuitPtr &circuit, const SimulatorConfig &config, size_t shots, bool rows,
+                                                  std::optional<uint64_t> noise_seed, bool identity_only)
+{
+    if (shots < 2 || !AllowsTerminalPopulationSampling(config))
+        return std::nullopt;
+    const auto start = std::chrono::steady_clock::now();
+    auto layer = FindTerminalPopulationLayer(circuit);
+    if (!layer.prefix)
+        return std::nullopt;
+
+    // A terminal channel can involve an unmeasured wire. Keep the register and its target ordering together.
+    const QubitCompaction compaction(*circuit);
+    if (compaction.Sparse())
+        layer = SplitTerminalChannels(compaction.Apply(circuit));
+    // The network optimizes the circuit before executing a fixed Aer or composite register. In a composite,
+    // eliminating cancelling entanglers can also avoid joining otherwise independent components.
+    if (config.optimize_circuit && config.simulator_type != Simulators::SimulatorType::kQCSim)
+        layer.prefix->Optimize();
+    TerminalPopulations populations;
+    if (!CompileTerminalPopulations(layer, populations) || (identity_only && !populations.IsIdentity()))
+        return std::nullopt;
+
+    ShotRecords result;
+    result.shots = shots;
+    result.width = ClassicalWidth(*circuit);
+    result.components = 1;
+    result.largest_component = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
+    result.sampling_strategy = "terminal_v1";
+    if (rows)
+        result.rows.resize(SampleStorageSize(shots, result.width));
+    RawSamplingSession session(compaction.Width(), config, true);
+    const auto &simulator = session.Simulator();
+    result.simulator = simulator->GetType();
+    result.method = simulator->GetSimulationType();
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    const uint64_t seed = configured_seed ? *configured_seed : noise_seed ? *noise_seed : Utils::RandomStream::FreshSeed();
+    simulator->SetSeed(seed);
+    const auto sample = TerminalPopulationSampler(populations, *simulator, shots, seed, noise_seed);
+    TerminalHistogram counts;
+    TerminalCountSink sink;
+    if (!rows)
+        sink = [&](size_t count, const Circuits::OperationState &state) { counts[state.GetAllBits()] += count; };
+    Circuits::OperationState state(result.width);
+    if (!SamplePreparedTerminal(
+            *layer.prefix, simulator, shots, state, seed,
+            [&](size_t row, const Circuits::OperationState &outcome) {
+                const auto &bits = outcome.GetAllBits();
+                std::copy_n(bits.begin(), result.width, result.rows.begin() + row * result.width);
+            },
+            nullptr, true, sink, sample))
+        return std::nullopt;
+    result.counts.reserve(counts.size());
+    for (const auto &[bits, count] : counts)
+        result.counts.emplace_back(bits, count);
+    RecordFusion(result, *simulator);
+    result.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    return result;
+}
+
+std::optional<ShotRecords> SampleNoisyTerminalChannels(const noise::NoiseInjectionPlan &plan, const RecordCircuitPtr &runtime_circuit, NoiseLayer layer,
+                                                       const SimulatorConfig &config, size_t shots, size_t realizations, bool rows,
+                                                       std::optional<uint64_t> noise_seed)
+{
+    if (shots < 2 || !AllowsTerminalPopulationSampling(config))
+        return std::nullopt;
+    // The ordinary executor treats crosstalk spectators beyond the circuit specially for register size and count-key padding.
+    if (plan.model().has_crosstalk())
+        return std::nullopt;
+    auto circuit = runtime_circuit;
+    if (!circuit)
+    {
+        // Coherent signs and time-correlated disturbances must keep their realization schedule.
+        if (plan.model().has_coherent() || plan.model().has_correlated() || (!plan.model().has_non_readout_noise() && !plan.circuit()->HasQuantumChannels()))
+            return std::nullopt;
+        circuit = RecoverTerminalNoise(plan, layer);
+        if (!circuit)
+            return std::nullopt;
+    }
+    // The injection seed fixes the pre-drawn errors of a realization even when its shot count changes.
+    // A basis-invisible channel (such as dephasing) can be omitted for any realization schedule.
+    auto result = SampleTerminalChannels(circuit, config, shots, rows, noise_seed, !runtime_circuit);
+    if (result)
+        result->realizations = runtime_circuit ? shots : realizations;
+    return result;
+}
 
 ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorConfig &config, size_t shots)
 {
@@ -264,6 +442,8 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
     }
     if (!reference && shots)
     {
+        if (auto sampled = SampleTerminalChannels(circuit, config, shots, true))
+            return std::move(*sampled);
         records.rows.resize(SampleStorageSize(shots, records.width));
         if (SupportsDirectSamples(config))
         {
@@ -332,14 +512,17 @@ bool SampleExtendedFrames(const RecordCircuitPtr &circuit, const noise::NoiseMod
     return RunExtendedFrames(*plan, config, shots, realizations, ExtendedFrameSampler::Seeds{noise_seed, measurement_seed}, rows, samples, counts);
 }
 
-ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, size_t shots,
+ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &requested_config, size_t shots,
                          std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, const NoisyExecutionOptions &options)
 {
     if (!circuit)
         throw std::invalid_argument("Circuit is null.");
     if (shots < 1)
         throw std::invalid_argument("shots must be >= 1.");
+    auto config = requested_config;
     config.Validate();
+    if (!options.allow_terminal_channels)
+        config.terminal_channel_policy = "trajectories";
     const bool return_samples = options.rows;
     const auto configured_seed = EffectiveSamplingSeed(config);
     const bool exact = options.exact_channels ? *options.exact_channels : InjectsExactChannels(config, noise_model, *circuit);
@@ -505,6 +688,12 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     }
     if (!reference && !extended)
     {
+        if (!exact && plan && options.allow_terminal_channels)
+            if (auto sampled = SampleNoisyTerminalChannels(*plan, runtime_circuit, layer, config, shots, batches, return_samples, noise_seed))
+            {
+                sampled->policy = policy;
+                return std::move(*sampled);
+            }
         if (return_samples)
             records.rows.resize(SampleStorageSize(shots, width));
         uint8_t *samples = records.rows.data();

@@ -2,11 +2,13 @@
 #include "../Circuit/Factory.h"
 #include "../Execution/NoisyEstimation.h"
 #include "../Execution/PrefixCheckpoint.h"
+#include "../Execution/TerminalExpectation.h"
 #include "../Execution/TerminalSampling.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <complex>
 #include <map>
 
 void Check(bool, const char *);
@@ -581,6 +583,325 @@ void NestedChannelsLeaveTheIdealBaseline()
     Check(std::abs(estimate.values[0] - 1.0) < 1e-10 && std::abs(estimate.ideal_values[0] + 1.0) < 1e-10,
           "Nested channel noise leaked into the ideal baseline");
 }
+
+void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
+{
+    using Channel = Simulators::QuantumChannel;
+    using namespace MaestroExecution;
+    auto config = Config(Method::kStatevector);
+    config.simulator_type = backend;
+    const auto estimate = [&](const RecordCircuitPtr &circuit, const std::vector<std::string> &words, const noise::NoiseModel &model,
+                              std::optional<size_t> requested = std::nullopt) {
+        return EstimateNoisy(circuit, words, model, requested, config, 24, NoiseLayer::kCombined);
+    };
+    auto x = CF::CreateCircuit();
+    x->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    noise::NoiseModel t1;
+    t1.set_t1(0, 0.3);
+    for (const std::optional<size_t> requested : {std::optional<size_t>{}, std::optional<size_t>{7}})
+    {
+        const auto result = estimate(x, {"Z", "z", "I"}, t1, requested);
+        Check(result.terminal_channels && !result.policy.stochastic_noise && result.realizations == requested.value_or(1) && result.realization_workers == 1,
+              "Terminal T1 did not resolve on one deterministic preparation");
+        Check(std::abs(result.values[0] + 0.4) < 1e-12 && result.values[1] == result.values[0] && result.values[2] == 1. && result.ideal_values[0] == -1. &&
+                  result.standard_errors[0] == 0.,
+              "Terminal T1 lost its affine shift, observable order or ideal baseline");
+    }
+
+    // A state-independent noise model is normally drawn into gates. When it
+    // acts only at the end the estimator can instead average the full channel.
+    noise::NoiseModel flip;
+    flip.set_bit_flip(0, 0.25);
+    Check(std::abs(estimate(x, {"Z"}, flip).values[0] + 0.5) < 1e-12, "Terminal bit-flip model was drawn into one trajectory");
+
+    // Non-Pauli Kraus on two asymmetrically ordered targets, followed by a
+    // noncommuting channel. Short words must grow to include the other target.
+    auto two = CF::CreateCircuit();
+    two->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 2));
+    two->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    Eigen::Matrix4cd stay = Eigen::Matrix4cd::Identity(), jump = Eigen::Matrix4cd::Zero();
+    stay(3, 3) = 0.8;
+    jump(1, 3) = 0.6;
+    two->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2, 0}, Channel(Channel::KrausOperators{stay, jump})));
+    two->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2}, Channel::GeneralizedAmplitudeDamping(0.31, 0.23)));
+    const std::vector<std::string> words{"Z", "IIX", "IIZ", "ZIX", "XIZ", "III", "Z"};
+    const auto reference = EstimateNoisy(two, words, {}, std::nullopt, Config(Method::kDensityMatrix), 91, NoiseLayer::kCombined);
+    const auto result = estimate(two, words, {});
+    Check(result.terminal_channels && result.realizations == 1, "Two-qubit terminal Kraus channel was sampled");
+    for (size_t i = 0; i < words.size(); ++i)
+        Check(std::abs(result.values[i] - reference.values[i]) < 1e-12, "Terminal Kraus adjoint disagreed with the density matrix");
+
+    // Here the first damping is still sampled. The last one's conditional
+    // result has two possible values; its standard error must be calculated
+    // after combining the terms in Z -> (1-gamma) Z + gamma I.
+    auto mixed = CF::CreateCircuit();
+    mixed->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    mixed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(0.5)));
+    mixed->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    mixed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(0.5)));
+    const size_t samples = 40;
+    const auto partial = estimate(mixed, {"Z"}, {}, samples);
+    const double mean = partial.values[0];
+    Check(partial.terminal_channels && partial.realizations == samples && mean > 0. && mean < 1. && partial.policy.stochastic_execution,
+          "A sampled statevector prefix was treated as deterministic");
+    Check(std::abs(partial.standard_errors[0] - std::sqrt(mean * (1. - mean) / (samples - 1))) < 1e-12,
+          "Terminal conditional expectation has the wrong trajectory standard error");
+    const auto repeated = estimate(mixed, {"Z"}, {}, samples);
+    Check(repeated.values == partial.values && repeated.standard_errors == partial.standard_errors, "A seeded sampled prefix did not replay");
+    const auto trajectories = EstimateNoisy(x, {"Z"}, t1, samples, config, 24, NoiseLayer::kCombined, false);
+    Check(!trajectories.terminal_channels && trajectories.standard_errors[0] > 0., "Explicit trajectories were averaged at the terminal channel");
+
+    // A rare Hadamard leaves an X expectation below the Pauli propagator's
+    // coefficient snapping threshold. It is the entire signal here.
+    const double rare = 4e-15;
+    Eigen::Matrix2cd h;
+    h << 1., 1., 1., -1.;
+    h /= std::sqrt(2.);
+    auto little = CF::CreateCircuit();
+    const auto rare_h = Channel::UnitaryMixture({1. - rare, rare}, {Eigen::Matrix2cd::Identity(), h});
+    little->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, rare_h.Then(Channel::PhaseFlip(0.25))));
+    const auto weak = estimate(little, {"X"}, {});
+    Check(weak.terminal_channels && std::abs(weak.values[0] - 0.5 * rare) < 1e-28, "A weak nonzero terminal expectation was discarded");
+
+    // A phased X accepted as a Kraus operator can have squared norm 1 + one ulp.
+    // In a composition its recognized Pauli factor keeps that rounding.
+    Eigen::Matrix2cd phased = Eigen::Matrix2cd::Zero();
+    phased(0, 1) = phased(1, 0) = std::complex<double>(1., std::ldexp(1., -26));
+    const Channel phased_x(Channel::KrausOperators{phased});
+    Check(phased_x.GetFactors().front().kind == Channel::FactorKind::kPauli, "A global phase prevented Pauli classification");
+    auto phased_circuit = CF::CreateCircuit();
+    phased_circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    phased_circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(.25).Then(phased_x)));
+    const auto phased_result = estimate(phased_circuit, {"Z"}, {});
+    Check(phased_result.realizations == 1 && std::abs(phased_result.values[0] + .25) < 1e-14, "A roundoff-sized phased Pauli factor changed the estimate");
+
+    // Placement preserves the given Kraus operators. A weak coherent rotation can
+    // look like an identity Pauli to the factor classifier, but it produces X signal.
+    constexpr double angle = 1e-12;
+    Eigen::Matrix2cd ry;
+    ry << std::cos(angle / 2), -std::sin(angle / 2), std::sin(angle / 2), std::cos(angle / 2);
+    auto placed = CF::CreateCircuit();
+    placed->AddOperation(
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0, 1}, Channel::OnQubit(Channel(Channel::KrausOperators{ry}), 1)));
+    placed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1}, Channel::PhaseFlip(.25)));
+    const auto rotated = estimate(placed, {"IX"}, {});
+    const auto rotated_dm = EstimateNoisy(placed, {"IX"}, {}, std::nullopt, Config(Method::kDensityMatrix), 24, NoiseLayer::kCombined);
+    Check(rotated.realizations == 1 && std::abs(rotated.values[0] - .5 * std::sin(angle)) < 1e-24 && std::abs(rotated.values[0] - rotated_dm.values[0]) < 1e-24,
+          "Placed raw Kraus classification discarded a coherent terminal signal");
+
+    auto composed = CF::CreateCircuit();
+    composed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0},
+                                                                                 Channel(Channel::KrausOperators{ry}).Then(Channel::AmplitudeDamping(.2))));
+    const auto coherent = estimate(composed, {"X"}, {});
+    const auto coherent_dm = EstimateNoisy(composed, {"X"}, {}, std::nullopt, Config(Method::kDensityMatrix), 24, NoiseLayer::kCombined);
+    Check(std::abs(coherent.values[0] - std::sqrt(.8) * std::sin(angle)) < 1e-24 && std::abs(coherent.values[0] - coherent_dm.values[0]) < 1e-24,
+          "Composition classified a weak coherent rotation as a Pauli mixture");
+
+    constexpr double weak_probability = 1e-17;
+    Eigen::Matrix2cd reset_plus = Eigen::Matrix2cd::Zero();
+    reset_plus(0, 0) = reset_plus(1, 0) = std::sqrt(.5);
+    for (bool unitary : {false, true})
+    {
+        const Channel raw(Channel::KrausOperators{Eigen::Matrix2cd::Identity(), std::sqrt(weak_probability) * (unitary ? h : reset_plus)});
+        Check(raw.GetFactors().front().kind == (unitary ? Channel::FactorKind::kUnitaryMixture : Channel::FactorKind::kKraus),
+              "A rare Kraus branch was classified without considering its own norm");
+        auto rare_input = CF::CreateCircuit();
+        rare_input->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, raw.Then(Channel::PhaseFlip(.25))));
+        const auto rare_value = estimate(rare_input, {"X"}, {});
+        Check(std::abs(rare_value.values[0] - .5 * weak_probability) < 1e-31, "Composition lost a nonzero raw Kraus branch");
+    }
+
+    auto large = CF::CreateCircuit();
+    for (size_t q = 0; q < 9; ++q)
+        large->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+    for (size_t q = 0; q < 9; ++q)
+        large->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.2)));
+    const auto seven = estimate(large, {"ZZZZZZZ"}, {});
+    Check(seven.realizations == 1 && std::abs(seven.values[0] - std::pow(-.6, 7)) < 1e-12, "A modest deterministic damping expansion was sampled");
+    const auto hybrid = estimate(large, {"Z", "ZZZZZZZZZ", "Z"}, {}, 15);
+    const auto sampled = EstimateNoisy(large, {"ZZZZZZZZZ"}, {}, 15, config, 24, NoiseLayer::kCombined, false);
+    Check(hybrid.terminal_channels && hybrid.realizations == 15 && std::abs(hybrid.values[0] + .6) < 1e-14 && hybrid.standard_errors[0] == 0. &&
+              hybrid.values[2] == hybrid.values[0] && hybrid.standard_errors[2] == 0. && hybrid.values[1] == sampled.values[0] &&
+              hybrid.standard_errors[1] == sampled.standard_errors[0],
+          "A wide fallback row disturbed an exact damping estimate or its seeded fallback");
+
+    auto stochastic = CF::CreateCircuit();
+    auto prefix_calls = std::make_shared<std::atomic<size_t>>(0);
+    stochastic->AddOperation(std::make_shared<CountedX>(0, prefix_calls));
+    for (size_t q = 1; q < 3; ++q)
+        stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+    stochastic->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(.5)));
+    stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    for (size_t q = 0; q < 3; ++q)
+        stochastic->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.5)));
+    const auto hybrid_prefix = estimate(stochastic, {"Z", "ZZZ"}, {}, samples);
+    const auto all_sampled = EstimateNoisy(stochastic, {"ZZZ"}, {}, samples, config, 24, NoiseLayer::kCombined, false);
+    const double hybrid_mean = hybrid_prefix.values[0];
+    Check(hybrid_prefix.terminal_channels && hybrid_prefix.realizations == samples && hybrid_mean > 0. && hybrid_mean < 1. &&
+              std::abs(hybrid_prefix.standard_errors[0] - std::sqrt(hybrid_mean * (1. - hybrid_mean) / (samples - 1))) < 1e-12 &&
+              hybrid_prefix.values[1] == all_sampled.values[0] && hybrid_prefix.standard_errors[1] == all_sampled.standard_errors[0],
+          "A sampled prefix lost the conditional expectation or reproducibility of a mixed request");
+
+    const auto together = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, config);
+    if (backend == Simulators::SimulatorType::kQCSim
+#ifndef NO_QISKIT_AER
+        || backend == Simulators::SimulatorType::kQiskitAer
+#endif
+    )
+    {
+        Check(together && together->RequiresTrajectories(), "A mixed terminal request lost its sampled rows");
+        for (bool fixed : {false, true})
+        {
+            auto scheduled = config;
+            scheduled.fixed_backend = fixed;
+            const auto joint = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, scheduled);
+            for (size_t seed = 0; seed < 8; ++seed)
+            {
+                scheduled.seed = seed;
+                const auto prefix = EstimateCircuitTrajectory(joint->prefix, joint->prefix_observables, scheduled);
+                const auto full = EstimateCircuitTrajectory(stochastic, joint->sampled_observables, scheduled);
+                prefix_calls->store(0);
+                const auto actual = EstimateTerminalExpectation(*joint, scheduled);
+                Check(prefix_calls->load() == 1 && actual.values == joint->Combine(prefix.values, full.values),
+                      "Mixed rows repeated the sampled prefix or changed its seeded branches");
+            }
+            scheduled.seed.reset();
+            prefix_calls->store(0);
+            EstimateTerminalExpectation(*joint, scheduled);
+            Check(prefix_calls->load() == 1, "An unseeded mixed request ran its prefix twice");
+        }
+        // The q2 damping is still terminal on its wire, but moving its physical
+        // draw past the interior q0 damping would exchange their random numbers.
+        auto reordered = stochastic->GetOperations();
+        std::rotate(reordered.begin() + 3, reordered.end() - 1, reordered.end());
+        auto interleaved = CF::CreateCircuit(reordered);
+        const auto split = PrepareTerminalExpectation(interleaved, {"Z", "ZZZ"}, config);
+        Check(split && !split->prefix_read_position, "Interleaved channel draws were reordered to share a trajectory");
+        const auto full = EstimateCircuitTrajectory(interleaved, split->sampled_observables, config);
+        Check(EstimateTerminalExpectation(*split, config).values[1] == full.values[0], "Per-wire folding changed an interleaved trajectory's seed");
+    }
+
+    if (backend == Simulators::SimulatorType::kQCSim)
+    {
+        // Above the default fusion threshold, the interior damping is resolved
+        // before the last gate layer. Local X/Y/Z rows can read that layer
+        // without flushing the gates the full trajectory will fuse with damping.
+        constexpr size_t width = 11;
+        auto fused = config;
+        fused.gate_fusion.reset();
+        fused.enable_causal_cone_reduction = false;
+        fused.auto_reduce = false;
+        auto layered = CF::CreateCircuit();
+        layered->AddOperation(std::make_shared<CountedX>(0, prefix_calls));
+        for (size_t q = 0; q < width; ++q)
+            layered->AddOperation(CF::CreateGate(Gate::kRyGateType, q, 0, 0, .3 + .1 * q));
+        layered->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1}, Channel::AmplitudeDamping(.4)));
+        for (size_t layer = 0; layer < 4; ++layer)
+        {
+            for (size_t q = layer % 2; q + 1 < width; q += 2)
+                layered->AddOperation(CF::CreateGate(Gate::kCXGateType, q + 1, q));
+            for (size_t q = 0; q < width; ++q)
+                layered->AddOperation(CF::CreateGate(Gate::kRxGateType, q, 0, 0, .2 + .05 * q + .1 * layer));
+        }
+        for (size_t q = 0; q < width; ++q)
+            layered->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.2)));
+        const auto joint = PrepareTerminalExpectation(layered, {"Z", "IY", "IIX", "IIIY", "IXY", std::string(width, 'Z')}, fused);
+        Check(joint && joint->prefix_read_position && joint->sampled_indices.size() == 1, "Missing mixed fused-prefix fixture");
+        for (size_t seed = 0; seed < 8; ++seed)
+        {
+            fused.seed = seed;
+            const auto prefix = EstimateCircuitTrajectory(joint->prefix, joint->prefix_observables, fused);
+            const auto full = EstimateCircuitTrajectory(layered, joint->sampled_observables, fused);
+            prefix_calls->store(0);
+            const auto actual = EstimateTerminalExpectation(*joint, fused);
+            const auto expected = joint->Combine(prefix.values, full.values);
+            Check(actual.gate_fusion && prefix_calls->load() == 1, "Default QCSim fusion repeated a resolved stochastic prefix");
+            Check(actual.values.back() == expected.back(), "Observing a fused prefix changed a terminal branch");
+            for (size_t i = 0; i + 1 < expected.size(); ++i)
+                Check(std::abs(actual.values[i] - expected[i]) < 1e-13, "A fused prefix Pauli differs from its standalone expectation");
+        }
+
+        const auto wide_prefix = PrepareTerminalExpectation(layered, {"XXXX", std::string(width, 'Z')}, fused);
+        Check(wide_prefix && wide_prefix->prefix_read_position, "Missing wide fused-prefix fixture");
+        prefix_calls->store(0);
+        EstimateTerminalExpectation(*wide_prefix, fused);
+        Check(prefix_calls->load() == 2, "A wide prefix exceeded the three-qubit reduced-density limit");
+
+        // This shorter prefix still holds a state-dependent branch at the read.
+        // A second pass preserves the independent resolution order in each run.
+        fused.gate_fusion = true;
+        const auto pending = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, fused);
+        Check(pending && pending->prefix_read_position, "Missing unresolved fused-prefix fixture");
+        const auto separate_prefix = EstimateCircuitTrajectory(pending->prefix, pending->prefix_observables, fused);
+        const auto separate_full = EstimateCircuitTrajectory(stochastic, pending->sampled_observables, fused);
+        prefix_calls->store(0);
+        const auto pending_result = EstimateTerminalExpectation(*pending, fused);
+        Check(prefix_calls->load() == 2 && pending_result.values == pending->Combine(separate_prefix.values, separate_full.values),
+              "An unresolved fused prefix changed its seeded branch order");
+
+        // Explicit marginalization permits separate sampled cones. A row with
+        // two nonconstant terms needs a common trajectory, but merging all
+        // these disjoint cones into one 70-qubit dense register is infeasible.
+        auto clustered = config;
+        clustered.allow_reset_marginalization = true;
+        clustered.max_cluster_qubits = 1;
+        clustered.auto_reduce = false;
+        auto cones = CF::CreateCircuit();
+        std::vector<std::string> singles;
+        for (size_t q = 0; q < 70; ++q)
+        {
+            cones->AddOperation(CF::CreateGate(Gate::kRyGateType, q, 0, 0, .4));
+            singles.push_back(std::string(q, 'I') + 'Z');
+        }
+        cones->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(0.5)));
+        cones->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+        cones->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0},
+                                                                                  Channel::UnitaryMixture({0.75, 0.25}, {Eigen::Matrix2cd::Identity(), h})));
+        const auto separated = PrepareTerminalExpectation(cones, singles, clustered);
+        Check(separated && separated->sampled_indices == std::vector<size_t>{0}, "A sampled adjoint mixed the independently eligible observable cones");
+        const auto split = EstimateNoisy(cones, singles, {}, 2, clustered, 24, NoiseLayer::kCombined);
+        Check(split.terminal_channels && split.qubits_after == 1 && std::abs(split.values.back() - std::cos(.4)) < 1e-12,
+              "Explicit marginalization lost its compact sampled cones");
+        Check(PrepareTerminalExpectation(mixed, {"Z"}, clustered).has_value(), "Marginalized affine Z and identity unnecessarily fell back to trajectories");
+    }
+
+    auto wide = CF::CreateCircuit();
+    for (size_t q = 0; q < 12; ++q)
+        wide->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(0.2)));
+    Check(!PrepareTerminalExpectation(wide, {std::string(12, 'Z')}, config), "Wide damping expansion did not switch back to trajectories");
+    Check(PrepareTerminalExpectation(wide, {std::string(12, 'X')}, config).has_value(), "A wide diagonal observable was needlessly sampled");
+    wide->AddOperation(CF::CreateGate(Gate::kXGateType, 15));
+    Check(PrepareTerminalExpectation(wide, {std::string(8, 'Z')}, config).has_value(), "A 256-term deterministic row was sampled on 16 qubits");
+    wide->AddOperation(CF::CreateGate(Gate::kXGateType, 19));
+    Check(PrepareTerminalExpectation(wide, {std::string(7, 'Z')}, config).has_value(), "A 128-term deterministic row was sampled on 20 qubits");
+    Check(!PrepareTerminalExpectation(wide, {std::string(8, 'Z')}, config), "A wide dense deterministic row exceeded its bounded scan budget");
+
+    if (backend == Simulators::SimulatorType::kCompositeQCSim
+#ifndef NO_QISKIT_AER
+        || backend == Simulators::SimulatorType::kCompositeQiskitAer
+#endif
+    )
+    {
+        // Each qubit stays independent. A single global X observable touches
+        // every one, so its expectation must stay a product across groups
+        // even when a correlated final channel acts on the endpoints.
+        auto separate = CF::CreateCircuit();
+        constexpr size_t width = 70;
+        constexpr double angle = 0.06;
+        for (size_t q = 0; q < width; ++q)
+        {
+            separate->AddOperation(CF::CreateGate(Gate::kHadamardGateType, q));
+            separate->AddOperation(CF::CreateGate(Gate::kRzGateType, q, 0, 0, angle));
+        }
+        separate->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{width - 1, 0}, Channel::TwoQubitDepolarizing(0.25)));
+        config.enable_causal_cone_reduction = false;
+        config.auto_reduce = false;
+        const auto factored = estimate(separate, {std::string(width, 'X')}, {});
+        Check(factored.terminal_channels && factored.realizations == 1 && factored.ideal.simulator == backend &&
+                  std::abs(factored.values[0] - (1. - 16. * 0.25 / 15.) * std::pow(std::cos(angle), width)) < 1e-12,
+              "A terminal estimate on independent statevector components lost its factorized expectation");
+    }
+}
 } // namespace
 
 void TestMixedStateExecution()
@@ -602,6 +923,13 @@ void TestMixedStateExecution()
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPauliPropagator})
         CountSinkKeepsReadoutDraws(method);
     NestedChannelsLeaveTheIdealBaseline();
+    for (const auto backend : {Simulators::SimulatorType::kQCSim, Simulators::SimulatorType::kCompositeQCSim
+#ifndef NO_QISKIT_AER
+                               ,
+                               Simulators::SimulatorType::kQiskitAer, Simulators::SimulatorType::kCompositeQiskitAer
+#endif
+         })
+        TerminalStatevectorExpectations(backend);
     FidelityPreparesResetTargets();
     CandidateListsResolveOneBackend();
     DeterministicPrefixNoise();

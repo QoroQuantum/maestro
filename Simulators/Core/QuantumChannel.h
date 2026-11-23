@@ -79,7 +79,7 @@ class QuantumChannel
         std::vector<size_t> qubits;
         /** kPauli: 4^k probabilities in Pauli() order over `qubits`. kUnitaryMixture: one per operator. */
         std::vector<double> probabilities;
-        /** kUnitaryMixture: the unitaries. kThermal and kKraus: Kraus operators over `qubits`. */
+        /** kUnitaryMixture: the unitaries. Otherwise, source Kraus operators over `qubits`, when needed to retain the exact map. */
         KrausOperators operators;
         /** kThermal only. */
         ThermalParameters thermal;
@@ -248,8 +248,8 @@ class QuantumChannel
                 // One set of Kraus operators on all the targets is kept, in its order: the canonical operators are
                 // another unraveling of the same channel, with other trajectories.
                 const std::vector<Factor> &factors = data_->factors;
-                if (factors.size() == 1 && (factors.front().kind == FactorKind::kKraus || factors.front().kind == FactorKind::kThermal) &&
-                    factors.front().qubits.size() == data_->numQubits && !factors.front().operators.empty())
+                if (factors.size() == 1 && factors.front().kind != FactorKind::kUnitaryMixture && factors.front().qubits.size() == data_->numQubits &&
+                    !factors.front().operators.empty())
                 {
                     const Factor &factor = factors.front();
                     if (data_->numQubits == 2 && factor.qubits[0] == 1)
@@ -287,6 +287,44 @@ class QuantumChannel
     const std::vector<double> &GetPauliProbabilities() const
     {
         return data_->pauliProbabilities;
+    }
+
+    /** Pauli-frame probabilities over the channel's targets, including placed factors and Kraus-only input. */
+    std::vector<double> PauliMixture() const
+    {
+        if (GetNumberOfQubits() > 2)
+            return {};
+        const auto &factors = GetFactors();
+        if (std::all_of(factors.begin(), factors.end(), [](const Factor &factor) { return factor.kind == FactorKind::kPauli; }))
+        {
+            auto weights = ExpandPauli(factors.front(), GetNumberOfQubits());
+            for (size_t i = 1; i < factors.size(); ++i)
+                weights = ConvolvePauli(weights, ExpandPauli(factors[i], GetNumberOfQubits()), GetNumberOfQubits());
+            return weights;
+        }
+        if (factors.size() == 1 && factors.front().kind == FactorKind::kThermal && factors.front().thermal.decay > 0. &&
+            factors.front().thermal.excitedStatePopulation != 0.5)
+            return {}; // A Pauli mixture cannot change the maximally mixed state.
+        // A composed channel's canonical Kraus list omits unresolved Choi
+        // eigenvalues. Never certify frames from that list if a supplied
+        // non-Pauli branch is small enough to disappear in the decomposition.
+        if (data_->composed)
+            for (const auto &factor : factors)
+            {
+                if (factor.kind == FactorKind::kPauli)
+                    continue;
+                if (factor.kind == FactorKind::kUnitaryMixture)
+                {
+                    for (const auto p : factor.probabilities)
+                        if (p > 0. && p <= kCanonicalKrausTolerance)
+                            return {};
+                }
+                else
+                    for (const auto &op : factor.operators)
+                        if (op.squaredNorm() <= op.rows() * kCanonicalKrausTolerance && op.cwiseAbs().maxCoeff() != 0.)
+                            return {};
+            }
+        return PauliMixtureOf(GetKrausOperators(), GetNumberOfQubits());
     }
 
     /**
@@ -504,7 +542,13 @@ class QuantumChannel
     // Whether a matrix is a multiple of the identity, compared exactly: as a gate it changes nothing but a global phase.
     static bool IsMultipleOfIdentity(const Matrix &matrix)
     {
-        return matrix.rows() > 0 && (matrix - matrix(0, 0) * Matrix::Identity(matrix.rows(), matrix.cols())).isZero(0.0);
+        if (matrix.rows() == 0 || matrix.rows() != matrix.cols())
+            return false;
+        for (Eigen::Index column = 0; column < matrix.cols(); ++column)
+            for (Eigen::Index row = 0; row < matrix.rows(); ++row)
+                if (matrix(row, column) != (row == column ? matrix(0, 0) : std::complex<double>{}))
+                    return false;
+        return true;
     }
 
     // The targets a two-qubit unitary acts on, found exactly, for a simulator
@@ -530,7 +574,9 @@ class QuantumChannel
         if (IsMultipleOfIdentity(unitary))
             return LocalPart::kNone;
         // Identity on the second target: two equal diagonal blocks, V0, and nothing off them.
-        if (unitary.block(0, 2, 2, 2).isZero(0.0) && unitary.block(2, 0, 2, 2).isZero(0.0) && unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
+        // Eigen's complex isZero(0) squares magnitudes and can underflow for a nonzero entry.
+        if ((unitary.block(0, 2, 2, 2).array() == std::complex<double>{}).all() && (unitary.block(2, 0, 2, 2).array() == std::complex<double>{}).all() &&
+            unitary.block(0, 0, 2, 2) == unitary.block(2, 2, 2, 2))
         {
             local = unitary.block(0, 0, 2, 2);
             return LocalPart::kFirst;
@@ -740,10 +786,16 @@ class QuantumChannel
         }
         if (!std::isfinite(total) || std::abs(total - 1.0) > kProbabilityTolerance)
             throw std::invalid_argument("Pauli channel probabilities must sum to one");
+        // Every representation of an accepted distribution must describe the
+        // same trace-preserving map, including a supplied sum just off one.
+        auto weights = probabilities;
+        if (total != 1.0)
+            for (double &probability : weights)
+                probability /= total;
 
-        auto data = MakeKrausData(PauliKraus(probabilities, numQubits));
-        data->pauliProbabilities = probabilities;
-        data->factors.push_back(PauliFactor(probabilities, numQubits));
+        auto data = MakeKrausData(PauliKraus(weights, numQubits));
+        data->factors.push_back(PauliFactor(weights, numQubits));
+        data->pauliProbabilities = std::move(weights);
         return QuantumChannel(std::move(data));
     }
 
@@ -828,7 +880,7 @@ class QuantumChannel
         Matrix k1 = Matrix::Zero(2, 2);
         k1(1, 1) = std::sqrt(gamma);
         // The same map as a phase flip with 1 - 2p = sqrt(1 - gamma).
-        const double flip = 0.5 * (1.0 - std::sqrt(1.0 - gamma));
+        const double flip = (0.5 * gamma) / (1.0 + k0(1, 1).real());
         auto data = MakeKrausData({std::move(k0), std::move(k1)});
         data->factors.push_back(PauliFactor({1.0 - flip, 0.0, 0.0, flip}, 1));
         return QuantumChannel(std::move(data));
@@ -894,9 +946,20 @@ class QuantumChannel
         const double discriminant = std::hypot(a - c, 2.0 * coherenceMultiplier);
         const double lambdaPlus = 0.5 * (a + c + discriminant);
         const double lambdaMinus = std::max(0.0, 0.5 * (a + c - discriminant));
-        const double angle = 0.5 * std::atan2(2.0 * coherenceMultiplier, a - c);
-        const double cosine = std::cos(angle);
-        const double sine = std::sin(angle);
+        double cosine, sine;
+        if (a == c && coherenceMultiplier > 0.0)
+        {
+            // The two eigenvectors have exactly equal-magnitude entries. A one-ulp
+            // difference between sin(pi/4) and cos(pi/4) would introduce a spurious
+            // non-Pauli component into the Kraus operators of a balanced relaxation.
+            cosine = sine = std::sqrt(0.5);
+        }
+        else
+        {
+            const double angle = 0.5 * std::atan2(2.0 * coherenceMultiplier, a - c);
+            cosine = std::cos(angle);
+            sine = std::sin(angle);
+        }
 
         KrausOperators kraus;
         if (lambdaPlus > kZeroTolerance)
@@ -978,47 +1041,118 @@ class QuantumChannel
      */
     static std::vector<double> PauliMixtureOf(const KrausOperators &kraus, size_t numQubits)
     {
+        bool rounded = false;
+        return ClassifyPauli(kraus, numQubits, rounded);
+    }
+
+  private:
+    // A Pauli coefficient is a signed sum of real and imaginary Kraus entries.
+    // Bound cancellation in each component of that projection, e.g. a traceless
+    // 4x4 eigenoperator reconstructed with a tiny real trace. Keeping the two
+    // components separate prevents a large real diagonal from hiding a small
+    // imaginary phase. An exactly zero component contributes no cross term.
+    static bool WithinProjectionRoundoff(const KrausOperators &kraus, const std::vector<Matrix> &paulis,
+                                         const std::vector<std::vector<std::complex<double>>> &coefficients, size_t a, size_t b, std::complex<double> chi)
+    {
+        const auto projectionScale = [](const Matrix &op, const Matrix &pauli) {
+            const auto entries = pauli.conjugate().cwiseProduct(op);
+            return std::complex<double>(entries.real().cwiseAbs().sum(), entries.imag().cwiseAbs().sum()) / static_cast<double>(op.rows());
+        };
+        const auto productScale = [](double x, double y, double sx, double sy) { return x && y ? sx * std::abs(y) + sy * std::abs(x) : 0.; };
+        double real = 0., imag = 0.;
+        for (size_t i = 0; i < kraus.size(); ++i)
+        {
+            const auto x = coefficients[i][a], y = coefficients[i][b];
+            if (x == std::complex<double>{} || y == std::complex<double>{})
+                continue;
+            const auto sx = projectionScale(kraus[i], paulis[a]), sy = projectionScale(kraus[i], paulis[b]);
+            real += productScale(x.real(), y.real(), sx.real(), sy.real()) + productScale(x.imag(), y.imag(), sx.imag(), sy.imag());
+            imag += productScale(x.real(), y.imag(), sx.real(), sy.imag()) + productScale(x.imag(), y.real(), sx.imag(), sy.real());
+        }
+        const double rounding = (2. * kraus.size() + kraus.front().rows()) * std::numeric_limits<double>::epsilon();
+        return std::abs(chi.real()) <= rounding * real && std::abs(chi.imag()) <= rounding * imag;
+    }
+
+    static std::vector<double> ClassifyPauli(const KrausOperators &kraus, size_t numQubits, bool &rounded)
+    {
         if (numQubits < 1 || numQubits > 2 || kraus.empty())
             return {};
         const size_t terms = numQubits == 1 ? 4 : 16;
         const double dimension = numQubits == 1 ? 2.0 : 4.0;
-        if (kraus.front().rows() != static_cast<Eigen::Index>(dimension))
-            return {};
+        for (const auto &op : kraus)
+            if (op.rows() != static_cast<Eigen::Index>(dimension) || op.cols() != op.rows() || !op.allFinite())
+                return {};
         std::vector<Matrix> paulis;
         paulis.reserve(terms);
         for (size_t a = 0; a < terms; ++a)
             paulis.push_back(PauliProduct(a, numQubits));
         std::vector<std::vector<std::complex<double>>> coefficients(kraus.size(), std::vector<std::complex<double>>(terms));
-        for (size_t i = 0; i < kraus.size(); ++i)
-            for (size_t a = 0; a < terms; ++a)
-                coefficients[i][a] = (paulis[a].adjoint() * kraus[i]).trace() / dimension;
-        constexpr double tolerance = 1e-12;
         std::vector<double> probabilities(terms, 0.0);
+        const double roundoff = terms * std::numeric_limits<double>::epsilon();
+        double smallestBranch = std::numeric_limits<double>::infinity();
+        size_t nonzeroBranches = 0;
         double total = 0;
+        for (size_t i = 0; i < kraus.size(); ++i)
+        {
+            double weight = 0.;
+            for (size_t a = 0; a < terms; ++a)
+            {
+                coefficients[i][a] = (paulis[a].adjoint() * kraus[i]).trace() / dimension;
+                const double probability = std::norm(coefficients[i][a]);
+                probabilities[a] += probability;
+                weight += probability;
+            }
+            if (weight > 0.)
+            {
+                smallestBranch = std::min(smallestBranch, weight);
+                ++nonzeroBranches;
+            }
+            total += weight;
+        }
+        if (!std::isfinite(total) || std::abs(total - 1.0) > 1e-10)
+            return {};
+        // A Choi eigensolver can leak into a zero-weight Pauli axis by roundoff
+        // in the full matrix. A sparse Pauli spectrum has one nonzero eigenmode
+        // per resolved diagonal. Requiring that count also protects a weak
+        // extra mode hidden by a change of Kraus basis. A nominally absent
+        // axis must be negligible even on the smallest supplied branch's scale.
+        const bool resolvedOperators = smallestBranch > roundoff;
+        const auto resolved = [roundoff](double p) { return p > roundoff; };
+        const size_t resolvedAxes = std::count_if(probabilities.begin(), probabilities.end(), resolved);
+        const bool resolvedSpectrum = resolvedAxes >= 2 && resolvedAxes == nonzeroBranches;
+        const auto roundableAxis = [&](double p) { return resolved(p) || (resolvedSpectrum && p <= roundoff * smallestBranch); };
         for (size_t a = 0; a < terms; ++a)
-            for (size_t b = 0; b < terms; ++b)
+            for (size_t b = 0; b < a; ++b)
             {
                 std::complex<double> chi = 0;
                 for (size_t i = 0; i < kraus.size(); ++i)
                     chi += coefficients[i][a] * std::conj(coefficients[i][b]);
-                if (a == b)
+                if (chi != std::complex<double>{})
                 {
-                    if (chi.real() < -tolerance || std::abs(chi.imag()) > tolerance)
+                    rounded = true;
+                    const double residual = std::abs(chi);
+                    if (residual > 1e-12)
                         return {};
-                    probabilities[a] = std::max(0.0, chi.real());
-                    total += probabilities[a];
+                    if (resolvedOperators && residual <= roundoff && roundableAxis(probabilities[a]) && roundableAxis(probabilities[b]))
+                        continue;
+                    // Rotating the Kraus basis of a true Pauli mixture can leave
+                    // roundoff when its contributions cancel. A weak coherent
+                    // rotation also has small chi, but its contributions do not
+                    // cancel: classifying it as Pauli would discard that rotation.
+                    double scale = 0.;
+                    for (size_t i = 0; i < kraus.size(); ++i)
+                        scale += std::abs(coefficients[i][a] * std::conj(coefficients[i][b]));
+                    if (residual > (2. * kraus.size() + 4.) * std::numeric_limits<double>::epsilon() * scale &&
+                        !(resolvedOperators && kraus.size() > 1 && WithinProjectionRoundoff(kraus, paulis, coefficients, a, b, chi)))
+                        return {};
                 }
-                else if (std::abs(chi) > tolerance)
-                    return {};
             }
-        if (std::abs(total - 1.0) > 1e-10)
-            return {};
         return probabilities;
     }
 
-  private:
     static constexpr double kProbabilityTolerance = 1e-12;
     static constexpr double kZeroTolerance = 1e-15;
+    static constexpr double kCanonicalKrausTolerance = 1e-14;
 
     struct Data
     {
@@ -1233,11 +1367,14 @@ class QuantumChannel
     {
         Factor factor;
         factor.qubits = AllQubits(numQubits);
-        std::vector<double> pauli = PauliMixtureOf(kraus, numQubits);
+        bool rounded = false;
+        std::vector<double> pauli = ClassifyPauli(kraus, numQubits, rounded);
         if (!pauli.empty())
         {
             factor.kind = FactorKind::kPauli;
             factor.probabilities = std::move(pauli);
+            if (rounded)
+                factor.operators = kraus; // The sampled form can discard roundoff; composition and exact expectations retain the supplied map.
             return factor;
         }
 
@@ -1248,12 +1385,16 @@ class QuantumChannel
         {
             const Matrix gram = op.adjoint() * op;
             const double probability = gram.trace().real() / static_cast<double>(dimension);
-            if ((gram - probability * identity).norm() > 1e-12 * static_cast<double>(dimension))
+            // A rare operator's norm is its probability. Test proportionality
+            // at that scale, so a weak jump remains state-dependent and a weak
+            // unitary is kept with its positive weight.
+            if ((gram - probability * identity).cwiseAbs().maxCoeff() > 1e-12 * static_cast<double>(dimension) * probability ||
+                (probability == 0. && op.cwiseAbs().maxCoeff() != 0.))
             {
                 unitaryMixture = false;
                 break;
             }
-            if (probability <= kZeroTolerance)
+            if (probability == 0.)
                 continue;
             factor.probabilities.push_back(probability);
             factor.operators.emplace_back(op / std::sqrt(probability));
@@ -1275,7 +1416,7 @@ class QuantumChannel
         switch (factor.kind)
         {
         case FactorKind::kPauli:
-            return PauliKraus(factor.probabilities, factor.qubits.size());
+            return factor.operators.empty() ? PauliKraus(factor.probabilities, factor.qubits.size()) : factor.operators;
         case FactorKind::kUnitaryMixture: {
             KrausOperators kraus;
             kraus.reserve(factor.operators.size());
@@ -1343,7 +1484,7 @@ class QuantumChannel
         if (solver.info() != Eigen::Success)
             throw std::runtime_error("Could not decompose a composed quantum channel");
         const auto &values = solver.eigenvalues();
-        const double cutoff = 1e-14 * std::max(1.0, values.cwiseAbs().maxCoeff());
+        const double cutoff = kCanonicalKrausTolerance * std::max(1.0, values.cwiseAbs().maxCoeff());
         KrausOperators kraus;
         for (Eigen::Index k = size; k-- > 0;)
         {
@@ -1438,7 +1579,7 @@ class QuantumChannel
                 reduced[place < original.qubits.size() ? (index >> (2 * place)) & 3 : 0] += original.probabilities[index];
             factor.probabilities = std::move(reduced);
         }
-        else if (original.qubits.size() == 2)
+        if (original.qubits.size() == 2)
             for (Matrix &op : factor.operators)
                 op = LocalOperator(op, place == 0 ? LocalPart::kFirst : LocalPart::kSecond);
         // A one-qubit factor on `home` stays as it is. One on the removed target is a phase times the identity in
@@ -1451,7 +1592,7 @@ class QuantumChannel
     // duration and a mixture of the identity alone are written that way; the comparison is exact.
     static bool FactorIsIdentity(const Factor &factor)
     {
-        if (factor.kind == FactorKind::kPauli)
+        if (factor.kind == FactorKind::kPauli && factor.operators.empty())
         {
             for (size_t index = 1; index < factor.probabilities.size(); ++index)
                 if (factor.probabilities[index] != 0.0)
@@ -1463,7 +1604,7 @@ class QuantumChannel
             if (!OperatorCounts(factor, index))
                 continue;
             const Matrix &op = factor.operators[index];
-            if (op.rows() == 0 || !(op - op(0, 0) * Matrix::Identity(op.rows(), op.cols())).isZero(0.0))
+            if (!IsMultipleOfIdentity(op))
                 return false;
         }
         return !factor.operators.empty();
@@ -1475,7 +1616,7 @@ class QuantumChannel
     // unitaries acts on one qubit only. Any other factor acts on its qubit unless it is the identity.
     static bool FactorActsOn(const Factor &factor, size_t k)
     {
-        if (factor.kind == FactorKind::kPauli)
+        if (factor.kind == FactorKind::kPauli && factor.operators.empty())
         {
             for (size_t index = 0; index < factor.probabilities.size(); ++index)
                 if (factor.probabilities[index] != 0.0 && ((index >> (2 * k)) & 3) != 0)
@@ -1546,7 +1687,8 @@ class QuantumChannel
         std::vector<Factor> merged;
         for (Factor &factor : factors)
         {
-            if (factor.kind == FactorKind::kPauli && !merged.empty() && merged.back().kind == FactorKind::kPauli)
+            if (factor.kind == FactorKind::kPauli && factor.operators.empty() && !merged.empty() && merged.back().kind == FactorKind::kPauli &&
+                merged.back().operators.empty())
             {
                 const std::vector<double> combined = ConvolvePauli(ExpandPauli(merged.back(), numQubits), ExpandPauli(factor, numQubits), numQubits);
                 merged.back() = PauliFactor(combined, numQubits);
@@ -1555,7 +1697,7 @@ class QuantumChannel
                 merged.push_back(std::move(factor));
         }
 
-        if (merged.size() == 1 && merged.front().kind == FactorKind::kPauli)
+        if (merged.size() == 1 && merged.front().kind == FactorKind::kPauli && merged.front().operators.empty())
         {
             std::vector<double> probabilities = ExpandPauli(merged.front(), numQubits);
             // Rounding in a convolution can leave the sum a few ulps off one.

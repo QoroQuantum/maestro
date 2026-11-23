@@ -1,6 +1,8 @@
 // Regression tests for worker ownership, terminal measurements and noise
 // clones.
 #include "../Circuit/Factory.h"
+#include "../Execution/Estimation.h"
+#include "../Execution/SimulatorConfig.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Noise/NoiseAdd.h"
 
@@ -1576,6 +1578,121 @@ void NestedTerminalMeasurementsShareThePrefix()
         }
 }
 
+void NetworkCountsAverageTerminalChannels()
+{
+    class ObservedDamping : public Circuits::QuantumChannelOperation<>
+    {
+      public:
+        ObservedDamping(size_t qubit, std::shared_ptr<std::atomic<size_t>> counter)
+            : QuantumChannelOperation({qubit}, Simulators::QuantumChannel::AmplitudeDamping(0.5)), draws(std::move(counter))
+        {
+        }
+
+        void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
+        {
+            ++*draws;
+            QuantumChannelOperation::Execute(sim, state);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Clone() const override
+        {
+            return std::make_shared<ObservedDamping>(*this);
+        }
+
+        std::shared_ptr<Circuits::IOperation<>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubits,
+                                                      const std::unordered_map<Types::qubit_t, Types::qubit_t> &) const override
+        {
+            const auto q = AffectedQubits()[0];
+            const auto it = qubits.find(q);
+            return std::make_shared<ObservedDamping>(it == qubits.end() ? q : it->second, draws);
+        }
+
+        std::shared_ptr<std::atomic<size_t>> draws;
+    };
+
+    auto draws = std::make_shared<std::atomic<size_t>>(0);
+    auto circuit = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), std::make_shared<ObservedDamping>(0, draws), CF::CreateGate(Gate::kXGateType, 1),
+                                      CF::CreateMeasurement({{0, 1}, {1, 0}})});
+    for (const bool onHost : {false, true})
+    {
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        network->Configure("seed", "17");
+        network->SetMaxSimulators(1);
+        const auto sample = [&] { return onHost ? network->RepeatedExecuteOnHost(circuit, 0, 500) : network->RepeatedExecute(circuit, 500); };
+        draws->store(0);
+        const auto counts = sample();
+        Check(draws->load() == 0 && counts.size() == 2 && counts.at({true, false}) > 180 && counts.at({true, true}) > 180,
+              "Network counts did not sample the terminal damping distribution on the mapped classical wires");
+        Check(sample() == counts, "Network terminal channel counts did not replay their seed");
+        network->Configure("terminal_channel_policy", "trajectories");
+        sample();
+        Check(draws->load() == 500, "Network counts suppressed explicitly requested trajectory draws");
+        network->Configure("terminal_channel_policy", "auto");
+        network->Configure("counts_policy", "legacy");
+        draws->store(0);
+        sample();
+        Check(draws->load() == 500, "Network terminal channels overrode legacy count sampling");
+
+        network->Configure("counts_policy", "auto");
+        auto interior = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), std::make_shared<ObservedDamping>(0, draws),
+                                           CF::CreateGate(Gate::kXGateType, 0), std::make_shared<ObservedDamping>(1, draws), CF::CreateMeasurement({{0, 0}})});
+        draws->store(0);
+        if (onHost)
+            network->RepeatedExecuteOnHost(interior, 0, 130);
+        else
+            network->RepeatedExecute(interior, 130);
+        Check(draws->load() == 260, "Network terminal counts shared a stochastic prefix");
+    }
+
+    auto network = std::make_shared<Net>(Types::qubits_vector{2, 2}, std::vector<size_t>{2, 2});
+    network->SetOptimizeSimulator(false);
+    network->GetController()->SetOptimizeCircuit(false);
+    network->CreateSimulator(Backend::kQCSim, Method::kStatevector);
+    auto mapped =
+        CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 2),
+                           std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2}, Simulators::QuantumChannel::AmplitudeDamping(1.)),
+                           CF::CreateGate(Gate::kXGateType, 3), CF::CreateMeasurement({{2, 3}, {3, 2}})});
+    const auto counts = network->RepeatedExecuteOnHost(mapped, 1, 24);
+    Check(counts == Counts{{{false, false, true, false}, 24}}, "Terminal channels on a nonzero host lost the global classical mapping");
+}
+
+void NetworkAndPublicTerminalExpectations()
+{
+    const auto circuit =
+        CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0),
+                           std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(0.5)),
+                           CF::CreateGate(Gate::kXGateType, 1)});
+    const std::vector<std::string> words{"ZI", "IZ"};
+    for (bool onHost : {false, true})
+    {
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        network->Configure("seed", "19");
+        const auto estimate = [&] { return onHost ? network->ExecuteOnHostExpectations(circuit, 0, words) : network->ExecuteExpectations(circuit, words); };
+        const auto exact = estimate();
+        Check(exact.size() == 2 && std::abs(exact[0]) < 1e-14 && exact[1] == -1., "Network terminal expectation did not average the damped qubit");
+        network->Configure("terminal_channel_policy", "trajectories");
+        const auto sampled = estimate();
+        Check(sampled.size() == 2 && std::abs(std::abs(sampled[0]) - 1.) < 1e-14 && sampled[1] == -1., "Explicit network trajectory averaged the damped qubit");
+    }
+    MaestroExecution::SimulatorConfig config;
+    config.simulator_type = Backend::kQCSim;
+    config.simulation_type = Method::kStatevector;
+    config.fixed_backend = true;
+    config.seed = 19;
+    const auto exact = MaestroExecution::EstimateCircuit(circuit, words, config);
+    Check(exact.terminal_channels_averaged && exact.measurement_trajectories == 0 && std::abs(exact.values.at(0)) < 1e-14,
+          "Public EstimateCircuit missed terminal damping");
+    const auto branch = MaestroExecution::EstimateCircuitTrajectory(circuit, words, config);
+    Check(!branch.terminal_channels_averaged && std::abs(std::abs(branch.values.at(0)) - 1.) < 1e-14,
+          "EstimateCircuitTrajectory averaged a branch with automatic config");
+    config.terminal_channel_policy = "trajectories";
+    const auto sampled = MaestroExecution::EstimateCircuit(circuit, words, config);
+    Check(!sampled.terminal_channels_averaged && sampled.measurement_trajectories > 1 && sampled.standard_errors.at(0) > 0.,
+          "Public EstimateCircuit did not honor the explicit trajectory policy");
+}
+
 void KeptMixedCandidateIsPrepared()
 {
     // Several mixed-state candidates: the network's current one is chosen
@@ -2682,7 +2799,40 @@ class ExposedNetwork : public Net
     {
         return recreateIfNeeded;
     }
+
+    void ContinueFromPreparedState()
+    {
+        resetBeforeExecution = false;
+    }
 };
+
+void HostTerminalExpectationsRespectPreparedState()
+{
+    // X toggles the live basis state; both phase-flip branches preserve its Z value.
+    // A fresh call always ends in |1>. Continuing from |1> visits |0>, then |1>.
+    const auto circuit =
+        CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0),
+                           std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::PhaseFlip(0.3))});
+    for (bool fresh : {true, false})
+        for (const char *policy : {"trajectories", "auto"})
+        {
+            auto network = std::make_shared<ExposedNetwork>(Types::qubits_vector{1}, std::vector<size_t>{1});
+            QuietNetwork(*network);
+            network->SetOptimizeSimulator(false);
+            network->Configure("terminal_channel_policy", policy);
+            network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 1);
+            network->GetSimulator()->ApplyX(0);
+            if (!fresh)
+                network->ContinueFromPreparedState();
+            for (size_t call = 0; call < 2; ++call)
+            {
+                const double one = fresh || call == 1 ? 1. : 0.;
+                const auto value = network->ExecuteOnHostExpectations(circuit, 0, {"Z"}).at(0);
+                Check(std::abs(value - (1. - 2. * one)) < 1e-14, "Host terminal expectation used the wrong incoming state");
+                Check(std::abs(network->GetSimulator()->Probability(1) - one) < 1e-14, "Host terminal expectation left the wrong live state");
+            }
+        }
+}
 
 void NetworkSimulatorLifecycle()
 {
@@ -3228,6 +3378,8 @@ try
     TerminalDensityDispatch();
     TerminalMpoDispatch();
     NestedTerminalMeasurementsShareThePrefix();
+    NetworkCountsAverageTerminalChannels();
+    NetworkAndPublicTerminalExpectations();
     KeptMixedCandidateIsPrepared();
     ClearedMpoStillSamplesInParallel();
     MultinomialTerminalDispatch();
@@ -3235,6 +3387,7 @@ try
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();
     ConfiguredCandidatesDecide();
+    HostTerminalExpectationsRespectPreparedState();
     NetworkSimulatorLifecycle();
     ClonesCarryTheBackend();
     CostModelKeepsToTheList();

@@ -115,6 +115,7 @@ inline const std::vector<Option> &Options()
         {"max_simulators", "max_simulators", "positive_integer", "all"},
         {"trajectory_policy", "trajectory_policy", "string", "cpu_trajectory"},
         {"counts_policy", "", "string", "all"},
+        {"terminal_channel_policy", "", "string", "all"},
         {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_realization"},
         {"mpo_kraus_completeness_check", "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
         {"mpo_restore_trace_after_truncation", "matrix_product_operator_restore_trace_after_truncation", "boolean", "mpo"},
@@ -334,6 +335,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             config.enable_sampling_reduction = Boolean(value);
         else if (name == "counts_policy")
             config.counts_policy = choice(value, CountsPolicies(), key);
+        else if (name == "terminal_channel_policy")
+            config.terminal_channel_policy = choice(value, TerminalChannelPolicies(), key);
         else if (name == "observable_error_tolerance")
             config.observable_error_tolerance = Number(value);
         else if (name == "min_cluster_qubits")

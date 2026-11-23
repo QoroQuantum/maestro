@@ -118,6 +118,12 @@ void TestThermalApproximation()
                     Check(std::abs(Real(result.at("expectation_values").at(0)) - std::exp(-0.3)) < 0.1,
                           "Sampled thermal coherence did not follow effective T2=T1");
                 }
+                else if (name == "statevector")
+                {
+                    Check(result.at("noise").at("evaluation") == "terminal_channels" && Real(result.at("realization_standard_errors").at(0)) == 0.,
+                          "Terminal thermal channel was sampled on the dense statevector");
+                    Near(Real(result.at("expectation_values").at(0)), std::exp(-0.3 / t2));
+                }
                 else if (trajectories)
                 {
                     // Trajectories of the channel: the calibrated coherence
@@ -295,11 +301,35 @@ void TestSampledChannelRequests()
         result = Call(mean);
         Check(std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.1 && std::abs(Real(result.at("expectation_values").at(1)) + 1.0) < 1e-9,
               "A sampled Kraus instruction gave the wrong expectation values");
-        // Without a noise block an estimate averages the branches as it averages measurement branches.
+        // An explicit trajectory request still samples each branch on both backends.
+        mean["noise"].as_object()["evaluation"] = "trajectories";
+        const auto trajectories = Call(mean);
+        Check(trajectories.at("noise").at("evaluation") == "trajectories" && Real(trajectories.at("realization_standard_errors").at(0)) > 0.,
+              "The requested Kraus trajectory estimate was averaged analytically");
+        // The dense statevector can instead average a terminal instruction on
+        // the observable in a plain estimate. MPS keeps its sampled branches.
         mean.erase("noise");
         result = Call(mean);
-        Check(result.at("execution_metadata").at("stochastic_execution").as_bool() && std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < 0.35,
+        const bool sampled = std::string_view(method) != "statevector";
+        Check(result.at("execution_metadata").at("stochastic_execution").as_bool() == sampled &&
+                  std::abs(Real(result.at("expectation_values").at(0)) + 0.4) < (sampled ? 0.35 : 1e-12),
               "A plain estimate did not average the branches of a Kraus instruction");
+        if (!sampled)
+        {
+            Check(result.at("execution_metadata").at("configured_options").at("terminal_channel_policy") == "auto",
+                  "Missing automatic terminal policy in estimate metadata");
+            mean["simulator"].as_object()["options"] = j::object{{"terminal_channel_policy", "trajectories"}};
+            const auto plain = Call(mean);
+            Check(plain.at("execution_metadata").at("measurement_trajectories") == 100 && Real(plain.at("realization_standard_errors").at(0)) > 0.,
+                  "A plain request ignored the terminal-channel opt-out");
+            mean["noise"] = j::object{{"seed", 5}, {"realizations", 2000}, {"channels", j::array{}}};
+            const auto forced = Call(mean);
+            Check(forced.at("expectation_values") == trajectories.at("expectation_values") &&
+                      forced.at("realization_standard_errors") == trajectories.at("realization_standard_errors"),
+                  "The simulator option and noise.evaluation selected different trajectory schedules");
+            mean["simulator"].as_object().at("options").as_object()["terminal_channel_policy"] = "sometimes";
+            Call(mean, false, true);
+        }
 
         // In a checkpoint suffix, after a saved prefix.
         auto saved = Request("checkpoint_batch", 2, "x q[0]; cx q[0],q[1];", method);
@@ -307,6 +337,17 @@ void TestSampledChannelRequests()
         saved["suffixes"] = j::array{circuit({damping, measure})};
         result = Call(saved);
         Check(damped(result.at("results").at(0).at("counts")), "A checkpoint suffix froze a Kraus instruction");
+        if (std::string_view(method) == "statevector")
+        {
+            Check(result.at("results").at(0).at("sampling_strategy") == "terminal_v1", "Checkpoint replayed terminal damping on the saved |11> state");
+            saved["suffixes"].as_array().emplace_back(circuit({measure}));
+            result = Call(saved);
+            Check(Real(result.at("results").at(1).at("counts").at("11")) == 4096, "A sampled terminal channel overwrote the saved prefix");
+            saved["simulator"].as_object()["options"] = j::object{{"terminal_channel_policy", "trajectories"}};
+            result = Call(saved);
+            Check(result.at("results").at(0).at("sampling_strategy") == "trajectory_v1" && damped(result.at("results").at(0).at("counts")),
+                  "Checkpoint counts did not honor explicit trajectory sampling");
+        }
     }
     // A method that neither holds nor samples channels has no form for it.
     for (const char *method : {"tensor_network", "path_integral", "extended_stabilizer"})
@@ -765,7 +806,7 @@ void TestLoweredChannelDraws()
         request["circuit"] = circuit({hadamard, entangle, *entry.instruction});
         request["observables"] = j::array{"ZZ"};
         request["noise"] = j::object{{"seed", 5}, {"realizations", 8}, {"channels", j::array{}}};
-        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == entry.stochastic,
+        Check(Call(request).at("noise").at("stochastic_execution").as_bool() == (entry.stochastic && std::string_view(entry.method) != "statevector"),
               ("An estimated channel instruction was miscounted" + where).c_str());
 
         request = Request("checkpoint_batch", 2, "", entry.method);
@@ -1393,6 +1434,25 @@ void TestLegacyCountsPolicy()
     chosen["trajectory_policy"] = "block_v1";
     counts(simulator.handle, chosen);
     Check(counts(simulator.handle, omitted) == defaults, "A reused handle kept an earlier explicit trajectory_policy");
+
+    Check(RemoveAllOptimizationSimulatorsAndAdd(fresh.handle, backend, 0) == 1, "Cannot configure a legacy statevector");
+    const j::object damping{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{j::object{{"kind", "amplitude_damping"}, {"gamma", 0.5}}}}};
+    j::array program{j::object{{"name", "x"}, {"qubits", j::array{0}}}, damping};
+    const auto estimate = [&](const char *options) {
+        const auto result = Native(SimpleEstimate(fresh.handle, j::serialize(program).c_str(), "Z", options));
+        return Real(result.at("expectation_values").at(0));
+    };
+    Near(estimate("{}"), 0.);
+    Near(std::abs(estimate(R"({"terminal_channel_policy":"trajectories","seed":9})")), 1.);
+    Near(estimate("{}"), 0.);
+    program.emplace_back(j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{1}}});
+    const auto measured = Native(SimpleExecute(fresh.handle, j::serialize(program).c_str(), R"({"shots":512,"seed":9})"));
+    const auto &histogram = measured.at("counts").as_object();
+    const double decayed = Real(histogram.at("00"));
+    Check(decayed + Real(histogram.at("01")) == 512 && std::abs(decayed / 512 - 0.5) < 0.1,
+          "Legacy channel sampler lost the damped population or the handle's output width");
+    program[1].as_object()["factors"] = j::array{};
+    Check(!SimpleExecute(fresh.handle, j::serialize(program).c_str(), "{}"), "Legacy execution accepted an empty channel");
 }
 
 void TestAutomaticMixedStateNoise()

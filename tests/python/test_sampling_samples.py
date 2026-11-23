@@ -37,6 +37,37 @@ def _records(result, shots, width):
     return rows
 
 
+@pytest.mark.parametrize("spread_in_prefix", [True, False])
+def test_sparse_terminal_histogram_keeps_hidden_controls_and_seeded_rows(spread_in_prefix):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 12)
+    for wire in range(2, 12):
+        if spread_in_prefix:
+            circuit.h(wire)
+        else:
+            circuit.x(wire)
+    # Exercise both an initially sparse histogram and one that spreads under the channels.
+    if not spread_in_prefix:
+        for wire in range(2, 12):
+            circuit.channel([wire], maestro.QuantumChannel.amplitude_damping(0.5))
+    cx = np.eye(4, dtype=complex)[[0, 3, 2, 1]]
+    controlled = maestro.QuantumChannel.unitary_mixture([0.5, 0.5], [np.eye(4, dtype=complex), cx])
+    circuit.channel([12, 1], controlled)
+    circuit.channel([1], maestro.QuantumChannel.amplitude_damping(0.3))
+    circuit.measure([(1, 0), (0, 1)] + [(q, q) for q in range(2, 12)] + [(1, 12)])
+
+    config = _config(maestro.SimulationType.Statevector, seed=117)
+    result = circuit.execute(config=config, shots=5000, return_samples=True)
+    assert result["sampling_strategy"] == "terminal_v1"
+    rows = _records(result, 5000, 13)
+    assert np.array_equal(rows[:, 0], rows[:, 12])
+    assert not np.any(rows[:, 0] > rows[:, 1])
+    assert rows[:, 0].mean() == pytest.approx(0.175, abs=0.025)
+    assert rows[:, 1:12].mean(axis=0) == pytest.approx([0.5] * 11, abs=0.03)
+    assert circuit.execute(config=config, shots=5000)["counts"] == Counter("".join(map(str, row)) for row in rows)
+
+
 @pytest.mark.parametrize("method", METHODS)
 def test_execute_keeps_counts_default_and_returns_owned_raw_matrix(method):
     circuit = QuantumCircuit()
@@ -559,6 +590,25 @@ def test_public_reference_frame_sampler_rejects_what_frames_cannot_represent():
     assert maestro.compile_reference_sampler(clifford, coherent) is None
     gpu = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.Gpu)
     assert maestro.compile_reference_sampler(clifford, None, gpu) is None
+
+
+@pytest.mark.parametrize("method,strategy", [(maestro.SimulationType.Stabilizer, "reference_frame_v1"),
+                                              (maestro.SimulationType.ExtendedStabilizer, "extended_frame_v1")])
+def test_phase_damping_model_keeps_frame_sampling(method, strategy):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    if method == maestro.SimulationType.ExtendedStabilizer:
+        circuit.t(0)
+    circuit.measure_all()
+    model = maestro.NoiseModel()
+    cfg = _config(method)
+    cfg.counts_policy = "frame_v1"
+    cfg.fixed_backend = True
+    for gamma in (0.0001, 0.0017, 0.0099, 0.0237, 0.0451):
+        model.set_phase_damping(0, gamma)
+        assert maestro.compile_reference_sampler(circuit, model, cfg) is not None
+        result = circuit.noisy_execute(model, config=cfg, shots=32, noise_realizations=32, return_samples=True)
+        assert result["sampling_strategy"] == strategy
 
 
 def test_noisy_reference_frames_keep_the_scalar_seed_and_thermal_rules():

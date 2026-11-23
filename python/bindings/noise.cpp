@@ -371,12 +371,9 @@ void bind_noise(nb::module_ &m)
     // --- Gate-by-gate Monte Carlo Noisy Estimation ---
     m.def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
           "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
-          "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
-          "errors after every gate and averages expectation values over "
-          "noise_realizations independent samples. More accurate than "
-          "analytical noisy_estimate for deep circuits. Coherent, correlated "
-          "and crosstalk noise are not applied and raise ValueError; use "
-          "full_noise_estimate for those.");
+          "Estimate Pauli expectations with gate-by-gate noise. Statevectors average eligible final channels exactly and "
+          "sample earlier stochastic evolution over noise_realizations. Use full_noise_estimate for coherent, correlated "
+          "and crosstalk noise.");
 
     m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
           "noise_seed"_a = nb::none(), "return_samples"_a = false,
@@ -446,7 +443,8 @@ void bind_noise(nb::module_ &m)
     m.def("full_noise_estimate", &FullNoiseEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
           "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
           "Estimate expectation values with combined noise (coherent + crosstalk "
-          "+ T1 + Pauli). All configured noise layers are applied per gate.\n\n"
+          "+ T1 + Pauli). All configured noise layers are applied per gate. Statevectors average eligible final channels "
+          "exactly on each incoming trajectory.\n\n"
           "Example:\n"
           "    nm = maestro.NoiseModel()\n"
           "    nm.set_all_coherent_depolarizing(n, 0.001)\n"

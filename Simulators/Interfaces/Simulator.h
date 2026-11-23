@@ -452,6 +452,16 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator>
         return clone;
     }
 
+    // Observe a prefix while a seeded trajectory continues. A channel-fusing
+    // backend must keep its pending branch order intact or decline the read.
+    virtual bool TryPrefixExpectations(const std::vector<std::string> &paulis, std::vector<double> &values)
+    {
+        if (FusesQuantumChannels())
+            return false;
+        values = ExpectationValues(paulis);
+        return true;
+    }
+
     /**
      * @brief Get a shared pointer to this object.
      *

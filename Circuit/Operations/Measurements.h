@@ -18,6 +18,7 @@
 #ifndef _MEASUREMENTS_H_
 #define _MEASUREMENTS_H_
 
+#include "../../Utils/Sampling/MeasurementTargets.h"
 #include "Operations.h"
 #include <utility>
 #include <vector>
@@ -156,8 +157,7 @@ template <typename Time = Types::time_type> class MeasurementOperation : public 
         if (qubits.empty())
             return;
 
-        auto res = sim->MeasureMany(qubits);
-
+        const auto res = Utils::MeasurementTargets::Read(qubits, [&](const auto &targets) { return sim->MeasureMany(targets); });
         SetStateFromSample(res, state, sim.get());
     }
 

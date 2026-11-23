@@ -95,6 +95,7 @@ const char *const kConfigFields[] = {
     "mps_routing_strategy",
     "fixed_backend",
     "optimization_candidates",
+    "terminal_channel_policy",
 };
 
 void bind_config(nb::module_ &m)
@@ -150,7 +151,8 @@ void bind_config(nb::module_ &m)
            std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators, std::optional<bool> mps_routing_virtual_bonds,
            std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy, std::optional<size_t> min_cluster_qubits,
            std::optional<double> observable_error_tolerance, bool enable_sampling_reduction, bool allow_reset_marginalization, std::string counts_policy,
-           bool fixed_backend, std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates) {
+           bool fixed_backend, std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates,
+           std::string terminal_channel_policy) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -201,6 +203,7 @@ void bind_config(nb::module_ &m)
             config.trajectory_max_memory_mb = trajectory_max_memory_mb;
             config.max_simulators = max_simulators;
             config.counts_policy = std::move(counts_policy);
+            config.terminal_channel_policy = std::move(terminal_channel_policy);
             config.mps_routing_virtual_bonds = mps_routing_virtual_bonds;
             config.mps_routing_truncation_weight = mps_routing_truncation_weight;
             config.mps_routing_strategy = std::move(mps_routing_strategy);
@@ -227,7 +230,8 @@ void bind_config(nb::module_ &m)
         "mps_routing_truncation_weight"_a = nb::none(), "mps_routing_strategy"_a = nb::none(), "min_cluster_qubits"_a.noconvert() = nb::none(),
         "observable_error_tolerance"_a = nb::none(), "enable_sampling_reduction"_a = defaults.enable_sampling_reduction,
         "allow_reset_marginalization"_a = defaults.allow_reset_marginalization, "counts_policy"_a = defaults.counts_policy,
-        "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates);
+        "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates,
+        "terminal_channel_policy"_a = defaults.terminal_channel_policy);
 
     BindConfigField(config_class, "optimization_candidates", &SimulatorConfig::optimization_candidates,
                     "With fixed_backend=False, the (SimulatorType, SimulationType) pairs automatic selection may choose from, "
@@ -247,6 +251,10 @@ void bind_config(nb::module_ &m)
 
     BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
                     "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");
+
+    BindConfigField(config_class, "terminal_channel_policy", &SimulatorConfig::terminal_channel_policy,
+                    "'auto' averages eligible final statevector channels for estimates and samples eligible final populations for counts and shot rows. "
+                    "'trajectories' samples the channel branches during circuit execution.");
     BindConfigField(config_class, "enable_sampling_reduction", &SimulatorConfig::enable_sampling_reduction,
                     "Opt into exact independent sampling of disjoint measurement cones; repeated seeded requests remain reproducible.");
     BindConfigField(config_class, "observable_error_tolerance", &SimulatorConfig::observable_error_tolerance,

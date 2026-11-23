@@ -27,6 +27,291 @@ def _bell():
     return circuit
 
 
+_TERMINAL_STATEVECTORS = ["QCSim", "CompositeQCSim", "QiskitAer", "CompositeQiskitAer"]
+
+
+def _terminal_statevector(seed=31, backend="QCSim", fixed=True):
+    kind = getattr(maestro.SimulatorType, backend, None)
+    if kind is None:
+        pytest.skip(f"{backend} was not built")
+    return maestro.SimulatorConfig(
+        simulator_type=kind, simulation_type=maestro.SimulationType.Statevector, fixed_backend=fixed, seed=seed
+    )
+
+
+@pytest.mark.parametrize("backend", _TERMINAL_STATEVECTORS)
+@pytest.mark.parametrize("injected", [False, True])
+def test_last_channel_on_each_wire_is_terminal(backend, injected):
+    circuit = QuantumCircuit()
+    model = maestro.NoiseModel()
+    damping = maestro.QuantumChannel.amplitude_damping(0.4)
+    for q in range(4):
+        circuit.h(q)
+        if injected:
+            model.set_t1(q, 0.4)
+        else:
+            circuit.channel([q], damping)
+    config = _terminal_statevector(backend=backend)
+    words = ["ZIII", "IZII", "IIZI", "IIIZ"]
+    if injected:
+        estimate = circuit.noisy_estimate_montecarlo(words, model, config=config)
+        assert estimate["noise_realizations"] == 1
+    else:
+        estimate = circuit.estimate(words, config=config)
+        assert estimate["measurement_trajectories"] == 0
+    assert estimate["terminal_channels_averaged"]
+    assert estimate["expectation_values"] == pytest.approx([0.4] * 4, abs=1e-14)
+    circuit.measure_all()
+    args = dict(config=config, shots=5000, return_samples=True)
+    sampled = circuit.noisy_execute(model, **args) if injected else circuit.execute(**args)
+    assert sampled["sampling_strategy"] == "terminal_v1"
+    assert sampled["samples"].mean(axis=0) == pytest.approx([0.3] * 4, abs=0.03)
+
+
+def test_terminal_recovery_respects_shared_predrawn_errors_on_separate_wires():
+    circuit = QuantumCircuit()
+    flips = maestro.NoiseModel()
+    dephasing = maestro.NoiseModel()
+    for q in range(3):
+        circuit.x(q)
+        flips.set_bit_flip(q, 0.5)
+        dephasing.set_phase_damping(q, 0.5)
+    config = _terminal_statevector()
+    estimate = circuit.noisy_estimate_montecarlo(["ZII", "IZI", "IIZ"], flips, config=config)
+    assert estimate["noise_realizations"] == 1
+    assert estimate["expectation_values"] == pytest.approx([0.0] * 3, abs=1e-14)
+    circuit.measure_all()
+    args = dict(config=config, noise_realizations=1, noise_seed=42)
+    shared = circuit.noisy_execute(flips, shots=300, **args)
+    key, = shared["counts"]
+    assert shared["counts"] == {key: 300}
+    assert circuit.noisy_execute(flips, shots=20, **args)["counts"] == {key: 20}
+    invisible = circuit.noisy_execute(dephasing, shots=300, **args)
+    assert invisible["sampling_strategy"] == "terminal_v1"
+    assert invisible["counts"] == {"111": 300}
+
+
+def test_deep_wide_terminal_damping_averages_256_paulis():
+    circuit = QuantumCircuit()
+    width = 20
+    circuit.h(0)
+    for q in range(1, width):
+        circuit.cx(q - 1, q)
+    # The rotations change the relative phase of the GHZ branches while
+    # preserving the populations used by the final Z measurement.
+    for layer in range(6):
+        for q in range(width):
+            circuit.rz(q, 0.1 * (1 + layer + q))
+    gamma = 0.2
+    damping = maestro.QuantumChannel.amplitude_damping(gamma)
+    for q in range(width):
+        circuit.channel([q], damping)
+    word = "Z" * 8 + "I" * (width - 8)
+    # A separate 128-term row retains its original budget, and repeating the
+    # 256-term row reuses all its expectation values.
+    smaller = "I" * 8 + "Z" * 7 + "I" * (width - 15)
+    result = circuit.estimate([word, smaller, word], config=_terminal_statevector())
+    expected = [(1 + (2 * gamma - 1) ** weight) / 2 for weight in (8, 7, 8)]
+    assert result["measurement_trajectories"] == 0
+    assert result["terminal_channels_averaged"]
+    assert result["expectation_values"] == pytest.approx(expected, abs=1e-12)
+
+
+def test_later_gate_blocks_every_wire_of_an_overlapping_channel():
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.4))
+    cx = np.eye(4, dtype=complex)[[0, 3, 2, 1]]
+    circuit.channel([0, 1], maestro.QuantumChannel.unitary_mixture([0.5, 0.5], [np.eye(4, dtype=complex), cx]))
+    circuit.x(1)
+    circuit.measure([(1, 0)])
+    sampled = circuit.execute(config=_terminal_statevector(), shots=4000, return_samples=True)
+    assert sampled["sampling_strategy"] == "trajectory_v1"
+    # The random CX reads an excited control with probability 0.6. Moving damping
+    # after it would change P(1) from 1 - 0.6/2 to 0.5.
+    assert sampled["samples"][:, 0].mean() == pytest.approx(0.7, abs=0.035)
+
+
+@pytest.mark.parametrize("backend", _TERMINAL_STATEVECTORS)
+def test_terminal_damping_preserves_bell_correlations_and_reads_each_recorded_bit(backend):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    # Two reads of the same evolved wire, and a later write overwriting bit 3.
+    circuit.measure([(0, 3), (1, 0), (1, 2)])
+    circuit.measure([(1, 3), (0, 1)])
+    model = maestro.NoiseModel()
+    model.set_t1_2q(1, 0.4)
+    args = dict(config=_terminal_statevector(backend=backend, fixed=False), shots=6000, noise_seed=12, noise_realizations=1)
+    sampled = circuit.full_noise_execute(model, return_samples=True, **args)
+    assert sampled["sampling_strategy"] == "terminal_v1" and sampled["noise_realizations"] == args["shots"]
+    assert sampled["simulator"] == args["config"].simulator_type
+    assert sampled["method"] == maestro.SimulationType.Statevector
+    rows = sampled["samples"]
+    assert np.array_equal(rows[:, 0], rows[:, 2]) and np.array_equal(rows[:, 0], rows[:, 3])
+    assert not np.any(rows[:, 0] > rows[:, 1])
+    assert np.mean(rows[:, 0]) == pytest.approx(0.3, abs=0.025)
+    assert np.mean(rows[:, 1]) == pytest.approx(0.5, abs=0.025)
+    model.set_readout_error_symmetric(1, 0.2)
+    noisy_rows = circuit.full_noise_execute(model, return_samples=True, **args)["samples"]
+    counted = circuit.full_noise_execute(model, **args)
+    assert counted["sampling_strategy"] == "terminal_v1"
+    assert counted["counts"] == Counter("".join(map(str, row)) for row in noisy_rows)
+    assert np.mean(noisy_rows[:, 0] != noisy_rows[:, 2]) == pytest.approx(0.32, abs=0.025)
+
+
+@pytest.mark.parametrize("backend", _TERMINAL_STATEVECTORS)
+def test_terminal_channel_samples_unmeasured_controls_and_reversed_sparse_targets(backend):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 4)
+    # Low local bit controls the high bit. Qubit 4 is never measured, and its value is correlated with qubit 0.
+    cx = np.eye(4, dtype=complex)[[0, 3, 2, 1]]
+    channel = maestro.QuantumChannel.unitary_mixture([0.5, 0.5], [np.eye(4, dtype=complex), cx])
+    circuit.channel([4, 1], channel)
+    circuit.measure([(1, 0), (0, 2)])
+    config = _terminal_statevector(backend=backend)
+    rows = circuit.execute(config=config, shots=5000, return_samples=True)
+    assert rows["sampling_strategy"] == "terminal_v1"
+    data = rows["samples"]
+    assert not np.any(data[:, 0] > data[:, 2])
+    assert np.mean(data[:, 0]) == pytest.approx(0.25, abs=0.025)
+    assert np.mean(data[:, 2]) == pytest.approx(0.5, abs=0.025)
+    assert circuit.execute(config=config, shots=5000)["counts"] == Counter("".join(map(str, row)) for row in data)
+
+
+@pytest.mark.parametrize("backend", ["CompositeQCSim", "CompositeQiskitAer"])
+def test_terminal_counts_on_wide_disconnected_composites(backend):
+    circuit = QuantumCircuit()
+    # Keep 70 distinct wires live through compaction. The only entangled component
+    # is the Bell pair across bit positions 0 and 69.
+    for q in range(1, 69):
+        circuit.x(q)
+    circuit.h(0)
+    circuit.cx(0, 69)
+    circuit.channel([69], maestro.QuantumChannel.amplitude_damping(0.5))
+    circuit.measure_all()
+    config = _terminal_statevector(backend=backend)
+    sampled = circuit.execute(config=config, shots=2500, return_samples=True)
+    assert sampled["sampling_strategy"] == "terminal_v1" and sampled["simulator"] == config.simulator_type
+    rows = sampled["samples"]
+    assert rows.shape == (2500, 70)
+    assert np.all(rows[:, 1:69] == 1) and not np.any(rows[:, 69] > rows[:, 0])
+    assert rows[:, 0].mean() == pytest.approx(0.5, abs=0.04)
+    assert rows[:, 69].mean() == pytest.approx(0.25, abs=0.04)
+    assert circuit.execute(config=config, shots=2500)["counts"] == Counter("".join(map(str, row)) for row in rows)
+
+
+def test_wide_composite_aer_packs_selected_bits_in_request_order():
+    config = _terminal_statevector(backend="CompositeQiskitAer")
+    manager = maestro.Maestro()
+    sim = manager.get_simulator(manager.create_simulator(config.simulator_type, config.simulation_type))
+    sim.AllocateQubits(70)
+    sim.Initialize()
+    sim.set_seed(31)
+    sim.ApplyX(69)
+    sim.ApplyCX(66, 69)
+    sim.ApplyH(2)
+    # The first call selects one component. The second joins two independent components by shot.
+    assert sim.SampleCounts([69, 66, 69], 100) == {5: 100}
+    assert sim.SampleCountsMany([69, 66, 69], 100) == {(True, False, True): 100}
+    selected = [66, 2, 69, 2, 69]
+    assert set(sim.SampleCounts(selected, 100)) == {20, 30}
+    assert set(sim.SampleCountsMany(selected, 100)) == {(False, False, True, False, True), (False, True, True, True, True)}
+
+
+@pytest.mark.parametrize("t2", [0.8, 1.6])
+def test_terminal_relaxation_composes_in_channel_order(t2):
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.5))
+    circuit.channel([0], maestro.QuantumChannel.thermal_relaxation(math.log(2), 1.0, t2, 0.2))
+    circuit.channel([0], maestro.QuantumChannel.phase_damping(0.9))
+    circuit.measure_all()
+    counted = circuit.execute(config=_terminal_statevector(), shots=12000)
+    # Population starts at 1, falls to 0.5, then relaxes halfway to 0.2.
+    assert counted["sampling_strategy"] == "terminal_v1"
+    assert counted["counts"]["1"] / 12000 == pytest.approx(0.35, abs=0.015)
+
+
+def test_terminal_unmeasured_channels_do_not_expand_the_population_sample():
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.h(1)
+    circuit.cx(1, 2)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.25))
+    # This channel does not have a classical population transition, but only acts on unmeasured qubits.
+    hadamard = np.array([[1, 1], [1, -1]], dtype=complex) / math.sqrt(2)
+    spectator = maestro.QuantumChannel.unitary_mixture([0.5, 0.5], [np.eye(2, dtype=complex), hadamard])
+    circuit.channel([1], spectator)
+    circuit.channel([2], spectator)
+    circuit.measure([(0, 0)])
+    result = circuit.execute(config=_terminal_statevector(), shots=3000, return_samples=True)
+    assert result["sampling_strategy"] == "terminal_v1"
+    assert result["samples"][:, 0].mean() == pytest.approx(0.75, abs=0.03)
+
+
+def test_terminal_ignores_an_entangled_spectator_only_when_trace_is_preserved():
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.2))
+    # Accepted by the input validation tolerance, but non-trace-preserving above roundoff.
+    ops = [np.array(op) for op in maestro.QuantumChannel.amplitude_damping(0.35).kraus_operators]
+    ops[0][1, 1] += 3e-11
+    circuit.channel([1], maestro.QuantumChannel.from_kraus(ops))
+    circuit.measure([(0, 0)])
+    result = circuit.execute(config=_terminal_statevector(), shots=150, return_samples=True)
+    assert result["sampling_strategy"] == "trajectory_v1"
+
+
+def test_terminal_channel_does_not_cross_normalization_on_an_entangled_partner():
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.4))
+    ops = [np.array(op) for op in maestro.QuantumChannel.amplitude_damping(0.35).kraus_operators]
+    ops[0][1, 1] += 3e-11
+    circuit.channel([1], maestro.QuantumChannel.from_kraus(ops))
+    circuit.x(1)
+    estimate = circuit.estimate(["ZI", "IZ"], config=_terminal_statevector())
+    assert not estimate.get("terminal_channels_averaged", False)
+    assert estimate["measurement_trajectories"] > 1
+
+
+def test_terminal_channel_keeps_coherences_and_shared_realizations_when_required():
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    hadamard = np.array([[1, 1], [1, -1]], dtype=complex) / math.sqrt(2)
+    circuit.channel([0], maestro.QuantumChannel.unitary_mixture([0.5, 0.5], [np.eye(2, dtype=complex), hadamard]))
+    circuit.measure_all()
+    result = circuit.execute(config=_terminal_statevector(), shots=3000, return_samples=True)
+    assert result["sampling_strategy"] == "trajectory_v1"
+    assert result["samples"].mean() == pytest.approx(0.25, abs=0.03)
+
+    reset = QuantumCircuit()
+    reset.h(0)
+    reset.cx(0, 1)
+    reset.reset(0)
+    reset.channel([1], maestro.QuantumChannel.amplitude_damping(0.4))
+    reset.measure([(1, 0)])
+    result = reset.execute(config=_terminal_statevector(), shots=3000, return_samples=True)
+    assert result["sampling_strategy"] == "trajectory_v1"
+    assert result["samples"][:, 0].mean() == pytest.approx(0.3, abs=0.03)
+
+    flipped = QuantumCircuit()
+    flipped.x(0)
+    flipped.measure_all()
+    model = maestro.NoiseModel()
+    model.set_bit_flip(0, 0.5)
+    shared = flipped.noisy_execute(model, config=_terminal_statevector(), shots=1024, noise_realizations=1)
+    assert len(shared["counts"]) == 1 and shared["noise_realizations"] == 1
+    dephased = maestro.NoiseModel()
+    dephased.set_phase_damping(0, 0.8)
+    shared = flipped.noisy_execute(dephased, config=_terminal_statevector(), shots=1024, noise_realizations=1)
+    assert shared["counts"] == {"1": 1024} and shared["sampling_strategy"] == "terminal_v1"
+
+
 def _noisy_bell():
     circuit = QuantumCircuit()
     circuit.h(0)

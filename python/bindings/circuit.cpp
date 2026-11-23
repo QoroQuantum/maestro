@@ -568,7 +568,7 @@ void bind_circuit(nb::module_ &m)
             "Example: qc.noisy_estimate(['ZZ', 'XX'], nm)")
         .def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
              "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
-             "Gate-by-gate Monte Carlo noisy estimation.\n\n"
+             "Estimate Pauli expectations with gate-by-gate noise. Statevectors average eligible final channels exactly on each incoming trajectory.\n\n"
              "Example: qc.noisy_estimate_montecarlo(['ZZ'], nm, "
              "noise_realizations=200)")
         .def("coherent_execute", &CoherentExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
@@ -590,7 +590,7 @@ void bind_circuit(nb::module_ &m)
              "Example: qc.full_noise_execute(nm, shots=1000)" MAESTRO_NOISY_EXECUTE_DOC)
         .def("full_noise_estimate", &FullNoiseEstimate, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "config"_a = SimulatorConfig{},
              "noise_seed"_a = nb::none(),
-             "Estimate with combined noise (coherent + crosstalk + T1 + Pauli).\n\n"
+             "Estimate with combined noise (coherent + crosstalk + T1 + Pauli). Statevectors average eligible final channels exactly on each incoming trajectory.\n\n"
              "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)")
         // ---- Noisy Fidelity (inner-product) ----
         .def("noisy_fidelity", &NoisyFidelity,

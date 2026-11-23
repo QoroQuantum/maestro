@@ -1470,6 +1470,14 @@ class IndividualSimulator : public ISimulator
     }
 
   private:
+#ifndef NO_QISKIT_AER
+    template <class Consumer> void ForEachAerSample(const Types::qubits_vector &qubits, size_t shots, Consumer &&consume)
+    {
+        auto &aer = *static_cast<AerState *>(simulator.get());
+        aer.state->for_each_sample(ConvertQubits(qubits), shots, std::forward<Consumer>(consume));
+    }
+#endif
+
     // These helpers operate on component-local rows. The composite projects
     // directly into requested output positions, including global IDs above 63.
     QCSimStatevectorSimulator &SamplingStatevector() const

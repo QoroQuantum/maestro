@@ -3480,10 +3480,11 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        # Damping at the CX precedes a noncommuting gate on the damped wire.
+        qc.x(1)
 
         nm = maestro.NoiseModel()
-        # Always inject the trailing reset so only its collapse is random.
-        nm.set_t1(1, 1.0)
+        nm.set_t1_2q(1, 1.0)
         cfg = maestro.SimulatorConfig(
             simulation_type=method, seed=config_seed)
 
@@ -3495,11 +3496,12 @@ class TestNoisyEstimateMonteCarlo:
                     getattr(maestro, fn_name)(qc, *args, **kwargs))
 
         first = run()
+        assert first['noise_evaluation'] == 'trajectories'
         values = first['expectation_values']
         assert values == run()['expectation_values']
         # Standard error of <ZI> is about 0.032 over 1000 realizations.
         assert values[0] == pytest.approx(0.0, abs=0.15)
-        assert values[1] == pytest.approx(1.0)
+        assert values[1] == pytest.approx(-1.0)
         assert first['ideal_expectation_values'] == pytest.approx([0.0, 0.0])
         assert cfg.seed == config_seed
         if config_seed is not None:
@@ -3509,7 +3511,7 @@ class TestNoisyEstimateMonteCarlo:
             other = run(99)['expectation_values']
             assert other != values
             assert other[0] == pytest.approx(0.0, abs=0.15)
-            assert other[1] == pytest.approx(1.0)
+            assert other[1] == pytest.approx(-1.0)
 
     @pytest.mark.parametrize("fn_name", [
         "noisy_estimate_montecarlo", "full_noise_estimate"])
@@ -3524,9 +3526,10 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        qc.x(1)
 
         nm = maestro.NoiseModel()
-        nm.set_t1(1, 0.5)
+        nm.set_t1_2q(1, 0.5)
         cfg = maestro.SimulatorConfig(simulation_type=method)
 
         def run(realizations):
@@ -3536,15 +3539,39 @@ class TestNoisyEstimateMonteCarlo:
                       getattr(maestro, fn_name)(qc, *args, **kwargs))
             return result['expectation_values']
 
-        # Local noise cannot bias q0. Qubit 1 resets in half the trajectories.
+        # Local noise cannot bias q0. The final X negates the damped q1 Z expectation.
         # This tolerance exceeds six standard errors for 2000 realizations.
-        assert run(2000) == pytest.approx([0.0, 0.5], abs=0.1)
+        assert run(2000) == pytest.approx([0.0, -0.5], abs=0.1)
 
         # Compare sequences rather than individual outcomes or rounded means,
         # which can coincide by chance even with independent random streams.
         streams = [[tuple(run(1)) for _ in range(64)] for _ in range(2)]
         assert streams[0] != streams[1]
         assert cfg.seed is None
+
+    @pytest.mark.parametrize("fn_name", ["noisy_estimate_montecarlo", "full_noise_estimate"])
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("damping", [0.5, 1.0])
+    def test_terminal_bell_damping_averages_the_channel(self, fn_name, bound_method, damping):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        # This final gate on the Bell partner can commute through damping of q1.
+        qc.x(0)
+        nm = maestro.NoiseModel()
+        nm.set_t1(1, damping)
+        cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+        for seed in (None, 23):
+            args = (['ZI', 'IZ'], nm)
+            kwargs = dict(config=cfg, noise_seed=seed)
+            result = (getattr(qc, fn_name)(*args, **kwargs) if bound_method else
+                      getattr(maestro, fn_name)(qc, *args, **kwargs))
+            # Damping leaves q0 maximally mixed and drives q1's Z expectation from 0 to gamma.
+            assert result['noise_evaluation'] == 'terminal_channels'
+            assert result['noise_realizations'] == 1
+            assert result['expectation_values'] == pytest.approx([0.0, damping], rel=0, abs=1e-14)
+            assert result['realization_standard_errors'] == [0.0, 0.0]
 
 
 class TestNoisyExecute:
@@ -6074,6 +6101,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "mps_routing_strategy": "legacy",
     "fixed_backend": True,
     "optimization_candidates": [(maestro.SimulatorType.QCSim, maestro.SimulationType.DensityMatrix)],
+    "terminal_channel_policy": "trajectories",
 }
 
 
@@ -6096,6 +6124,7 @@ class TestSimulatorConfigFields:
         ("mps_routing_strategy", "typo"),
         ("mps_routing_strategy", "current"),
         ("extended_stabilizer_sampling_method", "gibbs"),
+        ("terminal_channel_policy", "sometimes"),
     ]
 
     def test_constructor_is_keyword_only(self):
@@ -7151,6 +7180,65 @@ class TestQuantumChannelBindings:
         raw_damping = Channel.from_kraus(Channel.amplitude_damping(0.3).kraus_operators)
         assert raw_damping.factors[0]["kind"] == "kraus"
         assert raw_damping.is_approx(Channel.amplitude_damping(0.3))
+
+    @pytest.mark.parametrize("weights", [
+        pytest.param([1 - 15 * 0.17 / 16] + [0.17 / 16] * 15, id="depolarizing"),
+        pytest.param([1 / 16] * 16, id="fully-depolarizing"),
+        pytest.param([0.98, 0.02, 0, 0], id="bit-flip"),
+        pytest.param([0.99] + [0] * 14 + [0.01], id="zz-dephasing"),
+        pytest.param([0.9801, 0.0099, 0, 0, 0.0099, 0.0001] + [0] * 10, id="independent-bit-flips"),
+        pytest.param([0.9801, 0, 0, 0.0099] + [0] * 8 + [0.0099, 0, 0, 0.0001], id="independent-phase-flips"),
+        pytest.param([0.97, 0.01, 0.01, 0.01] + [0] * 12, id="depolarizing-one-wire"),
+    ])
+    def test_numerically_decomposed_pauli_channel(self, weights):
+        np = pytest.importorskip("numpy")
+        from maestro.circuits import QuantumCircuit
+
+        Channel = maestro.QuantumChannel
+        original = Channel.pauli(weights)
+        dim = 2 ** original.num_qubits
+        vectors = [op.reshape(-1, order="F") for op in original.kraus_operators]
+        choi = sum(np.outer(v, v.conj()) for v in vectors)
+        eigenvalues, basis = np.linalg.eigh(choi)
+        raw = Channel.from_kraus([(np.sqrt(weight) * vector).reshape((dim, dim), order="F")
+                                 for weight, vector in zip(eigenvalues, basis.T) if weight > 16 * np.finfo(float).eps])
+        assert raw.is_state_independent
+        assert raw.factors[0]["kind"] == "pauli"
+        np.testing.assert_allclose(raw.factors[0]["probabilities"], weights, rtol=0, atol=1e-15)
+        circuit = QuantumCircuit()
+        circuit.channel(list(range(raw.num_qubits)), raw)
+        circuit.h(0)
+        circuit.measure_all()
+        assert maestro.compile_reference_sampler(circuit) is not None
+
+        decay = Channel.amplitude_damping(0.2)
+        target = raw.num_qubits - 1
+        placed = Channel.on_qubit(decay, target) if raw.num_qubits == 2 else decay
+        expected = placed.superoperator() @ raw.superoperator()
+        np.testing.assert_allclose(raw.then(decay, [target]).superoperator(), expected, rtol=0, atol=1e-15)
+
+    def test_weak_non_pauli_channels_keep_their_sampled_form(self):
+        np = pytest.importorskip("numpy")
+        Channel = maestro.QuantumChannel
+        angle = 1e-15
+        c, s = np.cos(angle / 2), np.sin(angle / 2)
+        ry = np.array([[c, -s], [s, c]])
+        for ops in ([ry], [ry / np.sqrt(2), ry / np.sqrt(2)]):
+            assert Channel.from_kraus(ops).factors[0]["kind"] == "unitary_mixture"
+
+        gamma = 2.5e-15
+        damping = [np.diag([1, np.sqrt(1 - gamma)]), [[0, np.sqrt(gamma)], [0, 0]]]
+        assert Channel.from_kraus(damping).factors[0]["kind"] == "kraus"
+
+        # The H branch leaves an X/Z cross term of p/2, even beside ordinary dephasing.
+        dephasing = Channel.pauli([0.8, 0, 0, 0.2]).kraus_operators
+        for p in (1e-15, 1e-17):
+            identity, phase = [np.sqrt(1 - p) * op for op in dephasing]
+            hadamard = np.sqrt(p / 2) * np.array([[1, 1], [1, -1]])
+            assert Channel.from_kraus([identity, phase, hadamard]).factors[0]["kind"] == "unitary_mixture"
+            # Mixing the rare operator into two large ones preserves the same channel.
+            rebased = [(identity + hadamard) / np.sqrt(2), (identity - hadamard) / np.sqrt(2), phase]
+            assert Channel.from_kraus(rebased).factors[0]["kind"] != "pauli"
 
     def test_then_keeps_parts_and_multiplies_superoperators(self):
         np = pytest.importorskip("numpy")

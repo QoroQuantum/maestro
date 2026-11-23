@@ -1018,7 +1018,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         if shots is not None:
             suggested_shots = shots
         shots_to_run = validate_shots(suggested_shots)
-        t0 = time.monotonic()
+        t0 = time.perf_counter()
         meas_matrix = self._measurements(shots_to_run, seed)
 
         # Native C++ bit-packed conversion to detection events and actual observables
@@ -1056,7 +1056,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         )
         total_discards = num_discards_1 + num_discards_2
 
-        t1 = time.monotonic()
+        t1 = time.perf_counter()
         return sinter.AnonTaskStats(
             shots=shots_to_run,
             errors=num_errors,
