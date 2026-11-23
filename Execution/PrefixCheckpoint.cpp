@@ -147,9 +147,10 @@ bool PrefixCheckpoint::HasNoise(const RecordCircuitPtr &suffix, const noise::Noi
     return suffix && suffix->HasDrawnChannels();
 }
 
-ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
+ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_t shots, const noise::NoiseModel *noise_model,
                                             std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, size_t num_measurements, bool rows)
 {
+    const auto suffix = InlinedCheckpointCircuit(given);
     if (!suffix)
         throw std::invalid_argument("suffix_circuit is null.");
     if (shots < 1)

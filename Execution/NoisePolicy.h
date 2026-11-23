@@ -183,6 +183,14 @@ inline bool SomeBackendHoldsQuantumChannels(const SimulatorConfig &config)
     return holds(config.simulator_type, config.simulation_type);
 }
 
+// Nested circuits share the checkpoint register and classical bits. Expose
+// their gates in execution order before noise injection and routing so both
+// the planner and the gate counter see the same operations.
+inline RecordCircuitPtr InlinedCheckpointCircuit(const RecordCircuitPtr &circuit)
+{
+    return circuit && circuit->HasCompositeOperations() ? circuit->InlinedComposites() : circuit;
+}
+
 // The circuit a checkpoint prefix runs: the prefix without its end measurements
 // (Circuit::RemoveEndMeasurements). Only suffixes are sampled, and a prefix that
 // is a whole program, as one parsed from OpenQASM is, ends with measurements
@@ -192,7 +200,8 @@ inline bool SomeBackendHoldsQuantumChannels(const SimulatorConfig &config)
 // samples. One rule for PrefixCheckpoint and for checkpoint_batch requests.
 inline RecordCircuitPtr ExecutedCheckpointPrefix(const RecordCircuitPtr &prefix)
 {
-    return prefix ? prefix->RemoveEndMeasurements() : prefix;
+    const auto inlined = InlinedCheckpointCircuit(prefix);
+    return inlined ? inlined->RemoveEndMeasurements() : inlined;
 }
 
 // A checkpoint prefix runs once. A backend that samples channels from its state

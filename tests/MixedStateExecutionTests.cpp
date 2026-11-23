@@ -32,13 +32,16 @@ bool SameCounts(std::vector<std::pair<std::vector<bool>, size_t>> a, std::vector
 class CountedX : public Circuits::XGate<>
 {
   public:
-    CountedX(size_t qubit, std::shared_ptr<std::atomic<size_t>> calls) : XGate(qubit), calls(std::move(calls))
+    CountedX(size_t qubit, std::shared_ptr<std::atomic<size_t>> calls, std::shared_ptr<std::atomic<size_t>> routed = {})
+        : XGate(qubit), calls(std::move(calls)), routed(std::move(routed))
     {
     }
 
     void Execute(const std::shared_ptr<Simulators::ISimulator> &simulator, Circuits::OperationState &state) const override
     {
         ++*calls;
+        if (routed && simulator->IsRoutingLookaheadEnabled())
+            ++*routed;
         XGate::Execute(simulator, state);
     }
 
@@ -49,6 +52,7 @@ class CountedX : public Circuits::XGate<>
 
   private:
     std::shared_ptr<std::atomic<size_t>> calls;
+    std::shared_ptr<std::atomic<size_t>> routed;
 };
 
 MaestroExecution::SimulatorConfig Config(Method method)
@@ -284,6 +288,79 @@ void ExplicitSamplingPolicyKeepsAdaptiveCheckpoint(Method method)
     {
         Check(SameCounts(run(explicitDefault, false).counts, expectedCounts), "Explicit reproducible checkpoint changed the adaptive histogram");
         Check(run(explicitDefault, true).rows == expectedRows, "Explicit reproducible checkpoint changed adaptive ordered rows");
+    }
+}
+
+void CheckpointTensorRouting(Method method, const Types::qubits_vector &path)
+{
+    const auto spare = path.size(); // first used by a suffix
+    const size_t width = spare + 1;
+    auto edges = CF::CreateCircuit();
+    for (size_t parity : {0, 1})
+        for (size_t i = parity; i + 1 < path.size(); i += 2)
+            edges->AddOperation(CF::CreateGate(Gate::kCZGateType, path[i], path[i + 1]));
+    auto rotations = CF::CreateCircuit();
+    for (const auto q : path)
+        rotations->AddOperation(CF::CreateGate(Gate::kHadamardGateType, q));
+    auto prefix = CF::CreateCircuit();
+    prefix->AddOperation(CF::CreateGate(Gate::kXGateType, path.front()));
+    prefix->AddOperation(rotations);
+    prefix->AddOperation(edges);
+    auto end = CF::CreateCircuit();
+    end->AddOperation(CF::CreateMeasurement({{path.front(), 0}}));
+    prefix->AddOperation(end); // The saved graph must keep the coherence this terminal measurement would destroy.
+
+    auto undo = CF::CreateCircuit();
+    undo->AddOperation(edges); // The CZs commute and each is its own inverse.
+    undo->AddOperation(rotations);
+    auto terminal = CF::CreateCircuit();
+    terminal->AddOperation(undo);
+    for (size_t i = 0; i < 10; ++i) // A longer suffix qualifies for automatic lookahead.
+        terminal->AddOperation(CF::CreateGate(Gate::kCXGateType, path.front(), path.back()));
+    auto calls = std::make_shared<std::atomic<size_t>>(0);
+    auto routed = std::make_shared<std::atomic<size_t>>(0);
+    terminal->AddOperation(std::make_shared<CountedX>(spare, calls, routed));
+    terminal->AddOperation(CF::CreateMeasurement({{spare, 0}, {path.back(), 1}, {path.front(), 2}}));
+
+    auto dynamic = CF::CreateCircuit();
+    dynamic->AddOperation(undo);
+    dynamic->AddOperation(CF::CreateMeasurement({{path.front(), 3}}));
+    dynamic->AddOperation(CF::CreateGate(Gate::kCXGateType, path.front(), spare));
+    dynamic->AddOperation(CF::CreateMeasurement({{path.back(), 1}, {spare, 4}}));
+    noise::NoiseModel readout;
+    readout.set_readout_error(static_cast<int>(path.back()), 1., 1.);
+
+    for (bool disabled : {false, true})
+    {
+        auto config = Config(method);
+        config.max_bond_dimension = 64;
+        config.max_simulators = 2;
+        config.disable_optimized_swapping = disabled;
+        MaestroExecution::PrefixCheckpoint checkpoint(prefix, static_cast<int>(width), config);
+        // Placing the graph along the chain leaves one CZ across each cut. Its projector has the square of the pure-state rank.
+        const size_t lineRank = method == Method::kMatrixProductState ? 2 : 4;
+        Check(disabled ? checkpoint.MaxBondDimension() > lineRank : checkpoint.MaxBondDimension() == lineRank,
+              "Nested checkpoint prefix ignored the configured initial chain layout");
+        const auto checkTerminal = [&] {
+            calls->store(0);
+            routed->store(0);
+            const auto result = checkpoint.ExecuteSuffix(terminal, 3, nullptr, std::nullopt, 7, 0, false);
+            std::vector<bool> expected(width, false);
+            expected[0] = expected[2] = true;
+            Check(result.sampling_strategy == "terminal_v1" && result.counts.size() == 1 && result.counts.front() == std::make_pair(expected, size_t{3}),
+                  "Terminal checkpoint sampling lost logical qubits after restoring a routed prefix");
+            Check(calls->load() == 1 && routed->load() == (disabled ? 0u : 1u), "Nested suffix used the wrong automatic swap lookahead");
+        };
+        checkTerminal();
+        const auto rows = checkpoint.ExecuteSuffix(dynamic, 8, &readout, 4, 7, 0, true);
+        Check(rows.realizations == 4 && rows.width == width && rows.rows.size() == 8 * width && rows.sampling_strategy == "trajectory_v1",
+              "Dynamic checkpoint test did not sample four noisy realizations");
+        for (size_t i = 0; i < rows.rows.size(); ++i)
+        {
+            const auto bit = i % width;
+            Check(rows.rows[i] == (bit == 1 || bit == 3 || bit == 4), "A checkpoint worker lost a logical qubit or readout target across restore");
+        }
+        checkTerminal(); // The worker saves and the different suffix must leave the original prefix intact.
     }
 }
 
@@ -907,6 +984,8 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 void TestMixedStateExecution()
 {
     CheckpointMultinomialCounts();
+    CheckpointTensorRouting(Method::kMatrixProductState, {1, 9, 8, 5, 10, 2, 3, 7, 4, 0, 11, 6});
+    CheckpointTensorRouting(Method::kMatrixProductOperator, {4, 2, 1, 0, 5, 3});
     for (const auto method : {Method::kStatevector, Method::kExtendedStabilizer})
         ExplicitSamplingPolicyKeepsAdaptiveCheckpoint(method);
     for (const auto method : {Method::kDensityMatrix, Method::kMatrixProductOperator})

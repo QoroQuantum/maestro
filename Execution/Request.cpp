@@ -1297,6 +1297,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         {
             additional.push_back(ParseCircuit(Object(suffix)));
             SameSize(input, additional.back());
+            additional.back().circuit = InlinedCheckpointCircuit(additional.back().circuit);
             if (noise.enabled)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
