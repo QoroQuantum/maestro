@@ -3480,9 +3480,11 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        # A gate on the undamped Bell partner puts damping inside the circuit.
+        # Its maximally mixed marginal is unchanged by X.
+        qc.x(0)
 
         nm = maestro.NoiseModel()
-        # Always inject the trailing reset so only its collapse is random.
         nm.set_t1(1, 1.0)
         cfg = maestro.SimulatorConfig(
             simulation_type=method, seed=config_seed)
@@ -3495,6 +3497,7 @@ class TestNoisyEstimateMonteCarlo:
                     getattr(maestro, fn_name)(qc, *args, **kwargs))
 
         first = run()
+        assert first['noise_evaluation'] == 'trajectories'
         values = first['expectation_values']
         assert values == run()['expectation_values']
         # Standard error of <ZI> is about 0.032 over 1000 realizations.
@@ -3524,6 +3527,7 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        qc.x(0)
 
         nm = maestro.NoiseModel()
         nm.set_t1(1, 0.5)
@@ -3545,6 +3549,28 @@ class TestNoisyEstimateMonteCarlo:
         streams = [[tuple(run(1)) for _ in range(64)] for _ in range(2)]
         assert streams[0] != streams[1]
         assert cfg.seed is None
+
+    @pytest.mark.parametrize("fn_name", ["noisy_estimate_montecarlo", "full_noise_estimate"])
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("damping", [0.5, 1.0])
+    def test_terminal_bell_damping_averages_the_channel(self, fn_name, bound_method, damping):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        nm = maestro.NoiseModel()
+        nm.set_t1(1, damping)
+        cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+        for seed in (None, 23):
+            args = (['ZI', 'IZ'], nm)
+            kwargs = dict(config=cfg, noise_seed=seed)
+            result = (getattr(qc, fn_name)(*args, **kwargs) if bound_method else
+                      getattr(maestro, fn_name)(qc, *args, **kwargs))
+            # Damping leaves q0 maximally mixed and drives q1's Z expectation from 0 to gamma.
+            assert result['noise_evaluation'] == 'terminal_channels'
+            assert result['noise_realizations'] == 1
+            assert result['expectation_values'] == pytest.approx([0.0, damping], rel=0, abs=1e-14)
+            assert result['realization_standard_errors'] == [0.0, 0.0]
 
 
 class TestNoisyExecute:

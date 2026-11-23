@@ -308,6 +308,8 @@ and for the composite statevector, in the execute and estimate functions,
   evaluate the resulting Pauli sum on the preceding state. For example, a
   final T1 decay with probability `p` gives ⟨Z⟩ after decay as
   `(1 - p) * ⟨Z⟩ + p`. This removes the sampling error from that layer.
+  If the preceding evolution is deterministic, Maestro computes the noisy
+  expectation once. An explicit `noise_realizations` count is still reported.
   Earlier stochastic evolution still contributes trajectory variance. If the
   Pauli expansion becomes too large, Maestro uses the ordinary trajectory.
   For terminal computational-basis measurements after a deterministic prefix,
