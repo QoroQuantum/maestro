@@ -48,18 +48,19 @@ def test_accepted_pauli_probability_rounding_keeps_exact_estimate(delta):
         assert result["expectation_values"] == pytest.approx([expected], rel=0, abs=5e-16)
 
 
-def test_rounded_pauli_sampling_form_preserves_composed_coherence():
+@pytest.mark.parametrize("weights,z_scale", [([0.7, 0.1, 0.1, 0.1], 0.6), ([0.8, 0, 0, 0.2], 1.0)])
+def test_rounded_pauli_sampling_form_preserves_composed_coherence(weights, z_scale):
     np = pytest.importorskip("numpy")
     channel = maestro.QuantumChannel
     angle = 1e-15
     c, s = math.cos(angle / 2), math.sin(angle / 2)
     ry = np.array([[c, -s], [s, c]])
-    raw = channel.from_kraus([ry @ op for op in channel.pauli([0.7, 0.1, 0.1, 0.1]).kraus_operators])
-    # Depolarization shrinks Z to 0.6 Z, Ry creates X, then dephasing halves X.
+    raw = channel.from_kraus([ry @ op for op in channel.pauli(weights).kraus_operators])
+    # After the Pauli mixture scales Z, Ry creates X, then dephasing halves X.
     placed = channel.on_qubit(raw.then(channel.pauli([0.75, 0.0, 0.0, 0.25])), 1)
     circuit = QuantumCircuit()
     circuit.channel([0, 1], placed)
-    expected = 0.3 * math.sin(angle)
+    expected = 0.5 * z_scale * math.sin(angle)
     for method in (maestro.SimulationType.Statevector, maestro.SimulationType.DensityMatrix):
         result = circuit.estimate(["IX"], config=config(method))
         assert result["measurement_trajectories"] == 0

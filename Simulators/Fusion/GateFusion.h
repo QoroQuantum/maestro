@@ -69,6 +69,11 @@ template <class Gate> class GateFusion
         return blocks_.size();
     }
 
+    const std::map<uint64_t, Block> &PendingBlocks() const
+    {
+        return blocks_;
+    }
+
     void Clear()
     {
         blocks_.clear();

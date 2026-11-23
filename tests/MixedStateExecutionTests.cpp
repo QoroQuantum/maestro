@@ -783,6 +783,62 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 
     if (backend == Simulators::SimulatorType::kQCSim)
     {
+        // Above the default fusion threshold, the interior damping is resolved
+        // before the last gate layer. Local X/Y/Z rows can read that layer
+        // without flushing the gates the full trajectory will fuse with damping.
+        constexpr size_t width = 11;
+        auto fused = config;
+        fused.gate_fusion.reset();
+        fused.enable_causal_cone_reduction = false;
+        fused.auto_reduce = false;
+        auto layered = CF::CreateCircuit();
+        layered->AddOperation(std::make_shared<CountedX>(0, prefix_calls));
+        for (size_t q = 0; q < width; ++q)
+            layered->AddOperation(CF::CreateGate(Gate::kRyGateType, q, 0, 0, .3 + .1 * q));
+        layered->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1}, Channel::AmplitudeDamping(.4)));
+        for (size_t layer = 0; layer < 4; ++layer)
+        {
+            for (size_t q = layer % 2; q + 1 < width; q += 2)
+                layered->AddOperation(CF::CreateGate(Gate::kCXGateType, q + 1, q));
+            for (size_t q = 0; q < width; ++q)
+                layered->AddOperation(CF::CreateGate(Gate::kRxGateType, q, 0, 0, .2 + .05 * q + .1 * layer));
+        }
+        for (size_t q = 0; q < width; ++q)
+            layered->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.2)));
+        const auto joint = PrepareTerminalExpectation(layered, {"Z", "IY", "IIX", "IIIY", "IXY", std::string(width, 'Z')}, fused);
+        Check(joint && joint->prefix_read_position && joint->sampled_indices.size() == 1, "Missing mixed fused-prefix fixture");
+        for (size_t seed = 0; seed < 8; ++seed)
+        {
+            fused.seed = seed;
+            const auto prefix = EstimateCircuitTrajectory(joint->prefix, joint->prefix_observables, fused);
+            const auto full = EstimateCircuitTrajectory(layered, joint->sampled_observables, fused);
+            prefix_calls->store(0);
+            const auto actual = EstimateTerminalExpectation(*joint, fused);
+            const auto expected = joint->Combine(prefix.values, full.values);
+            Check(actual.gate_fusion && prefix_calls->load() == 1, "Default QCSim fusion repeated a resolved stochastic prefix");
+            Check(actual.values.back() == expected.back(), "Observing a fused prefix changed a terminal branch");
+            for (size_t i = 0; i + 1 < expected.size(); ++i)
+                Check(std::abs(actual.values[i] - expected[i]) < 1e-13, "A fused prefix Pauli differs from its standalone expectation");
+        }
+
+        const auto wide_prefix = PrepareTerminalExpectation(layered, {"XXXX", std::string(width, 'Z')}, fused);
+        Check(wide_prefix && wide_prefix->prefix_read_position, "Missing wide fused-prefix fixture");
+        prefix_calls->store(0);
+        EstimateTerminalExpectation(*wide_prefix, fused);
+        Check(prefix_calls->load() == 2, "A wide prefix exceeded the three-qubit reduced-density limit");
+
+        // This shorter prefix still holds a state-dependent branch at the read.
+        // A second pass preserves the independent resolution order in each run.
+        fused.gate_fusion = true;
+        const auto pending = PrepareTerminalExpectation(stochastic, {"Z", "ZZZ"}, fused);
+        Check(pending && pending->prefix_read_position, "Missing unresolved fused-prefix fixture");
+        const auto separate_prefix = EstimateCircuitTrajectory(pending->prefix, pending->prefix_observables, fused);
+        const auto separate_full = EstimateCircuitTrajectory(stochastic, pending->sampled_observables, fused);
+        prefix_calls->store(0);
+        const auto pending_result = EstimateTerminalExpectation(*pending, fused);
+        Check(prefix_calls->load() == 2 && pending_result.values == pending->Combine(separate_prefix.values, separate_full.values),
+              "An unresolved fused prefix changed its seeded branch order");
+
         // Explicit marginalization permits separate sampled cones. A row with
         // two nonconstant terms needs a common trajectory, but merging all
         // these disjoint cones into one 70-qubit dense register is infeasible.

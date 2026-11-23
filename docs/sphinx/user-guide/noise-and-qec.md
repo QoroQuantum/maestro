@@ -314,6 +314,13 @@ and for the composite statevector, in the execute and estimate functions,
   Earlier stochastic evolution still contributes trajectory variance. If an
   observable's Pauli expansion becomes too expensive, Maestro samples that
   observable and can still average the other observables in the same request.
+  On wide statevectors, a deeper deterministic prefix makes a larger exact
+  expansion worthwhile because each trajectory would repeat those gates.
+  When one request mixes averaged and sampled observables, QCSim can read both
+  from one trajectory even with gate fusion enabled. It can do this once the
+  prefix's random branches have been resolved and the pending gates needed for
+  each local expectation fit on at most three qubits. Other cases can require a
+  second evolution with the same seed.
   For terminal computational-basis measurements after a deterministic prefix,
   Maestro can sample joint populations once and apply eligible final channels
   to the resulting counts. T1 changes these counts, while pure dephasing
@@ -422,6 +429,12 @@ instruction, and accept only channels whose branches need no state. Other
 factories are `pauli`, `unitary_mixture`, `phase_damping`,
 `generalized_amplitude_damping`, `from_kraus` and `on_qubit`; for two-qubit
 matrices `qubits[0]` is the least significant bit of the index.
+
+A sparse Pauli channel supplied through `from_kraus` can also use Pauli frame
+sampling. A numerical Choi decomposition can leave small residuals on Pauli
+axes whose weight is zero. Maestro checks these against floating-point
+roundoff and the weights of the supplied branches. Exact channel calculations
+retain the original Kraus operators.
 
 `maestro.get_probabilities(circuit, config)` reads the distribution of the state
 the instructions leave, on every method: the exact, mixed one where they are

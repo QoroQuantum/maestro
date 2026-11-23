@@ -7181,22 +7181,64 @@ class TestQuantumChannelBindings:
         assert raw_damping.factors[0]["kind"] == "kraus"
         assert raw_damping.is_approx(Channel.amplitude_damping(0.3))
 
-    @pytest.mark.parametrize("rate", [0.17, 1.0])
-    def test_numerically_decomposed_two_qubit_pauli_channel(self, rate):
+    @pytest.mark.parametrize("weights", [
+        pytest.param([1 - 15 * 0.17 / 16] + [0.17 / 16] * 15, id="depolarizing"),
+        pytest.param([1 / 16] * 16, id="fully-depolarizing"),
+        pytest.param([0.98, 0.02, 0, 0], id="bit-flip"),
+        pytest.param([0.99] + [0] * 14 + [0.01], id="zz-dephasing"),
+        pytest.param([0.9801, 0.0099, 0, 0, 0.0099, 0.0001] + [0] * 10, id="independent-bit-flips"),
+        pytest.param([0.9801, 0, 0, 0.0099] + [0] * 8 + [0.0099, 0, 0, 0.0001], id="independent-phase-flips"),
+        pytest.param([0.97, 0.01, 0.01, 0.01] + [0] * 12, id="depolarizing-one-wire"),
+    ])
+    def test_numerically_decomposed_pauli_channel(self, weights):
         np = pytest.importorskip("numpy")
+        from maestro.circuits import QuantumCircuit
+
         Channel = maestro.QuantumChannel
-        original = Channel.depolarizing(rate, num_qubits=2)
+        original = Channel.pauli(weights)
+        dim = 2 ** original.num_qubits
         vectors = [op.reshape(-1, order="F") for op in original.kraus_operators]
         choi = sum(np.outer(v, v.conj()) for v in vectors)
-        weights, basis = np.linalg.eigh(choi)
-        raw = Channel.from_kraus([(np.sqrt(weight) * vector).reshape((4, 4), order="F")
-                                 for weight, vector in zip(weights, basis.T) if weight > 16 * np.finfo(float).eps])
+        eigenvalues, basis = np.linalg.eigh(choi)
+        raw = Channel.from_kraus([(np.sqrt(weight) * vector).reshape((dim, dim), order="F")
+                                 for weight, vector in zip(eigenvalues, basis.T) if weight > 16 * np.finfo(float).eps])
         assert raw.is_state_independent
         assert raw.factors[0]["kind"] == "pauli"
-        np.testing.assert_allclose(raw.factors[0]["probabilities"], original.factors[0]["probabilities"], rtol=0, atol=1e-15)
+        np.testing.assert_allclose(raw.factors[0]["probabilities"], weights, rtol=0, atol=1e-15)
+        circuit = QuantumCircuit()
+        circuit.channel(list(range(raw.num_qubits)), raw)
+        circuit.h(0)
+        circuit.measure_all()
+        assert maestro.compile_reference_sampler(circuit) is not None
+
         decay = Channel.amplitude_damping(0.2)
-        expected = Channel.on_qubit(decay, 1).superoperator() @ raw.superoperator()
-        np.testing.assert_allclose(raw.then(decay, [1]).superoperator(), expected, rtol=0, atol=1e-15)
+        target = raw.num_qubits - 1
+        placed = Channel.on_qubit(decay, target) if raw.num_qubits == 2 else decay
+        expected = placed.superoperator() @ raw.superoperator()
+        np.testing.assert_allclose(raw.then(decay, [target]).superoperator(), expected, rtol=0, atol=1e-15)
+
+    def test_weak_non_pauli_channels_keep_their_sampled_form(self):
+        np = pytest.importorskip("numpy")
+        Channel = maestro.QuantumChannel
+        angle = 1e-15
+        c, s = np.cos(angle / 2), np.sin(angle / 2)
+        ry = np.array([[c, -s], [s, c]])
+        for ops in ([ry], [ry / np.sqrt(2), ry / np.sqrt(2)]):
+            assert Channel.from_kraus(ops).factors[0]["kind"] == "unitary_mixture"
+
+        gamma = 2.5e-15
+        damping = [np.diag([1, np.sqrt(1 - gamma)]), [[0, np.sqrt(gamma)], [0, 0]]]
+        assert Channel.from_kraus(damping).factors[0]["kind"] == "kraus"
+
+        # The H branch leaves an X/Z cross term of p/2, even beside ordinary dephasing.
+        dephasing = Channel.pauli([0.8, 0, 0, 0.2]).kraus_operators
+        for p in (1e-15, 1e-17):
+            identity, phase = [np.sqrt(1 - p) * op for op in dephasing]
+            hadamard = np.sqrt(p / 2) * np.array([[1, 1], [1, -1]])
+            assert Channel.from_kraus([identity, phase, hadamard]).factors[0]["kind"] == "unitary_mixture"
+            # Mixing the rare operator into two large ones preserves the same channel.
+            rebased = [(identity + hadamard) / np.sqrt(2), (identity - hadamard) / np.sqrt(2), phase]
+            assert Channel.from_kraus(rebased).factors[0]["kind"] != "pauli"
 
     def test_then_keeps_parts_and_multiplies_superoperators(self):
         np = pytest.importorskip("numpy")

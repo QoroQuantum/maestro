@@ -1089,7 +1089,8 @@ class QuantumChannel
         std::vector<std::vector<std::complex<double>>> coefficients(kraus.size(), std::vector<std::complex<double>>(terms));
         std::vector<double> probabilities(terms, 0.0);
         const double roundoff = terms * std::numeric_limits<double>::epsilon();
-        bool resolvedOperators = true;
+        double smallestBranch = std::numeric_limits<double>::infinity();
+        size_t nonzeroBranches = 0;
         double total = 0;
         for (size_t i = 0; i < kraus.size(); ++i)
         {
@@ -1101,14 +1102,25 @@ class QuantumChannel
                 probabilities[a] += probability;
                 weight += probability;
             }
-            // A separately supplied rare jump can carry an observable signal far
-            // below unit-scale roundoff. Keep the componentwise test for that set.
-            if (weight > 0. && weight <= roundoff)
-                resolvedOperators = false;
+            if (weight > 0.)
+            {
+                smallestBranch = std::min(smallestBranch, weight);
+                ++nonzeroBranches;
+            }
             total += weight;
         }
         if (!std::isfinite(total) || std::abs(total - 1.0) > 1e-10)
             return {};
+        // A Choi eigensolver can leak into a zero-weight Pauli axis by roundoff
+        // in the full matrix. A sparse Pauli spectrum has one nonzero eigenmode
+        // per resolved diagonal. Requiring that count also protects a weak
+        // extra mode hidden by a change of Kraus basis. A nominally absent
+        // axis must be negligible even on the smallest supplied branch's scale.
+        const bool resolvedOperators = smallestBranch > roundoff;
+        const auto resolved = [roundoff](double p) { return p > roundoff; };
+        const size_t resolvedAxes = std::count_if(probabilities.begin(), probabilities.end(), resolved);
+        const bool resolvedSpectrum = resolvedAxes >= 2 && resolvedAxes == nonzeroBranches;
+        const auto roundableAxis = [&](double p) { return resolved(p) || (resolvedSpectrum && p <= roundoff * smallestBranch); };
         for (size_t a = 0; a < terms; ++a)
             for (size_t b = 0; b < a; ++b)
             {
@@ -1121,11 +1133,7 @@ class QuantumChannel
                     const double residual = std::abs(chi);
                     if (residual > 1e-12)
                         return {};
-                    // A numerical Kraus decomposition and the Pauli projection both
-                    // incur roundoff in the normalized process matrix. Accept this
-                    // error between resolved Pauli weights only. An unresolved axis
-                    // can encode a weak rotation (weight O(angle^2), signal O(angle)).
-                    if (resolvedOperators && probabilities[a] > roundoff && probabilities[b] > roundoff && residual <= roundoff)
+                    if (resolvedOperators && residual <= roundoff && roundableAxis(probabilities[a]) && roundableAxis(probabilities[b]))
                         continue;
                     // Rotating the Kraus basis of a true Pauli mixture can leave
                     // roundoff when its contributions cancel. A weak coherent

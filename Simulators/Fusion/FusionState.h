@@ -1,5 +1,7 @@
 #pragma once
 #include "FusionGate.h"
+#include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -562,6 +564,80 @@ class FusionState : public ISimulator
             return {};
         Synchronize();
         return immediate_->ExpectationValues(paulis);
+    }
+
+    bool TryPrefixExpectations(const std::vector<std::string> &paulis, std::vector<double> &values) override
+    {
+        if (!FusesQuantumChannels())
+            return ISimulator::TryPrefixExpectations(paulis, values);
+        if (!trajectoryBlocks_.empty() || !channelBlocks_.empty() || !normKnown_ || !immediate_->SupportsLocalDensityMatrix())
+            return false;
+
+        // A pending unitary outside a Pauli's support cancels in its expectation.
+        // Inside the support, evolve only the reduced density, leaving every
+        // fusion block in place for the terminal channels. Flushing here could
+        // change the order of conditional draws even when only gates are pending.
+        std::vector<std::pair<Types::qubits_vector, Eigen::MatrixXcd>> gates;
+        gates.reserve(cache_.Size());
+        for (const auto &[id, block] : cache_.PendingBlocks())
+        {
+            auto matrix = Cache::BlockMatrix(block);
+            // Generic gates may be near-unitary at the looser fusion tolerance.
+            if (!(matrix.adjoint() * matrix).isApprox(Eigen::MatrixXcd::Identity(matrix.rows(), matrix.rows()), 16 * std::numeric_limits<double>::epsilon()))
+                return false;
+            gates.emplace_back(block.targets, std::move(matrix));
+        }
+
+        std::map<Types::qubits_vector, std::vector<size_t>> groups;
+        std::vector<size_t> immediate_rows;
+        for (size_t i = 0; i < paulis.size(); ++i)
+        {
+            const auto &word = paulis[i];
+            if (word.size() > GetNumberOfQubits() || word.find_first_not_of("IXYZ") != std::string::npos)
+                return false;
+            Types::qubits_vector support;
+            for (size_t q = 0; q < word.size(); ++q)
+                if (word[q] != 'I')
+                    support.push_back(q);
+            bool pending = false;
+            for (const auto &[targets, matrix] : gates)
+                if (Overlaps(support, targets))
+                {
+                    pending = true;
+                    support = Union(std::move(support), targets);
+                }
+            if (pending && support.size() > 3)
+                return false;
+            if (pending)
+                groups[std::move(support)].push_back(i);
+            else if (!support.empty())
+                immediate_rows.push_back(i);
+        }
+        values.assign(paulis.size(), 1.);
+        for (size_t row : immediate_rows)
+            values[row] = immediate_->ExpectationValue(paulis[row]) / stateNormSq_;
+        for (const auto &[support, rows] : groups)
+        {
+            auto rho = immediate_->LocalDensityMatrix(support);
+            for (const auto &[targets, matrix] : gates)
+                if (Overlaps(support, targets))
+                    Conjugate(matrix, targets, support, rho);
+            for (size_t row : rows)
+            {
+                auto product = rho;
+                for (auto q : support)
+                {
+                    const auto &word = paulis[row];
+                    if (q >= word.size() || word[q] == 'I')
+                        continue;
+                    using Kind = FusionGate::Kind;
+                    const auto kind = word[q] == 'X' ? Kind::kXGateType : word[q] == 'Y' ? Kind::kYGateType : Kind::kZGateType;
+                    Cache::ApplyLeft(FusionGate{kind, {q}, {}, {}}.Matrix(), {q}, support, product);
+                }
+                values[row] = product.trace().real() / stateNormSq_;
+            }
+        }
+        return true;
     }
 
     double ExpectationValue(const std::string &pauli) override

@@ -91,6 +91,32 @@ def test_terminal_recovery_respects_shared_predrawn_errors_on_separate_wires():
     assert invisible["counts"] == {"111": 300}
 
 
+def test_deep_wide_terminal_damping_averages_256_paulis():
+    circuit = QuantumCircuit()
+    width = 20
+    circuit.h(0)
+    for q in range(1, width):
+        circuit.cx(q - 1, q)
+    # The rotations change the relative phase of the GHZ branches while
+    # preserving the populations used by the final Z measurement.
+    for layer in range(6):
+        for q in range(width):
+            circuit.rz(q, 0.1 * (1 + layer + q))
+    gamma = 0.2
+    damping = maestro.QuantumChannel.amplitude_damping(gamma)
+    for q in range(width):
+        circuit.channel([q], damping)
+    word = "Z" * 8 + "I" * (width - 8)
+    # A separate 128-term row retains its original budget, and repeating the
+    # 256-term row reuses all its expectation values.
+    smaller = "I" * 8 + "Z" * 7 + "I" * (width - 15)
+    result = circuit.estimate([word, smaller, word], config=_terminal_statevector())
+    expected = [(1 + (2 * gamma - 1) ** weight) / 2 for weight in (8, 7, 8)]
+    assert result["measurement_trajectories"] == 0
+    assert result["terminal_channels_averaged"]
+    assert result["expectation_values"] == pytest.approx(expected, abs=1e-12)
+
+
 def test_later_gate_blocks_every_wire_of_an_overlapping_channel():
     circuit = QuantumCircuit()
     circuit.x(0)

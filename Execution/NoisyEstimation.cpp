@@ -199,6 +199,19 @@ std::optional<TerminalExpectation> PrepareTerminalExpectation(const RecordCircui
     plan.original_width = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
     const size_t circuit_width = plan.original_width;
     plan.prefix = std::move(tail.prefix);
+    // On wide registers each additional Pauli can require a full statevector scan.
+    // Replaying a deep deterministic prefix on every trajectory is also expensive:
+    // allow one extra scan per preparation gate, up to 512 terms per expanded row.
+    constexpr size_t small_width = 16, wide_floor = 128, wide_ceiling = 512;
+    size_t wide_limit = wide_floor;
+    const auto wide_word = [&](const std::string &word) { return word.size() > small_width; };
+    if (!plan.stochastic_prefix && (circuit_width > small_width || std::any_of(observables.begin(), observables.end(), wide_word)))
+    {
+        const auto &ops = plan.prefix->GetOperations();
+        const size_t gates = std::count_if(ops.begin(), ops.end(), [](const auto &op) { return op->GetType() == Circuits::OperationType::kGate; });
+        wide_limit += std::min(gates, wide_ceiling - wide_floor);
+    }
+    size_t remaining_wide_scans = wide_limit;
     std::map<std::string, size_t> unique;
     for (auto observable : observables)
     {
@@ -206,12 +219,20 @@ std::optional<TerminalExpectation> PrepareTerminalExpectation(const RecordCircui
             return std::nullopt;
         std::transform(observable.begin(), observable.end(), observable.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         plan.original_width = std::max(plan.original_width, observable.size());
-        // One deterministic preparation replaces up to 100 trajectories. Allow 256 terms
-        // through 16 million basis entries, then cap each row at 128 full-register scans.
-        const size_t deterministic_limit = std::max(circuit_width, observable.size()) <= 16 ? 256 : 128;
+        const bool wide = std::max(circuit_width, observable.size()) > small_width;
+        const size_t deterministic_limit = wide ? wide_limit : 256;
         const size_t limit = plan.stochastic_prefix ? 4 : deterministic_limit;
         PauliTerms terms{{observable, 1.}};
-        const bool fits = std::all_of(factors.begin(), factors.end(), [&](const auto &factor) { return PullBack(terms, factor, limit); });
+        bool fits = std::all_of(factors.begin(), factors.end(), [&](const auto &factor) { return PullBack(terms, factor, limit); });
+        if (fits && wide && terms.size() > wide_floor)
+        {
+            // Share the larger budget across rows. A word already evaluated for
+            // another observable costs no additional statevector scan.
+            const size_t scans = std::count_if(terms.begin(), terms.end(), [&](const auto &term) { return term.second != 0. && !unique.count(term.first); });
+            fits = scans <= remaining_wide_scans;
+            if (fits)
+                remaining_wide_scans -= scans;
+        }
         // Marginalization allows the planner to run separate sampled cones.
         // Several nonconstant terms in a row would need a common trajectory
         // for their covariance. Forcing all requested cones into one group
@@ -281,8 +302,8 @@ using ChannelOp = Circuits::QuantumChannelOperation<double>;
 
 // Keep the original trajectory's operations, including the channel draw itself. Read the
 // folded Paulis just before its terminal layer. Clones created by the host share only the
-// scalar readout for this realization. A remap or a pending fused channel keeps two runs:
-// synchronizing deferred state-dependent branches can change their seeded correlations.
+// scalar readout for this realization. The backend can decline if observing
+// the prefix would change the conditional branch order of the full shot.
 class ReadPrefixBeforeChannel final : public ChannelOp
 {
   public:
@@ -295,9 +316,8 @@ class ReadPrefixBeforeChannel final : public ChannelOp
     void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
     {
         if (sim->GetNumberOfQubits() == width_ && sim->GetType() == backend_ && sim->GetSimulationType() == Simulators::SimulationType::kStatevector &&
-            !sim->FusesQuantumChannels())
+            sim->TryPrefixExpectations(words_, values_))
         {
-            values_ = sim->ExpectationValues(words_);
             for (size_t i = 0; i < words_.size(); ++i)
                 if (words_[i].find_first_not_of('I') == std::string::npos)
                     values_[i] = 1.; // PrepareEstimation resolves identity exactly.
