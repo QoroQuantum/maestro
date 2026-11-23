@@ -420,7 +420,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                                   const std::vector<std::string> &paulis) override
     {
         if constexpr (std::is_same_v<Time, double>)
-            if (hostId < GetNumHosts() && recreateIfNeeded && configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
+            if (hostId < GetNumHosts() && recreateIfNeeded && resetBeforeExecution &&
+                configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
                 if (auto values = MaestroExecution::TryNetworkTerminalExpectation(circuit, paulis, *this, [this, hostId](const auto &part, const auto &words) {
                         return ExecuteOnHostTrajectoryExpectations(part, hostId, words);
                     }))

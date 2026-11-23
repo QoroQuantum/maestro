@@ -2799,7 +2799,40 @@ class ExposedNetwork : public Net
     {
         return recreateIfNeeded;
     }
+
+    void ContinueFromPreparedState()
+    {
+        resetBeforeExecution = false;
+    }
 };
+
+void HostTerminalExpectationsRespectPreparedState()
+{
+    // X toggles the live basis state; both phase-flip branches preserve its Z value.
+    // A fresh call always ends in |1>. Continuing from |1> visits |0>, then |1>.
+    const auto circuit =
+        CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0),
+                           std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::PhaseFlip(0.3))});
+    for (bool fresh : {true, false})
+        for (const char *policy : {"trajectories", "auto"})
+        {
+            auto network = std::make_shared<ExposedNetwork>(Types::qubits_vector{1}, std::vector<size_t>{1});
+            QuietNetwork(*network);
+            network->SetOptimizeSimulator(false);
+            network->Configure("terminal_channel_policy", policy);
+            network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 1);
+            network->GetSimulator()->ApplyX(0);
+            if (!fresh)
+                network->ContinueFromPreparedState();
+            for (size_t call = 0; call < 2; ++call)
+            {
+                const double one = fresh || call == 1 ? 1. : 0.;
+                const auto value = network->ExecuteOnHostExpectations(circuit, 0, {"Z"}).at(0);
+                Check(std::abs(value - (1. - 2. * one)) < 1e-14, "Host terminal expectation used the wrong incoming state");
+                Check(std::abs(network->GetSimulator()->Probability(1) - one) < 1e-14, "Host terminal expectation left the wrong live state");
+            }
+        }
+}
 
 void NetworkSimulatorLifecycle()
 {
@@ -3354,6 +3387,7 @@ try
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();
     ConfiguredCandidatesDecide();
+    HostTerminalExpectationsRespectPreparedState();
     NetworkSimulatorLifecycle();
     ClonesCarryTheBackend();
     CostModelKeepsToTheList();
