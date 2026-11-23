@@ -27,6 +27,9 @@
 
 #include "Factory.h"
 
+#include <unordered_map>
+#include <vector>
+
 namespace Simulators::FactoryBackends
 {
 
