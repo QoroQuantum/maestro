@@ -239,6 +239,36 @@ Simulators::QuantumChannel ParseChannel(const json::value &factors, size_t instr
     return *channel;
 }
 
+} // namespace
+
+Simulators::QuantumChannel ParseInstructionChannel(const json::object &instruction, size_t width)
+{
+    using Channel = Simulators::QuantumChannel;
+    Require(width == 1 || width == 2, "Channel instructions require one or two qubits");
+    const auto name = String(Field(instruction, "name"));
+    if (name == "channel")
+    {
+        Keys(instruction, {"name", "qubits", "factors"});
+        return ParseChannel(Field(instruction, "factors"), width);
+    }
+    if (name == "pauli_channel")
+    {
+        Keys(instruction, {"name", "qubits", "probabilities"});
+        std::vector<double> probabilities;
+        for (const auto &value : Array(Field(instruction, "probabilities")))
+            probabilities.push_back(Number(value));
+        Require(probabilities.size() == (size_t{1} << (2 * width)), "A Pauli channel needs 4**len(qubits) probabilities");
+        return Channel::Pauli(probabilities);
+    }
+    Require(name == "kraus", "Unknown channel instruction");
+    Keys(instruction, {"name", "qubits", "operators"});
+    auto operators = ParseChannelMatrices(Field(instruction, "operators"), "Kraus matrices");
+    Require(size_t(operators.front().rows()) == (size_t{1} << width), "Kraus matrices must match the instruction's qubits");
+    return Channel(std::move(operators));
+}
+
+namespace
+{
 struct ParsedCircuit
 {
     CircuitPtr circuit;
@@ -305,40 +335,8 @@ ParsedCircuit ParseCircuit(const json::object &object)
                     for (auto q : targets)
                         circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(q, duration));
                 }
-                else if (name == "pauli_channel")
-                {
-                    // Base-4 digit k of an index selects I, X, Y or Z on qubits[k].
-                    Require(targets.size() <= 2, "Pauli channel instructions require one or two qubits");
-                    std::vector<double> probabilities;
-                    for (const auto &value : Array(Field(instruction, "probabilities")))
-                        probabilities.push_back(Number(value));
-                    Require(probabilities.size() == (size_t{1} << (2 * targets.size())), "A Pauli channel needs 4**len(qubits) probabilities");
-                    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(targets, Simulators::QuantumChannel::Pauli(probabilities)));
-                }
-                else if (name == "channel")
-                {
-                    // The structured form: Python's QuantumChannel constructors composed with then().
-                    Require(targets.size() <= 2, "Channel instructions require one or two qubits");
-                    circuit->AddOperation(
-                        std::make_shared<Circuits::QuantumChannelOperation<>>(targets, ParseChannel(Field(instruction, "factors"), targets.size())));
-                }
                 else
-                {
-                    Require(targets.size() <= 2, "Kraus instructions require one or two qubits");
-                    const size_t dim = size_t{1} << targets.size();
-                    Simulators::QuantumChannel::KrausOperators operators;
-                    for (const auto &matrix : Array(Field(instruction, "operators")))
-                    {
-                        const auto &entries = Array(matrix);
-                        Require(entries.size() == dim * dim, "Kraus matrices must be flat row-major arrays");
-                        Eigen::MatrixXcd op(dim, dim);
-                        for (size_t r = 0; r < dim; ++r)
-                            for (size_t c = 0; c < dim; ++c)
-                                op(r, c) = Complex(entries[r * dim + c]);
-                        operators.push_back(std::move(op));
-                    }
-                    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(targets, Simulators::QuantumChannel(operators)));
-                }
+                    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(targets, ParseInstructionChannel(instruction, targets.size())));
             }
             else
             {
@@ -817,6 +815,7 @@ template <class Result> json::object ReductionMetadata(const Result &execution, 
     options["allow_reset_marginalization"] = config.allow_reset_marginalization;
     options["enable_sampling_reduction"] = config.enable_sampling_reduction;
     options["counts_policy"] = config.counts_policy;
+    options["terminal_channel_policy"] = config.terminal_channel_policy;
     if (config.max_cluster_qubits)
         options["max_cluster_qubits"] = *config.max_cluster_qubits;
     if (config.min_cluster_qubits)
@@ -850,6 +849,7 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
         options[key] = value;
     options["seed"] = config.seed.value_or(0);
     options["counts_policy"] = config.counts_policy;
+    options["terminal_channel_policy"] = config.terminal_channel_policy;
     const json::value requestedFusion = config.gate_fusion ? json::value(*config.gate_fusion) : json::value();
     if (config.gate_fusion)
         options["gate_fusion"] = *config.gate_fusion;
@@ -1171,6 +1171,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
     auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    if (noise.enabled && !noise.automatic && !noise.exact)
+        config.terminal_channel_policy = "trajectories";
     // Automatic evaluation follows the circuit too. A checkpoint's noise acts
     // on its suffixes, which are parsed further down and settle it there.
     if (operation != "checkpoint_batch")
@@ -1800,7 +1802,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             terminal = PrepareTerminalNoiseExpectation(plan, layer, runtime_circuit, observables, config);
         }
-        const bool stochastic_prefix = terminal ? terminal->stochastic_prefix : stochastic_estimation;
+        const bool stochastic_prefix = terminal ? terminal->RequiresTrajectories() : stochastic_estimation;
+        const auto exact_prefix = terminal ? EstimateDeterministicTerminalPrefix(*terminal, config) : std::nullopt;
         const bool deterministic_tail = terminal && !stochastic_prefix;
         const size_t scheduled = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_prefix ? kMeasurementTrajectories : 1;
         const size_t realizations = deterministic_tail ? 1 : scheduled;
@@ -1854,12 +1857,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             {
                 bounds[i] += record.bounds[i] / realizations;
                 const double value = record.values[i] * (noise.mode == "analytical" ? noise.model.compute_damping(observables[i]) : 1);
+                if (terminal && terminal->IsExactRow(i))
+                {
+                    sums[i] = value;
+                    continue;
+                }
                 sums[i] += value;
                 squares[i] += value * value;
             }
         };
         const auto realize = [&](size_t r) {
-            if (terminal)
+            if (terminal && terminal->sampled_indices.empty())
                 return terminal->prefix;
             const auto noisy = runtime_circuit ? runtime_circuit : r == 0 && first_realization ? first_realization : Inject(plan, noise, rng);
             draws.See(noisy);
@@ -1880,8 +1888,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 execution_config.seed = Simulators::IState::DeriveSeed(ExecutionSeed(*config.seed, noise, draws), r);
                 if (cached)
                     execution_config.auto_reduce = false;
-                auto result = terminal ? EstimateTerminalExpectation(*terminal, execution_config, cached ? &worker_cache : nullptr)
-                                       : EstimateCircuit(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
+                auto result = terminal ? EstimateTerminalExpectation(*terminal, execution_config, cached ? &worker_cache : nullptr,
+                                                                     exact_prefix ? &*exact_prefix : nullptr, noisy)
+                                       : EstimateCircuitTrajectory(noisy, observables, execution_config, cached ? &worker_cache : nullptr);
                 Realization record;
                 record.values = std::move(result.values);
                 record.bounds = std::move(result.plan.error_bounds);
@@ -1934,9 +1943,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             error_bounds.emplace_back(bound);
         for (size_t i = 0; i < sums.size(); ++i)
         {
-            const double mean = sums[i] / realizations;
+            const bool exact_row = terminal && terminal->IsExactRow(i);
+            const double mean = exact_row ? sums[i] : sums[i] / realizations;
             values.emplace_back(mean);
-            errors.emplace_back(realizations > 1 ? std::sqrt(std::max(0.0, (squares[i] - realizations * mean * mean) / (realizations - 1) / realizations)) : 0);
+            errors.emplace_back(
+                !exact_row && realizations > 1 ? std::sqrt(std::max(0.0, (squares[i] - realizations * mean * mean) / (realizations - 1) / realizations)) : 0);
         }
         for (auto method : last.cluster_methods)
             methods.emplace_back(MethodName(method));
@@ -2452,7 +2463,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const TerminalCountSink writeCounts = [&](size_t count, const Circuits::OperationState &state) {
                 counts[Bits(state.GetAllBits(), input.clbits)] += count;
             };
-            const bool legacy = EffectiveCountsPolicy(config) == "legacy";
             // The first sample, drawn here as the loop below would draw it, tells whether the executions of the
             // suffix draw channels. The noise seed has no injection to drive for those and joins the seeds of the
             // suffix's executions, as in execute, whether the samples share one circuit or not: the streams of its
@@ -2472,10 +2482,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
                 Circuits::OperationState terminal_state(input.clbits);
-                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, legacy) &&
-                    SamplePreparedTerminal(
-                        *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(suffix_seed, r),
-                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
+                if (SampleCheckpointTerminal(
+                        noisy, simulator, config, repetitions, terminal_state,
+                        Simulators::IState::DeriveSeed(Simulators::IState::DeriveSeed(suffix_seed, outputs.size()), r),
+                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, writeCounts))
                 {
                     ++terminal_batches;
                     continue;

@@ -21,6 +21,7 @@
 #include <iostream>
 
 #include "../Circuit/Factory.h"
+#include "../Execution/Request.h"
 #include "../qasm/QasmCirc.h"
 
 namespace Json
@@ -166,6 +167,11 @@ template <typename Time = Types::time_type> class JsonParserMaestro
 
         if (type == measurementString)
             operation = ParseMeasurement(obj);
+        else if (type == "kraus" || type == "pauli_channel" || type == "channel")
+        {
+            const auto targets = ParseQubits(obj);
+            operation = std::make_shared<Circuits::QuantumChannelOperation<Time>>(targets, MaestroExecution::ParseInstructionChannel(obj, targets.size()));
+        }
         else
             operation = ParseGate(type, obj);
 
@@ -331,7 +337,11 @@ template <typename Time = Types::time_type> class JsonParserMaestro
             if (!qubit.is_int64() && !qubit.is_uint64())
                 throw std::runtime_error("Number of qubits must be an integer.");
             else if (qubit.is_int64())
+            {
+                if (qubit.as_int64() < 0)
+                    throw std::runtime_error("Qubit indices must be nonnegative.");
                 qubits.push_back(qubit.as_int64());
+            }
             else
                 qubits.push_back(qubit.as_uint64());
         }

@@ -1550,7 +1550,7 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
     x, identity = [[0, 1], [1, 0]], [[1, 0], [0, 1]]
     as_channel, drawn = Channel.unitary_mixture([1.0], [x]), Channel.unitary_mixture([0.5, 0.5], [identity, x])
 
-    def circuit(third, measure=True):
+    def circuit(third, measure=True, rotation_target=0):
         c = QuantumCircuit()
         c.h(0)
         c.cx(0, 1)
@@ -1558,7 +1558,7 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
             c.x(0)
         else:
             c.channel([0], third)
-        c.ry(1, 0.4)
+        c.ry(rotation_target, 0.4)
         c.cx(1, 2)
         if measure:
             c.measure_all()
@@ -1576,6 +1576,14 @@ def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, metho
     assert not estimated["stochastic_execution"] and not expected["stochastic_execution"]
     assert circuit(drawn, measure=False).estimate(observables, config=config)["stochastic_execution"]
     assert estimated["expectation_values"] == pytest.approx(expected["expectation_values"], abs=1e-12)
+
+    if method == S.Statevector:
+        # Moving the rotation to the other Bell qubit leaves the two-branch channel terminal on its wire.
+        terminal = circuit(drawn, measure=False, rotation_target=1)
+        averaged = terminal.estimate(observables, config=config)
+        exact = terminal.estimate(observables, config=_config(S.DensityMatrix))
+        assert averaged["terminal_channels_averaged"] and not averaged["stochastic_execution"]
+        assert averaged["expectation_values"] == pytest.approx(exact["expectation_values"], abs=1e-12)
 
     readout = maestro.NoiseModel()
     readout.set_readout_error(0, 0.02, 0.03)

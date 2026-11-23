@@ -1,7 +1,13 @@
 #pragma once
+#include "Transforms/Export.h"
 #include <boost/json.hpp>
 #include <cstdint>
 #include <vector>
+
+namespace Simulators
+{
+class QuantumChannel;
+}
 
 namespace MaestroExecution
 {
@@ -20,5 +26,7 @@ struct ShotRows
 };
 
 boost::json::object Capabilities();
+// Shared by versioned requests and the legacy SimpleExecute/SimpleEstimate instruction arrays.
+MAESTRO_TRANSFORM_API Simulators::QuantumChannel ParseInstructionChannel(const boost::json::object &instruction, size_t width);
 boost::json::object Run(const boost::json::object &request, bool validate = false, unsigned depth = 0, ShotRows *rows = nullptr);
 } // namespace MaestroExecution

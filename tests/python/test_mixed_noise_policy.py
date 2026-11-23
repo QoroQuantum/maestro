@@ -191,6 +191,63 @@ def test_statevector_terminal_channels_average_on_the_observable(backend):
     assert plain["measurement_trajectories"] == 0
     assert plain["expectation_values"] == pytest.approx(noisy["expectation_values"], abs=1e-12)
 
+    cfg.terminal_channel_policy = "trajectories"
+    for result in (circuit.estimate(["Z"], config=cfg), maestro.simple_estimate(circuit, ["Z"], config=cfg)):
+        assert result["measurement_trajectories"] == 100
+        assert result["realization_standard_errors"][0] > 0.0
+        assert not result.get("terminal_channels_averaged", False)
+
+
+@pytest.mark.parametrize("entry", ["noisy_estimate_montecarlo", "full_noise_estimate"])
+def test_module_and_circuit_noise_policy(entry):
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    model = maestro.NoiseModel()
+    model.set_t1(0, 0.3)
+    cfg = config(maestro.SimulationType.Statevector)
+    for policy in ("auto", "trajectories"):
+        cfg.terminal_channel_policy = policy
+        kwargs = dict(config=cfg, noise_seed=17)
+        bound = getattr(circuit, entry)(["Z"], model, **kwargs)
+        free = getattr(maestro, entry)(circuit, ["Z"], model, **kwargs)
+        assert free["expectation_values"] == bound["expectation_values"]
+        assert free["realization_standard_errors"] == bound["realization_standard_errors"]
+        if policy == "auto":
+            assert free["noise_realizations"] == 1
+            assert free["expectation_values"] == pytest.approx([-0.4], abs=1e-12)
+            assert free["realization_standard_errors"] == [0.0]
+        else:
+            assert free["noise_realizations"] == 100
+            assert free["realization_standard_errors"][0] > 0.0
+
+
+@pytest.mark.parametrize("with_model", [False, True])
+def test_execution_terminal_policy_is_shared_by_counts_and_rows(with_model):
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    model = maestro.NoiseModel()
+    if with_model:
+        model.set_t1(0, 0.3)
+    else:
+        circuit.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    circuit.measure_all()
+    cfg = config(maestro.SimulationType.Statevector)
+    for policy in ("auto", "trajectories"):
+        cfg.terminal_channel_policy = policy
+        for rows in (False, True):
+            kwargs = dict(config=cfg, shots=2000, return_samples=rows)
+            if with_model:
+                result = maestro.full_noise_execute(circuit, model, noise_seed=17, **kwargs)
+            else:
+                result = maestro.simple_execute(circuit, **kwargs)
+            assert (result.get("sampling_strategy") == "terminal_v1") == (policy == "auto")
+            if rows:
+                assert result["samples"].shape == (2000, 1)
+                assert result["samples"].mean() == pytest.approx(0.7, abs=0.05)
+            else:
+                assert sum(result["counts"].values()) == 2000
+                assert result["counts"]["0"] / 2000 == pytest.approx(0.3, abs=0.05)
+
 
 def test_fidelity_does_not_drop_measurement_before_inline_channel():
     circuit = QuantumCircuit()

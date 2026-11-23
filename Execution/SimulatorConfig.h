@@ -55,6 +55,12 @@ inline const std::vector<std::string> &CountsPolicies()
     return values;
 }
 
+inline const std::vector<std::string> &TerminalChannelPolicies()
+{
+    static const std::vector<std::string> values{"auto", "trajectories"};
+    return values;
+}
+
 inline const std::vector<std::string> &MpsRoutingStrategies()
 {
     static const std::vector<std::string> values{"combined", "legacy"};
@@ -215,6 +221,9 @@ struct SimulatorConfig
     // auto allows adaptive terminal count sampling with or without a seed.
     std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
+    // Auto averages eligible statevector channels at the final observable or measurement.
+    // Trajectories requests branch sampling for those channels too.
+    std::string terminal_channel_policy = "auto";
 
     // Whether the configuration may run this backend and method. With
     // automatic selection a candidate list names every backend allowed and
@@ -245,6 +254,7 @@ struct SimulatorConfig
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
         RequireOneOf(counts_policy, CountsPolicies(), "counts_policy");
+        RequireOneOf(terminal_channel_policy, TerminalChannelPolicies(), "terminal_channel_policy");
         if (const auto native = native_options.find("counts_policy"); native != native_options.end())
             RequireOneOf(native->second, CountsPolicies(), "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
@@ -756,6 +766,7 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->Configure("gate_fusion", !config.gate_fusion ? "auto" : *config.gate_fusion ? "true" : "false");
     network->SetOptimizeSimulator(!config.fixed_backend);
     network->Configure("counts_policy", config.counts_policy.c_str());
+    network->Configure("terminal_channel_policy", config.terminal_channel_policy.c_str());
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
     if (!config.singular_value_threshold && !config.native_options.count("matrix_product_state_truncation_threshold") &&
         !config.native_options.count("matrix_product_operator_truncation_threshold"))

@@ -1660,6 +1660,75 @@ BOOST_AUTO_TEST_CASE(NoiseAddInfersExactChannelsAndAutomaticRealizations)
     }
 }
 
+BOOST_AUTO_TEST_CASE(NoiseAddAveragesTerminalChannelsWithoutChangingSubsequentDraws)
+{
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
+    network->SetOptimizeSimulator(false);
+    network->SetMaxSimulators(1);
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+    network->Configure("seed", "123");
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    auto measured = std::make_shared<Circuits::Circuit<>>(circuit->GetOperations());
+    measured->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+    noise::NoiseModel next;
+    next.set_t1(0, .35);
+    next.set_coherent_rotation(0, .2, .3, .1);
+    next.set_bit_flip(0, .25);
+    for (bool runtime : {false, true})
+    {
+        noise::NoiseModel model;
+        if (runtime)
+            model.set_t1(0, .25);
+        else
+            model.set_bit_flip(0, .25);
+        noise::NoiseAdd automatic, forced, configured;
+        automatic.seed(21);
+        forced.seed(21);
+        configured.seed(21);
+        forced.set_exact_channels(false);
+        network->Configure("terminal_channel_policy", "auto");
+        const auto exact = automatic.full_noise_estimate(circuit, network, 0, {"Z"}, model, 9);
+        const auto trajectories = forced.full_noise_estimate(circuit, network, 0, {"Z"}, model, 9);
+        BOOST_REQUIRE_EQUAL(exact.size(), 1u);
+        BOOST_CHECK_SMALL(exact[0] + .5, 1e-14);
+        BOOST_CHECK_EQUAL(automatic.last_realization_policy().realizations, 9u);
+        BOOST_CHECK(!automatic.last_realization_policy().stochastic_noise);
+        BOOST_REQUIRE_EQUAL(trajectories.size(), 1u);
+        BOOST_CHECK(std::abs(trajectories[0] - exact[0]) > .01); // An odd number of +/-1 samples cannot average to -0.5.
+        network->Configure("terminal_channel_policy", "trajectories");
+        BOOST_CHECK(configured.full_noise_estimate(circuit, network, 0, {"Z"}, model, 9) == trajectories);
+        const auto after_exact = automatic.full_noise_execute(measured, network, 0, next, 127, 11);
+        BOOST_CHECK(after_exact == forced.full_noise_execute(measured, network, 0, next, 127, 11));
+        network->Configure("terminal_channel_policy", "auto");
+        automatic.full_noise_estimate(circuit, network, 0, {"Z"}, model);
+        BOOST_CHECK_EQUAL(automatic.last_realization_policy().realizations, 1u);
+    }
+
+    auto wide = std::make_shared<Circuits::Circuit<>>();
+    noise::NoiseModel damping;
+    for (Types::qubit_t q = 0; q < 9; ++q)
+    {
+        wide->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+        damping.set_t1(static_cast<int>(q), .2);
+    }
+    network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{9}, std::vector<size_t>{9});
+    network->SetOptimizeSimulator(false);
+    network->SetMaxSimulators(2);
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+    noise::NoiseAdd mixed, sampled;
+    mixed.seed(21);
+    sampled.seed(21);
+    sampled.set_exact_channels(false);
+    const auto rows = mixed.full_noise_estimate(wide, network, 0, {"ZZZZZZZZZ", "Z", "Z"}, damping, 9);
+    const auto heavy = sampled.full_noise_estimate(wide, network, 0, {"ZZZZZZZZZ"}, damping, 9);
+    BOOST_REQUIRE_EQUAL(rows.size(), 3u);
+    BOOST_REQUIRE_EQUAL(heavy.size(), 1u);
+    BOOST_CHECK_EQUAL(rows[0], heavy[0]);
+    BOOST_CHECK_SMALL(rows[1] + .6, 1e-14);
+    BOOST_CHECK_EQUAL(rows[1], rows[2]);
+}
+
 BOOST_AUTO_TEST_CASE(AutomaticNoisePolicyRetainsStochasticLayersAndRecognizesDeterministicOperations)
 {
     MaestroExecution::SimulatorConfig config;

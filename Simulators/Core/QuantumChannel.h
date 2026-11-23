@@ -1016,8 +1016,20 @@ class QuantumChannel
                     probabilities[a] = std::max(0.0, chi.real());
                     total += probabilities[a];
                 }
-                else if (std::abs(chi) > tolerance)
-                    return {};
+                else if (chi != std::complex<double>{})
+                {
+                    if (std::abs(chi) > tolerance)
+                        return {};
+                    // Rotating the Kraus basis of a true Pauli mixture can leave
+                    // roundoff when its contributions cancel. A weak coherent
+                    // rotation also has small chi, but its contributions do not
+                    // cancel: classifying it as Pauli would discard that rotation.
+                    double scale = 0.;
+                    for (size_t i = 0; i < kraus.size(); ++i)
+                        scale += std::abs(coefficients[i][a] * std::conj(coefficients[i][b]));
+                    if (std::abs(chi) > (2. * kraus.size() + 4.) * std::numeric_limits<double>::epsilon() * scale)
+                        return {};
+                }
             }
         if (std::abs(total - 1.0) > 1e-10)
             return {};
@@ -1256,12 +1268,16 @@ class QuantumChannel
         {
             const Matrix gram = op.adjoint() * op;
             const double probability = gram.trace().real() / static_cast<double>(dimension);
-            if ((gram - probability * identity).norm() > 1e-12 * static_cast<double>(dimension))
+            // A rare operator's norm is its probability. Test proportionality
+            // at that scale, so a weak jump remains state-dependent and a weak
+            // unitary is kept with its positive weight.
+            if ((gram - probability * identity).cwiseAbs().maxCoeff() > 1e-12 * static_cast<double>(dimension) * probability ||
+                (probability == 0. && op.cwiseAbs().maxCoeff() != 0.))
             {
                 unitaryMixture = false;
                 break;
             }
-            if (probability <= kZeroTolerance)
+            if (probability == 0.)
                 continue;
             factor.probabilities.push_back(probability);
             factor.operators.emplace_back(op / std::sqrt(probability));

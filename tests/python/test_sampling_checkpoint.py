@@ -34,6 +34,76 @@ def _suffix():
     return circuit
 
 
+@pytest.mark.parametrize("policy", ["auto", "trajectories"])
+def test_checkpoint_terminal_damping_keeps_the_saved_bell_state(policy):
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector,
+                                    fixed_backend=True, terminal_channel_policy=policy, max_simulators=1)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+    suffix = QuantumCircuit()
+    suffix.channel([1], maestro.QuantumChannel.amplitude_damping(0.4))
+    suffix.z(0)
+    suffix.measure_all()
+    args = dict(shots=4000, noise_realizations=1, noise_seed=19)
+    sampled = checkpoint.execute_suffix(suffix, return_samples=True, **args)
+    assert sampled["sampling_strategy"] == ("terminal_v1" if policy == "auto" else "trajectory_v1")
+    rows = sampled["samples"]
+    assert rows[:, 0].mean() == pytest.approx(0.5, abs=0.035)
+    assert rows[:, 1].mean() == pytest.approx(0.3, abs=0.035)
+    assert not np.any(rows[:, 1] > rows[:, 0])
+    assert checkpoint.execute_suffix(suffix, **args)["counts"] == _histogram(rows)
+    bare = QuantumCircuit()
+    bare.measure([(0, 0), (1, 1)])
+    restored = checkpoint.execute_suffix(bare, shots=500, noise_seed=22)["counts"]
+    assert set(restored) == {"00", "11"}
+    reset = QuantumCircuit()
+    reset.reset(0)
+    reset.channel([1], maestro.QuantumChannel.amplitude_damping(0.4))
+    reset.measure_all()
+    sampled = checkpoint.execute_suffix(reset, return_samples=True, **args)
+    assert sampled["sampling_strategy"] == "trajectory_v1"
+    assert not np.any(sampled["samples"][:, 0])
+    assert sampled["samples"][:, 1].mean() == pytest.approx(0.3, abs=0.035)
+
+
+def test_checkpoint_model_damping_keeps_the_predrawn_error_shared_across_a_batch():
+    prefix = QuantumCircuit()
+    prefix.x(0)
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector, fixed_backend=True)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+    suffix = QuantumCircuit()
+    suffix.z(0)
+    suffix.x(1)
+    suffix.measure_all()
+    model = maestro.NoiseModel()
+    model.set_t1(0, 0.4)
+    model.set_bit_flip(1, 0.5)
+    args = dict(noise_model=model, noise_realizations=1, noise_seed=42, return_samples=True)
+    first = checkpoint.execute_suffix(suffix, shots=2000, **args)
+    second = checkpoint.execute_suffix(suffix, shots=40, **args)
+    assert first["sampling_strategy"] == second["sampling_strategy"] == "terminal_v1"
+    assert np.all(first["samples"][:, 1] == second["samples"][0, 1])
+    assert np.all(second["samples"][:, 1] == second["samples"][0, 1])
+    assert first["samples"][:, 0].mean() == pytest.approx(0.6, abs=0.035)
+
+
+def test_checkpoint_runtime_damping_keeps_each_realization_seed_across_worker_counts():
+    suffix = QuantumCircuit()
+    suffix.z(0)
+    suffix.z(1)
+    suffix.measure_all()
+    model = maestro.NoiseModel()
+    model.set_t1(0, 0.35)
+    model.set_t1(1, 0.2)
+    args = dict(shots=1200, noise_model=model, noise_realizations=12, noise_seed=37, return_samples=True)
+    results = [_checkpoint(maestro.SimulationType.Statevector, workers=n).execute_suffix(suffix, **args) for n in (1, 4)]
+    assert all(result["sampling_strategy"] == "terminal_v1" for result in results)
+    np.testing.assert_array_equal(results[0]["samples"], results[1]["samples"])
+    np.testing.assert_allclose(results[0]["samples"].mean(axis=0), [0.325, 0.4], atol=0.05)
+
+
 @pytest.mark.parametrize("method", [
     maestro.SimulationType.Stabilizer,
     maestro.SimulationType.Statevector,

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <complex>
 #include <map>
 
 void Check(bool, const char *);
@@ -662,6 +663,83 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
     const auto weak = estimate(little, {"X"}, {});
     Check(weak.terminal_channels && std::abs(weak.values[0] - 0.5 * rare) < 1e-28, "A weak nonzero terminal expectation was discarded");
 
+    // A phased X accepted as a Kraus operator can have squared norm 1 + one ulp.
+    // In a composition its recognized Pauli factor keeps that rounding.
+    Eigen::Matrix2cd phased = Eigen::Matrix2cd::Zero();
+    phased(0, 1) = phased(1, 0) = std::complex<double>(1., std::ldexp(1., -26));
+    const Channel phased_x(Channel::KrausOperators{phased});
+    Check(phased_x.GetFactors().front().kind == Channel::FactorKind::kPauli, "A global phase prevented Pauli classification");
+    auto phased_circuit = CF::CreateCircuit();
+    phased_circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    phased_circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(.25).Then(phased_x)));
+    const auto phased_result = estimate(phased_circuit, {"Z"}, {});
+    Check(phased_result.realizations == 1 && std::abs(phased_result.values[0] + .25) < 1e-14, "A roundoff-sized phased Pauli factor changed the estimate");
+
+    // Placement preserves the given Kraus operators. A weak coherent rotation can
+    // look like an identity Pauli to the factor classifier, but it produces X signal.
+    constexpr double angle = 1e-12;
+    Eigen::Matrix2cd ry;
+    ry << std::cos(angle / 2), -std::sin(angle / 2), std::sin(angle / 2), std::cos(angle / 2);
+    auto placed = CF::CreateCircuit();
+    placed->AddOperation(
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0, 1}, Channel::OnQubit(Channel(Channel::KrausOperators{ry}), 1)));
+    placed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1}, Channel::PhaseFlip(.25)));
+    const auto rotated = estimate(placed, {"IX"}, {});
+    const auto rotated_dm = EstimateNoisy(placed, {"IX"}, {}, std::nullopt, Config(Method::kDensityMatrix), 24, NoiseLayer::kCombined);
+    Check(rotated.realizations == 1 && std::abs(rotated.values[0] - .5 * std::sin(angle)) < 1e-24 && std::abs(rotated.values[0] - rotated_dm.values[0]) < 1e-24,
+          "Placed raw Kraus classification discarded a coherent terminal signal");
+
+    auto composed = CF::CreateCircuit();
+    composed->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0},
+                                                                                 Channel(Channel::KrausOperators{ry}).Then(Channel::AmplitudeDamping(.2))));
+    const auto coherent = estimate(composed, {"X"}, {});
+    const auto coherent_dm = EstimateNoisy(composed, {"X"}, {}, std::nullopt, Config(Method::kDensityMatrix), 24, NoiseLayer::kCombined);
+    Check(std::abs(coherent.values[0] - std::sqrt(.8) * std::sin(angle)) < 1e-24 && std::abs(coherent.values[0] - coherent_dm.values[0]) < 1e-24,
+          "Composition classified a weak coherent rotation as a Pauli mixture");
+
+    constexpr double weak_probability = 1e-17;
+    Eigen::Matrix2cd reset_plus = Eigen::Matrix2cd::Zero();
+    reset_plus(0, 0) = reset_plus(1, 0) = std::sqrt(.5);
+    for (bool unitary : {false, true})
+    {
+        const Channel raw(Channel::KrausOperators{Eigen::Matrix2cd::Identity(), std::sqrt(weak_probability) * (unitary ? h : reset_plus)});
+        Check(raw.GetFactors().front().kind == (unitary ? Channel::FactorKind::kUnitaryMixture : Channel::FactorKind::kKraus),
+              "A rare Kraus branch was classified without considering its own norm");
+        auto rare_input = CF::CreateCircuit();
+        rare_input->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, raw.Then(Channel::PhaseFlip(.25))));
+        const auto rare_value = estimate(rare_input, {"X"}, {});
+        Check(std::abs(rare_value.values[0] - .5 * weak_probability) < 1e-31, "Composition lost a nonzero raw Kraus branch");
+    }
+
+    auto large = CF::CreateCircuit();
+    for (size_t q = 0; q < 9; ++q)
+        large->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+    for (size_t q = 0; q < 9; ++q)
+        large->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.2)));
+    const auto seven = estimate(large, {"ZZZZZZZ"}, {});
+    Check(seven.realizations == 1 && std::abs(seven.values[0] - std::pow(-.6, 7)) < 1e-12, "A modest deterministic damping expansion was sampled");
+    const auto hybrid = estimate(large, {"Z", "ZZZZZZZZZ", "Z"}, {}, 15);
+    const auto sampled = EstimateNoisy(large, {"ZZZZZZZZZ"}, {}, 15, config, 24, NoiseLayer::kCombined, false);
+    Check(hybrid.terminal_channels && hybrid.realizations == 15 && std::abs(hybrid.values[0] + .6) < 1e-14 && hybrid.standard_errors[0] == 0. &&
+              hybrid.values[2] == hybrid.values[0] && hybrid.standard_errors[2] == 0. && hybrid.values[1] == sampled.values[0] &&
+              hybrid.standard_errors[1] == sampled.standard_errors[0],
+          "A wide fallback row disturbed an exact damping estimate or its seeded fallback");
+
+    auto stochastic = CF::CreateCircuit();
+    for (size_t q = 0; q < 3; ++q)
+        stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+    stochastic->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Channel::AmplitudeDamping(.5)));
+    stochastic->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    for (size_t q = 0; q < 3; ++q)
+        stochastic->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, Channel::AmplitudeDamping(.5)));
+    const auto hybrid_prefix = estimate(stochastic, {"Z", "ZZZ"}, {}, samples);
+    const auto all_sampled = EstimateNoisy(stochastic, {"ZZZ"}, {}, samples, config, 24, NoiseLayer::kCombined, false);
+    const double hybrid_mean = hybrid_prefix.values[0];
+    Check(hybrid_prefix.terminal_channels && hybrid_prefix.realizations == samples && hybrid_mean > 0. && hybrid_mean < 1. &&
+              std::abs(hybrid_prefix.standard_errors[0] - std::sqrt(hybrid_mean * (1. - hybrid_mean) / (samples - 1))) < 1e-12 &&
+              hybrid_prefix.values[1] == all_sampled.values[0] && hybrid_prefix.standard_errors[1] == all_sampled.standard_errors[0],
+          "A sampled prefix lost the conditional expectation or reproducibility of a mixed request");
+
     if (backend == Simulators::SimulatorType::kQCSim)
     {
         // Explicit marginalization permits separate sampled cones. A row with
@@ -682,9 +760,10 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
         cones->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
         cones->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0},
                                                                                   Channel::UnitaryMixture({0.75, 0.25}, {Eigen::Matrix2cd::Identity(), h})));
-        Check(!PrepareTerminalExpectation(cones, singles, clustered), "A sampled adjoint forced disjoint observable cones into one dense state");
+        const auto separated = PrepareTerminalExpectation(cones, singles, clustered);
+        Check(separated && separated->sampled_indices == std::vector<size_t>{0}, "A sampled adjoint mixed the independently eligible observable cones");
         const auto split = EstimateNoisy(cones, singles, {}, 2, clustered, 24, NoiseLayer::kCombined);
-        Check(!split.terminal_channels && split.qubits_after == 1 && std::abs(split.values.back() - std::cos(.4)) < 1e-12,
+        Check(split.terminal_channels && split.qubits_after == 1 && std::abs(split.values.back() - std::cos(.4)) < 1e-12,
               "Explicit marginalization lost its compact sampled cones");
         Check(PrepareTerminalExpectation(mixed, {"Z"}, clustered).has_value(), "Marginalized affine Z and identity unnecessarily fell back to trajectories");
     }

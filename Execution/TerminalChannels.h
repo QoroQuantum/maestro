@@ -2,6 +2,16 @@
 
 #include "NoisePolicy.h"
 
+#include <algorithm>
+#include <cmath>
+#include <complex>
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <random>
+#include <unordered_set>
+#include <vector>
+
 namespace MaestroExecution
 {
 inline bool UsesChannelSamplingStatevector(const SimulatorConfig &config)
@@ -21,29 +31,30 @@ inline bool AllowsTerminalPopulationSampling(const SimulatorConfig &config)
 {
     const auto &policy = EffectiveCountsPolicy(config);
     const auto sampling = config.native_options.find("sampling_policy");
-    return UsesChannelSamplingStatevector(config) && !HasCandidateList(config) && !config.enable_sampling_reduction &&
-           (policy == "auto" || policy == "multinomial_v1") && (sampling == config.native_options.end() || sampling->second != "legacy");
+    return config.terminal_channel_policy == "auto" && UsesChannelSamplingStatevector(config) && !HasCandidateList(config) &&
+           !config.enable_sampling_reduction && (policy == "auto" || policy == "multinomial_v1") &&
+           (sampling == config.native_options.end() || sampling->second != "legacy");
 }
 
 // A pre-drawn model can be recovered as channels when all its randomness is
 // terminal. Avoid building a second channel-bearing circuit for common models
-// that already add noise before another gate. Other models get the full check
+// that already add noise before another gate on the same wire. Other models get the full check
 // on the injected circuit.
 inline RecordCircuitPtr RecoverTerminalNoise(const noise::NoiseInjectionPlan &plan, NoiseLayer layer)
 {
     const auto &model = plan.model();
     if (layer != NoiseLayer::kCoherent)
     {
-        bool earlier_noise = false;
+        std::unordered_set<Types::qubit_t> noisy_wires;
         for (const auto &op : plan.circuit()->GetOperations())
         {
             if (op->GetType() != Circuits::OperationType::kGate)
                 continue;
-            if (earlier_noise)
+            const auto targets = op->AffectedQubits();
+            if (std::any_of(targets.begin(), targets.end(), [&](auto q) { return noisy_wires.count(q); }))
                 return {};
             if (op->IsNoiseless())
                 continue;
-            const auto targets = op->AffectedQubits();
             const bool multi = targets.size() > 1;
             for (const auto q : targets)
             {
@@ -51,13 +62,10 @@ inline RecordCircuitPtr RecoverTerminalNoise(const noise::NoiseInjectionPlan &pl
                 const auto *gate = multi ? model.get_2q_gate_noise(static_cast<int>(q)) : model.get_1q_gate_noise(static_cast<int>(q));
                 if ((all && all->total() > 0.) || (gate && gate->total() > 0.) || model.get_phase_damping_flip_probability(static_cast<int>(q)) > 0. ||
                     model.get_thermal_relaxation_params(static_cast<int>(q), multi))
-                {
-                    earlier_noise = true;
-                    break;
-                }
+                    noisy_wires.insert(q);
             }
             if (targets.size() == 2 && model.get_2q_depolarizing(static_cast<int>(targets[0]), static_cast<int>(targets[1])) > 0.)
-                earlier_noise = true;
+                noisy_wires.insert(targets.begin(), targets.end());
         }
     }
     std::mt19937 unused;
@@ -70,10 +78,28 @@ struct TerminalChannels
     std::vector<std::shared_ptr<Circuits::QuantumChannelOperation<>>> channels;
 };
 
-// Remove a contiguous channel layer immediately before the terminal measurements (or the
-// observable). Keep the original measurement operations, including their classical destinations
-// and readout errors. A measurement in the prefix can condition its state and must stay on the
-// ordinary dynamic-circuit path; removing its successor could otherwise make it look terminal.
+// Accepted custom Kraus input can depart from trace preservation by more than roundoff.
+// Normalizing its trajectories can then change the marginal of an entangled spectator.
+inline bool PreservesTerminalTrace(const Simulators::QuantumChannel &channel)
+{
+    const auto &super = channel.Superoperator();
+    const size_t dim = size_t{1} << channel.GetNumberOfQubits();
+    for (size_t input = 0; input < dim * dim; ++input)
+    {
+        std::complex<double> trace = 0.0;
+        for (size_t output = 0; output < dim; ++output)
+            trace += super(output * (dim + 1), input);
+        if (std::abs(trace - double(input % dim == input / dim)) > 64 * std::numeric_limits<double>::epsilon())
+            return false;
+    }
+    return true;
+}
+
+// Collect channels that commute past the remaining operations onto the final measurements or observable.
+// A retained gate, reset, delay or channel blocks its complete support, including controls. Both the
+// prefix and extracted channels stay in their original relative order. Keep classical destinations,
+// repeated writes and readout errors in the trailing measurements. Dynamic and opaque circuits keep
+// their ordinary executor.
 inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
 {
     using Type = Circuits::OperationType;
@@ -83,22 +109,26 @@ inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Ci
     auto end = ops.end();
     while (end != ops.begin() && ((*(end - 1))->GetType() == Type::kMeasurement || (*(end - 1))->GetType() == Type::kNoOp))
         --end;
-    auto first = end;
-    while (first != ops.begin() && ((*(first - 1))->GetType() == Type::kQuantumChannel || (*(first - 1))->GetType() == Type::kNoOp))
-        --first;
+    const auto first = std::find_if(ops.begin(), end, [](const auto &op) { return op->GetType() == Type::kQuantumChannel; });
     if (first == end)
         return {};
 
-    for (auto it = ops.begin(); it != first; ++it)
-        switch ((*it)->GetType())
+    std::unordered_set<Types::qubit_t> blocked;
+    std::vector<bool> extracted(end - first);
+    TerminalChannels result;
+    for (auto it = end; it != ops.begin();)
+    {
+        const auto &op = *--it;
+        switch (op->GetType())
         {
         case Type::kGate: {
-            const auto *gate = dynamic_cast<const Circuits::IQuantumGate<double> *>(it->get());
+            const auto *gate = dynamic_cast<const Circuits::IQuantumGate<double> *>(op.get());
             if (!gate || gate->GetGateType() == Circuits::QuantumGateType::kNone)
                 return {};
             break;
         }
         case Type::kNoOp:
+            continue;
         case Type::kQuantumChannel:
         case Type::kReset:
         case Type::kDelay:
@@ -106,14 +136,36 @@ inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Ci
         default:
             return {};
         }
-
-    TerminalChannels result;
-    for (auto it = first; it != end; ++it)
-        if ((*it)->GetType() == Type::kQuantumChannel)
-            result.channels.push_back(std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(*it));
+        if (it < first)
+            continue;
+        const auto targets = op->AffectedQubits();
+        if (op->GetType() == Type::kQuantumChannel && std::none_of(targets.begin(), targets.end(), [&](auto q) { return blocked.count(q); }))
+        {
+            extracted[it - first] = true;
+            result.channels.push_back(std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op));
+        }
+        else
+            blocked.insert(targets.begin(), targets.end());
+    }
     if (result.channels.empty())
         return {};
-    Circuits::Circuit<double>::OperationsVector prefix(ops.begin(), first);
+    std::reverse(result.channels.begin(), result.channels.end());
+    Circuits::Circuit<double>::OperationsVector prefix;
+    prefix.reserve(ops.size() - result.channels.size());
+    prefix.insert(prefix.end(), ops.begin(), first);
+    bool crossed = false;
+    for (auto it = first; it != end; ++it)
+    {
+        if (extracted[it - first])
+            crossed = true;
+        else
+        {
+            if (crossed && (*it)->GetType() == Type::kQuantumChannel &&
+                !PreservesTerminalTrace(std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(*it)->GetChannel()))
+                return {};
+            prefix.push_back(*it);
+        }
+    }
     prefix.insert(prefix.end(), end, ops.end());
     result.prefix = std::make_shared<Circuits::Circuit<double>>(prefix);
     return result;

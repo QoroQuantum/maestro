@@ -1,4 +1,5 @@
 #include "PrefixCheckpoint.h"
+#include "TerminalChannels.h"
 #include "TerminalSampling.h"
 
 #include "../Utils/Threads/RealizationWorkers.h"
@@ -166,8 +167,6 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     const bool multinomial =
         shots > 1 && simulator_->IsQcsim() && simulator_->GetConfiguration("sampling_policy") != "legacy" && PreferMultinomialCounts(config_);
     const char *counts_policy = multinomial ? "multinomial_v1" : "legacy";
-    // An explicitly requested ordinary sampler remains available.
-    const bool legacy = EffectiveCountsPolicy(config_) == "legacy";
     if (simulator_->IsQcsim() && simulator_->GetConfiguration("counts_policy") != counts_policy)
         simulator_->Configure("counts_policy", counts_policy);
 
@@ -231,18 +230,13 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // may branch on a pure-state backend, so CanSampleTerminal sends any
         // pure-state reset to the shot path. Backends whose sampler uses the
         // save slot also replay shots, keeping the prefix intact.
-        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, legacy))
-        {
-            // Counts take occupied outcomes whole whenever readout is
-            // deterministic, whatever sampler drew them; rows need each shot.
-            TerminalCountSink writeCounts;
-            if (!rows)
-                writeCounts = [&](size_t count, const Circuits::OperationState &sample) { record(sample, 0, counts, count); };
-            if (SamplePreparedTerminal(
-                    *circuit, simulator, batch_shots, state, seed,
-                    [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond, false, writeCounts))
-                return true;
-        }
+        TerminalCountSink writeCounts;
+        if (!rows)
+            writeCounts = [&](size_t count, const Circuits::OperationState &sample) { record(sample, 0, counts, count); };
+        if (SampleCheckpointTerminal(
+                circuit, simulator, config_, batch_shots, state, seed,
+                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond, writeCounts))
+            return true;
         if (reuse_heads && SampleSharedHead(
                                *circuit, simulator, batch_shots, state, seed,
                                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond))
@@ -293,7 +287,22 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         const size_t batches = std::min(shots, policy.realizations);
         const size_t base_batch = shots / batches;
         const size_t leftover = shots % batches;
-        const size_t workers = RealizationWorkers(batches, reuse_heads ? 4 : 2);
+        size_t workers = RealizationWorkers(batches, reuse_heads ? 4 : 2);
+        const noise::NoiseInjectionPlan plan(suffix, *noise_model, policy.runtime_channels, policy.chain_order);
+        const bool exact = policy.exact_channels;
+        RecordCircuitPtr shared;
+        if (workers > 1 && base_batch > 1 && AllowsTerminalPopulationSampling(config_) && PreservesSavedStateWhileSampling(*simulator_))
+        {
+            // An unchanged generator proves injection did not pre-draw any noise. Every batch can then
+            // share this circuit and use the saved register directly, retaining its own measurement seed.
+            auto probe_rng = rng;
+            auto candidate = InjectPlanned(NoiseLayer::kCombined, plan, probe_rng, exact);
+            if (probe_rng == rng && HasCheckpointTerminalPopulations(candidate, *simulator_, total_cbits))
+            {
+                shared = std::move(candidate);
+                workers = 1;
+            }
+        }
 
         struct Worker
         {
@@ -321,8 +330,6 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         const uint64_t unseeded_measurements = noise_seed ? 0 : Utils::RandomStream::FreshSeed();
         // On a backend that samples channels from its state the realizations
         // keep the channels no draw replaces: each shot draws their branches.
-        const noise::NoiseInjectionPlan plan(suffix, *noise_model, policy.runtime_channels, policy.chain_order);
-        const bool exact = policy.exact_channels;
         // The checkpoint register is fixed. Crosstalk spectators beyond a
         // suffix that fits it stay in |0>, where their rotations are a global
         // phase (drop_outside_spectator_phases).
@@ -330,7 +337,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         const bool trim_spectators =
             plan.RegisterWidth() > register_qubits && (suffix->GetOperations().empty() || suffix->GetMaxQubitIndex() < register_qubits);
         Utils::RunRealizations(
-            batches, workers, [&](size_t) { return InjectPlanned(NoiseLayer::kCombined, plan, rng, exact); },
+            batches, workers, [&](size_t) { return shared ? shared : InjectPlanned(NoiseLayer::kCombined, plan, rng, exact); },
             [&](size_t worker, size_t batch, RecordCircuitPtr noisy_suffix) {
                 auto &local = worker_states[worker];
                 if (trim_spectators)

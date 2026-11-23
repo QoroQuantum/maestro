@@ -15,20 +15,29 @@
 #include "../Execution/Estimation.h"
 #include "../Execution/NoisePolicy.h"
 #include "../Execution/ReferenceFrameSampler.h"
+#include "../Execution/TerminalExpectation.h"
 #include "NoiseModel.h"
 
 #include "../Network/Network.h"
 #include "../Simulators/Core/RandomSeed.h"
+#include "../Utils/RandomStream.h"
 #include "../Utils/Threads/RealizationWorkers.h"
 
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <random>
 #include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 #define MAESTRO_NOISE_ADD_VERSION 5
@@ -275,6 +284,13 @@ class NoiseAdd
         Coherent,
         Combined
     };
+
+    static MaestroExecution::NoiseLayer EstimationLayer(Layer layer)
+    {
+        using MaestroExecution::NoiseLayer;
+        return layer == Layer::Pauli ? NoiseLayer::kPauli : layer == Layer::Coherent ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    }
+
     using CircuitPtr = std::shared_ptr<Circuits::Circuit<double>>;
     using NetworkPtr = std::shared_ptr<Network::INetwork<>>;
 
@@ -362,13 +378,10 @@ class NoiseAdd
         if (requested && *requested <= 0)
             throw std::invalid_argument("noise_realizations must be positive");
         const auto config = ExecutionBackends(network);
-        const auto selected = layer == Layer::Pauli      ? MaestroExecution::NoiseLayer::kPauli
-                              : layer == Layer::Coherent ? MaestroExecution::NoiseLayer::kCoherent
-                                                         : MaestroExecution::NoiseLayer::kCombined;
         // Only a simple network runs the channel instructions a realization
         // may keep for a backend that samples them (IsSimpleNetwork).
         return MaestroExecution::ResolveNoiseRealizations(requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt, model, config,
-                                                          selected, estimation ? 100 : 64, circuit, estimation, exact_channels_override, true,
+                                                          EstimationLayer(layer), estimation ? 100 : 64, circuit, estimation, exact_channels_override, true,
                                                           IsSimpleNetwork(*network));
     }
 
@@ -411,6 +424,8 @@ class NoiseAdd
         if (!execution_network)
             throw std::runtime_error("Cannot clone network for noisy execution");
         execution_network->SetMaxSimulators(network->GetMaxSimulators());
+        if (exact_channels_override == false && IsSimpleNetwork(*execution_network))
+            execution_network->Configure("terminal_channel_policy", "trajectories");
         // Timing-based backend selection (a cost model) changes the random
         // sequence between otherwise identical calls, and may rank away the
         // mixed-state simulator exact channels need when no list says
@@ -600,11 +615,7 @@ class NoiseAdd
         CircuitPtr shared;
         if (exact_channels)
             return shared;
-        using MaestroExecution::NoiseLayer;
-        MaestroExecution::ResolveRuntimeNoise(layer == Layer::Pauli      ? NoiseLayer::kPauli
-                                              : layer == Layer::Coherent ? NoiseLayer::kCoherent
-                                                                         : NoiseLayer::kCombined,
-                                              plan, rng, shared, first);
+        MaestroExecution::ResolveRuntimeNoise(EstimationLayer(layer), plan, rng, shared, first);
         return shared;
     }
 
@@ -965,6 +976,71 @@ class NoiseAdd
         // Whether the executions draw channel branches, sharing one circuit or
         // not: this object's seed then joins a configured one (ExecutionSeed).
         MaestroExecution::RuntimeDraws draws(exact_channels ? nullptr : &plan, runtime_circuit, first_realization);
+        std::optional<MaestroExecution::TerminalExpectation> terminal;
+        if (IsSimpleNetwork(*execution.network) && execution.network->GetSimulator())
+        {
+            if (!exact_channels_override && IsSimpleNetwork(*network) && (host || execution.network->GetNumHosts() == 1))
+                terminal = MaestroExecution::PrepareTerminalNoiseExpectation(plan, EstimationLayer(layer), runtime_circuit, paulis,
+                                                                             MaestroExecution::NetworkEstimateConfig(*execution.network));
+            // This call owns terminal planning, including each model realization and its
+            // RNG schedule. Evaluations on the clone must run the chosen prefix or full circuit directly.
+            execution.network->Configure("terminal_channel_policy", "trajectories");
+        }
+        std::optional<std::vector<double>> fixed_rows;
+        const auto prepare_fixed = [&](const NetworkPtr &target) {
+            if (!terminal || terminal->stochastic_prefix)
+                return;
+            bool ran = false;
+            auto prefix = MaestroExecution::EstimateOnNetwork(terminal->prefix, terminal->prefix_observables, target, host, false, nullptr, &ran);
+            fixed_rows = terminal->Combine(prefix, {});
+            if (ran)
+                last_record = Describe(*target);
+        };
+        if (terminal && !terminal->RequiresTrajectories())
+        {
+            prepare_fixed(execution.network);
+            // This object retains its noise RNG and simulator stream across calls. Advance
+            // the old logical schedule even when one exact evolution supplies every value.
+            if (runtime_circuit)
+            {
+                if (ExecutionSeed(execution, draws))
+                    next_simulator_stream += static_cast<uint64_t>(realizations);
+            }
+            else
+                for (int r = 0; r < realizations; ++r)
+                    NextRealization(plan, layer, execution, runtime_circuit, first_realization, draws);
+            last_policy.realizations = static_cast<size_t>(requested_realizations.value_or(1));
+            last_policy.stochastic_noise = false;
+            last_policy.stochastic_execution = false;
+            return std::move(*fixed_rows);
+        }
+        const auto evaluate = [&](const NetworkPtr &target, Realization realization, MaestroExecution::EstimationCache &cache, bool &ran) {
+            if (terminal && terminal->stochastic_prefix && !terminal->sampled_indices.empty() && !realization.seed)
+                realization.seed = Utils::RandomStream::FreshSeed();
+            SeedNetwork(*target, realization.seed);
+            if (!terminal)
+                return MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, target, host, false, &cache, &ran);
+            auto values = fixed_rows ? *fixed_rows
+                                     : terminal->Combine(MaestroExecution::EstimateOnNetwork(terminal->prefix, terminal->prefix_observables, target, host,
+                                                                                             false, terminal->sampled_indices.empty() ? &cache : nullptr, &ran),
+                                                         {});
+            if (!terminal->sampled_indices.empty())
+            {
+                if (terminal->stochastic_prefix)
+                    SeedNetwork(*target, realization.seed);
+                bool sampled_ran = false;
+                const auto sampled =
+                    MaestroExecution::EstimateOnNetwork(realization.circuit, terminal->sampled_observables, target, host, false, &cache, &sampled_ran);
+                for (size_t j = 0; j < sampled.size(); ++j)
+                    values[terminal->sampled_indices[j]] = sampled[j];
+                ran = ran || sampled_ran;
+            }
+            return values;
+        };
+        const auto means = [&] {
+            for (size_t i = 0; i < values.size(); ++i)
+                values[i] = fixed_rows && terminal->IsExactRow(i) ? (*fixed_rows)[i] : values[i] / realizations;
+        };
         // Each realization's values depend only on its circuit and seed, so
         // workers may evaluate them in any order. They are summed in realization
         // order, as the serial loop does.
@@ -973,6 +1049,7 @@ class NoiseAdd
         if (workers > 1)
         {
             const auto workerNetworks = WorkerNetworks(execution.network, workers);
+            prepare_fixed(workerNetworks.front());
             std::vector<MaestroExecution::EstimationCache> caches(workers);
             std::vector<std::vector<double>> samples(static_cast<size_t>(realizations));
             std::vector<size_t> latest(workers, 0);
@@ -980,38 +1057,33 @@ class NoiseAdd
                 static_cast<size_t>(realizations), workers,
                 [&](size_t) { return NextRealization(plan, layer, execution, runtime_circuit, first_realization, draws); },
                 [&](size_t worker, size_t r, Realization realization) {
-                    SeedNetwork(*workerNetworks[worker], realization.seed);
                     bool executed = false;
-                    samples[r] =
-                        MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, workerNetworks[worker], host, false, &caches[worker], &executed);
+                    samples[r] = evaluate(workerNetworks[worker], std::move(realization), caches[worker], executed);
                     if (executed)
                         latest[worker] = std::max(latest[worker], r + 1);
                 });
             for (const auto &sample : samples)
                 for (size_t i = 0; i < values.size() && i < sample.size(); ++i)
                     values[i] += sample[i];
-            for (auto &value : values)
-                value /= realizations;
+            means();
             // Planning may resolve every observable without running a network.
             if (std::any_of(latest.begin(), latest.end(), [](size_t ran) { return ran > 0; }))
                 last_record = Describe(*LastWorker(workerNetworks, latest));
             return values;
         }
         MaestroExecution::EstimationCache cache;
+        prepare_fixed(execution.network);
         bool ran = false;
         for (int r = 0; r < realizations; ++r)
         {
-            auto noisy = runtime_circuit ? runtime_circuit : first_realization ? std::exchange(first_realization, nullptr) : Inject(plan, layer);
-            draws.See(noisy);
-            SeedExecution(execution, draws);
             bool executed = false;
-            const auto sample = MaestroExecution::EstimateOnNetwork(noisy, paulis, execution.network, host, false, &cache, &executed);
+            const auto sample =
+                evaluate(execution.network, NextRealization(plan, layer, execution, runtime_circuit, first_realization, draws), cache, executed);
             ran = ran || executed;
             for (size_t i = 0; i < values.size(); ++i)
                 values[i] += sample[i];
         }
-        for (auto &value : values)
-            value /= realizations;
+        means();
         // Planning may resolve every observable without running the network.
         if (ran)
             last_record = Describe(*execution.network);

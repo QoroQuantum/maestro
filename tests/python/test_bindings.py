@@ -3480,12 +3480,11 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
-        # A gate on the undamped Bell partner puts damping inside the circuit.
-        # Its maximally mixed marginal is unchanged by X.
-        qc.x(0)
+        # Damping at the CX precedes a noncommuting gate on the damped wire.
+        qc.x(1)
 
         nm = maestro.NoiseModel()
-        nm.set_t1(1, 1.0)
+        nm.set_t1_2q(1, 1.0)
         cfg = maestro.SimulatorConfig(
             simulation_type=method, seed=config_seed)
 
@@ -3502,7 +3501,7 @@ class TestNoisyEstimateMonteCarlo:
         assert values == run()['expectation_values']
         # Standard error of <ZI> is about 0.032 over 1000 realizations.
         assert values[0] == pytest.approx(0.0, abs=0.15)
-        assert values[1] == pytest.approx(1.0)
+        assert values[1] == pytest.approx(-1.0)
         assert first['ideal_expectation_values'] == pytest.approx([0.0, 0.0])
         assert cfg.seed == config_seed
         if config_seed is not None:
@@ -3512,7 +3511,7 @@ class TestNoisyEstimateMonteCarlo:
             other = run(99)['expectation_values']
             assert other != values
             assert other[0] == pytest.approx(0.0, abs=0.15)
-            assert other[1] == pytest.approx(1.0)
+            assert other[1] == pytest.approx(-1.0)
 
     @pytest.mark.parametrize("fn_name", [
         "noisy_estimate_montecarlo", "full_noise_estimate"])
@@ -3527,10 +3526,10 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
-        qc.x(0)
+        qc.x(1)
 
         nm = maestro.NoiseModel()
-        nm.set_t1(1, 0.5)
+        nm.set_t1_2q(1, 0.5)
         cfg = maestro.SimulatorConfig(simulation_type=method)
 
         def run(realizations):
@@ -3540,9 +3539,9 @@ class TestNoisyEstimateMonteCarlo:
                       getattr(maestro, fn_name)(qc, *args, **kwargs))
             return result['expectation_values']
 
-        # Local noise cannot bias q0. Qubit 1 resets in half the trajectories.
+        # Local noise cannot bias q0. The final X negates the damped q1 Z expectation.
         # This tolerance exceeds six standard errors for 2000 realizations.
-        assert run(2000) == pytest.approx([0.0, 0.5], abs=0.1)
+        assert run(2000) == pytest.approx([0.0, -0.5], abs=0.1)
 
         # Compare sequences rather than individual outcomes or rounded means,
         # which can coincide by chance even with independent random streams.
@@ -3558,6 +3557,8 @@ class TestNoisyEstimateMonteCarlo:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        # This final gate on the Bell partner can commute through damping of q1.
+        qc.x(0)
         nm = maestro.NoiseModel()
         nm.set_t1(1, damping)
         cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
@@ -6100,6 +6101,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "mps_routing_strategy": "legacy",
     "fixed_backend": True,
     "optimization_candidates": [(maestro.SimulatorType.QCSim, maestro.SimulationType.DensityMatrix)],
+    "terminal_channel_policy": "trajectories",
 }
 
 
@@ -6122,6 +6124,7 @@ class TestSimulatorConfigFields:
         ("mps_routing_strategy", "typo"),
         ("mps_routing_strategy", "current"),
         ("extended_stabilizer_sampling_method", "gibbs"),
+        ("terminal_channel_policy", "sometimes"),
     ]
 
     def test_constructor_is_keyword_only(self):

@@ -2,6 +2,14 @@
 
 #include "Estimation.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace noise
 {
 class NoiseInjectionPlan;
@@ -11,17 +19,31 @@ namespace MaestroExecution
 {
 enum class NoiseLayer;
 
-// Each requested observable is a linear combination of prefix_observables after
-// applying the terminal channels' adjoints. The terms of each row must be summed
-// on the same realization before computing a trajectory variance.
+// Each folded observable is a linear combination of prefix_observables. The terms of
+// a row must be summed on the same realization before computing its trajectory variance.
 struct TerminalExpectation
 {
     std::shared_ptr<Circuits::Circuit<double>> prefix;
+    std::shared_ptr<Circuits::Circuit<double>> full_circuit;
     std::vector<std::string> prefix_observables;
     std::vector<std::vector<std::pair<size_t, double>>> rows;
+    std::vector<size_t> sampled_indices;
+    std::vector<std::string> sampled_observables;
     size_t original_width = 0;
-    // Only the prefix decides whether the transformed estimate needs repeated trajectories.
     bool stochastic_prefix = false;
+
+    bool RequiresTrajectories() const
+    {
+        return stochastic_prefix || !sampled_indices.empty();
+    }
+
+    bool IsExactRow(size_t i) const
+    {
+        return !stochastic_prefix && !std::binary_search(sampled_indices.begin(), sampled_indices.end(), i);
+    }
+
+    MAESTRO_TRANSFORM_API std::vector<double> Combine(const std::vector<double> &prefix_values, const std::vector<double> &sampled_values,
+                                                      bool bounds = false) const;
 };
 
 MAESTRO_TRANSFORM_API std::optional<TerminalExpectation> PrepareTerminalExpectation(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
@@ -33,6 +55,9 @@ MAESTRO_TRANSFORM_API std::optional<TerminalExpectation> PrepareTerminalNoiseExp
                                                                                          const std::shared_ptr<Circuits::Circuit<double>> &runtime_circuit,
                                                                                          const std::vector<std::string> &observables,
                                                                                          const SimulatorConfig &config);
+// For a mixed request with a deterministic prefix, evaluate its folded subset once before starting the trajectory workers.
+MAESTRO_TRANSFORM_API std::optional<EstimationResult> EstimateDeterministicTerminalPrefix(const TerminalExpectation &plan, const SimulatorConfig &config);
 MAESTRO_TRANSFORM_API EstimationResult EstimateTerminalExpectation(const TerminalExpectation &plan, const SimulatorConfig &config,
-                                                                   EstimationCache *cache = nullptr);
+                                                                   EstimationCache *cache = nullptr, const EstimationResult *deterministic_prefix = nullptr,
+                                                                   const std::shared_ptr<Circuits::Circuit<double>> &sampled_circuit = {});
 } // namespace MaestroExecution

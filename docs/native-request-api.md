@@ -430,6 +430,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
 | `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO; Qiskit Aer statevector and MPS |
 | `counts_policy` | `` | `auto` (default), `legacy`, `frame_v1` or `multinomial_v1` | all (specialized samplers run on QCSim) |
+| `terminal_channel_policy` | `` | `auto` (default) or `trajectories` | QCSim and Aer statevectors, including composite statevectors |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
@@ -757,14 +758,24 @@ estimate with one explicit realization returns `null` standard errors rather tha
 claiming zero uncertainty; `noisy_fidelity` with one sampled realization likewise
 returns a `null` `standard_error`. Distributed-GPU estimates follow the same rules.
 
-On QCSim and Aer statevectors, including composite statevectors, automatic
-estimation can evaluate eligible final noise channels exactly on each incoming
-trajectory. These requests set `execution_metadata.terminal_channels_averaged`.
-With a deterministic prefix, `noise.evaluation` is `terminal_channels`, the
-standard errors are zero, and one preparation suffices for the noisy estimate.
-An explicit `noise.evaluation` of `trajectories` keeps branch sampling. For
-computational-basis counts, `terminal_v1` can sample eligible final channels
-from one prepared prefix. Each result still contains the requested number of shots.
+On QCSim and Aer statevectors, including their composite variants, Maestro
+can average a final channel exactly on each incoming trajectory. A channel
+can be final on its qubits even when gates on other qubits follow it.
+Estimates that use this optimization report `execution_metadata.terminal_channels_averaged`.
+With a deterministic prefix, an observable that fits the Pauli expansion
+budget has zero trajectory standard error. More expensive observables in
+the same request can still be sampled. When all observables qualify, one
+preparation suffices and a noisy estimate reports `noise.evaluation` as
+`terminal_channels`. For computational-basis measurements, `terminal_v1`
+samples the joint outcomes from one eligible prefix and applies the final
+population transitions to those outcomes. Counts and shot rows retain shot noise.
+
+`simulator.options.terminal_channel_policy` defaults to `"auto"`. Set it to
+`"trajectories"` to draw the channel branches explicitly in a plain or noisy
+estimate or execution. Noisy requests also accept `noise.evaluation: "trajectories"`.
+Legacy `SimpleEstimate` and `SimpleExecute` accept `terminal_channel_policy`
+in their `config` object. Their instruction arrays accept the same `kraus`,
+`pauli_channel` and structured `channel` instructions as a versioned request.
 
 On pure-state backends a reset that precedes every other operation on its qubit
 leaves `|0>` and does not make an estimate stochastic; a later reset does.

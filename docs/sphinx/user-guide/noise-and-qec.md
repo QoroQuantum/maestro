@@ -310,8 +310,10 @@ and for the composite statevector, in the execute and estimate functions,
   `(1 - p) * ⟨Z⟩ + p`. This removes the sampling error from that layer.
   If the preceding evolution is deterministic, Maestro computes the noisy
   expectation once. An explicit `noise_realizations` count is still reported.
-  Earlier stochastic evolution still contributes trajectory variance. If the
-  Pauli expansion becomes too large, Maestro uses the ordinary trajectory.
+  A channel on one qubit can qualify even if gates on other qubits follow it.
+  Earlier stochastic evolution still contributes trajectory variance. If an
+  observable's Pauli expansion becomes too expensive, Maestro samples that
+  observable and can still average the other observables in the same request.
   For terminal computational-basis measurements after a deterministic prefix,
   Maestro can sample joint populations once and apply eligible final channels
   to the resulting counts. T1 changes these counts, while pure dephasing
@@ -319,6 +321,13 @@ and for the composite statevector, in the execute and estimate functions,
   targets and other measured qubits. Counts and shot rows retain shot noise.
   Composite statevectors evaluate the prefix on its entangled components.
   Errors drawn when preparing a realization keep their shared draw across shots.
+  Python circuit methods and module functions accept
+  `config=maestro.SimulatorConfig(terminal_channel_policy="trajectories")`
+  to sample the branches explicitly. The default is `"auto"`. The same
+  setting is available as `SimulatorConfig::terminal_channel_policy` in C++,
+  through `network->Configure("terminal_channel_policy", "trajectories")`
+  on a native network, and as `simulator.options.terminal_channel_policy`
+  in JSON.
 - **QCSim statevector trajectories.** For amplitude damping and other Kraus
   operators with at most one nonzero entry per row, a pass over the state gives
   the target populations needed to choose the branch. A general operator can

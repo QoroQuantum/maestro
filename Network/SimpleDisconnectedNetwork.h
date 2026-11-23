@@ -17,6 +17,8 @@
 
 #include "../Circuit/ChainOrder.h"
 #include "../Estimators/SimulatorsEstimatorInterface.h"
+#include "../Execution/Estimation.h"
+#include "../Execution/NetworkTerminal.h"
 #include "../Utils/Sampling/Multinomial.h"
 #include "../Utils/SystemMemory.h"
 #include "NetworkJob.h"
@@ -31,6 +33,7 @@
 #include <exception>
 #include <limits>
 #include <optional>
+#include <type_traits>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
@@ -277,6 +280,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, const std::vector<std::string> &paulis) override
     {
+        if constexpr (std::is_same_v<Time, double>)
+            if (GetNumHosts() == 1 && recreateIfNeeded && resetBeforeExecution && configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
+                if (auto values = MaestroExecution::TryNetworkTerminalExpectation(
+                        circuit, paulis, *this, [this](const auto &part, const auto &words) { return ExecuteTrajectoryExpectations(part, words); }))
+                    return std::move(*values);
+        return ExecuteTrajectoryExpectations(circuit, paulis);
+    }
+
+  private:
+    std::vector<double> ExecuteTrajectoryExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, const std::vector<std::string> &paulis)
+    {
         const auto recreate = recreateIfNeeded;
 
         auto simType = Simulators::SimulatorType::kQCSim;
@@ -373,6 +387,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return expectations;
     }
 
+  public:
     /**
      * @brief Execute the circuit on the specified host and return the expectation
      * values for the specified Pauli strings.
@@ -390,6 +405,19 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
                                                   const std::vector<std::string> &paulis) override
+    {
+        if constexpr (std::is_same_v<Time, double>)
+            if (hostId < GetNumHosts() && recreateIfNeeded && configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
+                if (auto values = MaestroExecution::TryNetworkTerminalExpectation(circuit, paulis, *this, [this, hostId](const auto &part, const auto &words) {
+                        return ExecuteOnHostTrajectoryExpectations(part, hostId, words);
+                    }))
+                    return std::move(*values);
+        return ExecuteOnHostTrajectoryExpectations(circuit, hostId, paulis);
+    }
+
+  private:
+    std::vector<double> ExecuteOnHostTrajectoryExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
+                                                            const std::vector<std::string> &paulis)
     {
         const auto recreate = recreateIfNeeded;
 
@@ -488,6 +516,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return expectations;
     }
 
+  public:
     /**
      * @brief Execute circuit on host and return full statevector amplitudes.
      *
@@ -852,8 +881,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto dcirc = distCirc;
 
         const bool logicalTerminal = terminalSampling && shots > 1 && !fullTerminalBatch;
-        if (reproducibleSampling &&
-            (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
+        if (!terminalSampling && startsFromZero && TryTerminalChannelCounts(dcirc, res, shots, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim))
+            optSim.reset();
+        else if (reproducibleSampling &&
+                 (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
             if (logicalTerminal && !optSim)
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbitsResults, simType, method, executed,
@@ -1103,8 +1134,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto dcirc = distCirc;
 
         const bool logicalTerminal = terminalSampling && shots > 1 && !fullTerminalBatch;
-        if (reproducibleSampling &&
-            (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
+        if (!terminalSampling && TryTerminalChannelCounts(dcirc, res, shots, nrQubits, nrCbits, nrCbits, simType, method, optSim))
+            optSim.reset();
+        else if (reproducibleSampling &&
+                 (logicalTerminal || (!terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))))
         {
             if (logicalTerminal && !optSim)
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbits, simType, method, executed,
@@ -1342,6 +1375,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const std::string policy(value);
             if (policy != "block_v1" && policy != "shot_v1")
                 throw std::invalid_argument("trajectory_policy must be block_v1 or shot_v1");
+        }
+        if (std::string("terminal_channel_policy") == key)
+        {
+            const std::string_view policy(value);
+            if (policy != "auto" && policy != "trajectories")
+                throw std::invalid_argument("terminal_channel_policy must be auto or trajectories");
         }
         if (std::string("counts_policy") == key)
         {
@@ -3284,6 +3323,51 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return nrThreads;
     }
 
+    void InitializeTerminalRegister(const std::shared_ptr<Simulators::ISimulator> &state, size_t qubits, Simulators::SimulatorType type,
+                                    Simulators::SimulationType method, bool reuse)
+    {
+        if (reuse && state->GetNumberOfQubits() == qubits)
+        {
+            state->Reset();
+            state->SetGatesCounter(0);
+            ExecutionConfiguration(type, qubits, method).ApplyConfigurationToSimulator(state);
+        }
+        else
+        {
+            state->Clear();
+            ExecutionConfiguration(type, qubits, method).ApplyConfigurationToSimulator(state);
+            state->AllocateQubits(qubits);
+            state->Initialize();
+        }
+    }
+
+    // A counts-only execution discards its final register. Reuse the chosen simulator for
+    // the deterministic prefix, even if backend selection has already run part of it.
+    bool TryTerminalChannelCounts(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &counts, size_t shots, size_t qubits,
+                                  size_t classicalWidth, size_t resultWidth, Simulators::SimulatorType type, Simulators::SimulationType method,
+                                  const std::shared_ptr<Simulators::ISimulator> &selected)
+    {
+        if constexpr (std::is_same_v<Time, double>)
+        {
+            const auto &state = selected ? selected : simulator;
+            if (shots < 2 || !recreateIfNeeded || method != Simulators::SimulationType::kStatevector || !Simulators::SamplesQuantumChannels(type, method) ||
+                !state || state->GetType() != type || state->GetSimulationType() != method ||
+                configuration.GetConfiguration("terminal_channel_policy") == "trajectories" ||
+                !Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.GetConfiguration("sampling_policy")))
+                return false;
+            const auto prepare = [&] { InitializeTerminalRegister(state, qubits, type, method, true); };
+            const std::optional<uint64_t> seed =
+                configuration.IsSet("seed") ? std::optional<uint64_t>(std::stoull(configuration.GetConfiguration("seed"))) : std::nullopt;
+            if (MaestroExecution::SampleNetworkTerminalChannels(circuit, state, shots, classicalWidth, resultWidth, seed, prepare, counts))
+            {
+                lastFusionWidth.store(state->GetGateFusionMaxQubits());
+                lastFusionEnabled.store(state->IsGateFusionEnabled());
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Prepare the selected backend on exactly this register, with every
     // non-measurement operation applied, for shot workers to clone. Serial
     // requests may reuse the existing simulator, including after resizing it;
@@ -3298,19 +3382,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             return nullptr;
         try
         {
-            if (reusable && prepared->GetNumberOfQubits() == nrQubits)
-            {
-                prepared->Reset();
-                prepared->SetGatesCounter(0);
-                ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
-            }
-            else
-            {
-                prepared->Clear();
-                ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
-                prepared->AllocateQubits(nrQubits);
-                prepared->Initialize();
-            }
+            InitializeTerminalRegister(prepared, nrQubits, simType, method, bool(reusable));
         }
         catch (const std::exception &)
         {
