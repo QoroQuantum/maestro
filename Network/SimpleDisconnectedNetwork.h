@@ -29,11 +29,24 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <complex>
 #include <cstdlib>
 #include <exception>
+#include <iostream>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
 #include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
@@ -1376,7 +1389,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (policy != "block_v1" && policy != "shot_v1")
                 throw std::invalid_argument("trajectory_policy must be block_v1 or shot_v1");
         }
-        if (std::string("terminal_channel_policy") == key)
+        if (std::string_view(key) == "terminal_channel_policy")
         {
             const std::string_view policy(value);
             if (policy != "auto" && policy != "trajectories")
