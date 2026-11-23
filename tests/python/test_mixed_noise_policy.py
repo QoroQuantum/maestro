@@ -37,6 +37,35 @@ def bit_flip_circuit():
     return circuit, model
 
 
+@pytest.mark.parametrize("delta", [-8e-13, 8e-13])
+def test_accepted_pauli_probability_rounding_keeps_exact_estimate(delta):
+    circuit = QuantumCircuit()
+    circuit.channel([0], maestro.QuantumChannel.pauli([0.65, 0.35 + delta, 0.0, 0.0]))
+    expected = (0.30 - delta) / (1.0 + delta)
+    for method in (maestro.SimulationType.Statevector, maestro.SimulationType.DensityMatrix):
+        result = circuit.estimate(["Z"], config=config(method))
+        assert result["measurement_trajectories"] == 0
+        assert result["expectation_values"] == pytest.approx([expected], rel=0, abs=5e-16)
+
+
+def test_rounded_pauli_sampling_form_preserves_composed_coherence():
+    np = pytest.importorskip("numpy")
+    channel = maestro.QuantumChannel
+    angle = 1e-15
+    c, s = math.cos(angle / 2), math.sin(angle / 2)
+    ry = np.array([[c, -s], [s, c]])
+    raw = channel.from_kraus([ry @ op for op in channel.pauli([0.7, 0.1, 0.1, 0.1]).kraus_operators])
+    # Depolarization shrinks Z to 0.6 Z, Ry creates X, then dephasing halves X.
+    placed = channel.on_qubit(raw.then(channel.pauli([0.75, 0.0, 0.0, 0.25])), 1)
+    circuit = QuantumCircuit()
+    circuit.channel([0, 1], placed)
+    expected = 0.3 * math.sin(angle)
+    for method in (maestro.SimulationType.Statevector, maestro.SimulationType.DensityMatrix):
+        result = circuit.estimate(["IX"], config=config(method))
+        assert result["measurement_trajectories"] == 0
+        assert result["expectation_values"] == pytest.approx([expected], rel=1e-12, abs=0.0)
+
+
 @pytest.mark.parametrize("method", MIXED)
 @pytest.mark.parametrize("entry", ["noisy_execute", "full_noise_execute"])
 def test_auto_mixed_counts_prepare_one_ensemble(method, entry):

@@ -183,7 +183,8 @@ Mask TracePauliOperation(const std::shared_ptr<Circuits::IOperation<double>> &op
             return keep;
         const auto &factors = channel.GetFactors();
         if (std::all_of(factors.begin(), factors.end(), [](const auto &factor) {
-                return factor.kind == Simulators::QuantumChannel::FactorKind::kPauli || factor.kind == Simulators::QuantumChannel::FactorKind::kThermal;
+                return (factor.kind == Simulators::QuantumChannel::FactorKind::kPauli && factor.operators.empty()) ||
+                       factor.kind == Simulators::QuantumChannel::FactorKind::kThermal;
             }))
             return keep;
     }

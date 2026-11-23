@@ -592,6 +592,25 @@ def test_public_reference_frame_sampler_rejects_what_frames_cannot_represent():
     assert maestro.compile_reference_sampler(clifford, None, gpu) is None
 
 
+@pytest.mark.parametrize("method,strategy", [(maestro.SimulationType.Stabilizer, "reference_frame_v1"),
+                                              (maestro.SimulationType.ExtendedStabilizer, "extended_frame_v1")])
+def test_phase_damping_model_keeps_frame_sampling(method, strategy):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    if method == maestro.SimulationType.ExtendedStabilizer:
+        circuit.t(0)
+    circuit.measure_all()
+    model = maestro.NoiseModel()
+    cfg = _config(method)
+    cfg.counts_policy = "frame_v1"
+    cfg.fixed_backend = True
+    for gamma in (0.0001, 0.0017, 0.0099, 0.0237, 0.0451):
+        model.set_phase_damping(0, gamma)
+        assert maestro.compile_reference_sampler(circuit, model, cfg) is not None
+        result = circuit.noisy_execute(model, config=cfg, shots=32, noise_realizations=32, return_samples=True)
+        assert result["sampling_strategy"] == strategy
+
+
 def test_noisy_reference_frames_keep_the_scalar_seed_and_thermal_rules():
     """noise_seed drives circuit errors and config.seed the outcomes; clamped thermal noise keeps trajectories."""
     flipped = QuantumCircuit()

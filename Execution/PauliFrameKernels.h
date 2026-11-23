@@ -204,7 +204,7 @@ template <class Consumer> void TransposeBatch(const std::vector<uint64_t> &class
 // channel (amplitude damping, incomplete Kraus sets, three or more targets).
 inline std::vector<double> PauliMixture(const Simulators::QuantumChannel &channel, size_t targets)
 {
-    return Simulators::QuantumChannel::PauliMixtureOf(channel.GetKrausOperators(), targets);
+    return targets == channel.GetNumberOfQubits() ? channel.PauliMixture() : std::vector<double>{};
 }
 } // namespace FrameKernels
 } // namespace MaestroExecution

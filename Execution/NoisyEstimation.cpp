@@ -65,7 +65,7 @@ std::optional<Transfer::CompiledChannel> CompileTerminalFactor(const Channel &ch
     if (factor.kind == Channel::FactorKind::kThermal)
         return Transfer::CompileRelaxation(factor.thermal.coherence, 1.0 - factor.thermal.decay,
                                            factor.thermal.decay * (1.0 - 2.0 * factor.thermal.excitedStatePopulation));
-    if (factor.kind == Channel::FactorKind::kPauli && !whole)
+    if (factor.kind == Channel::FactorKind::kPauli && factor.operators.empty() && !whole)
     {
         std::array<double, 16> probabilities{};
         // Classifying phased Kraus operators or composing channels can leave the
