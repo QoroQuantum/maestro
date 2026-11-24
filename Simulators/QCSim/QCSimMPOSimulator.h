@@ -86,6 +86,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(converted);
         liveSiteRank.assign(num_qubits, mixture.size() > 1 ? 2. : 1.);
+        if (mixture.size() > 1)
+            MarkAllTouched(); // a mixture of basis states correlates its qubits
     }
 
     void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<std::vector<bool>, double>> &mixture) override
@@ -98,6 +100,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(mixture);
         liveSiteRank.assign(num_qubits, mixture.size() > 1 ? 2. : 1.);
+        if (mixture.size() > 1)
+            MarkAllTouched(); // a mixture of basis states correlates its qubits
     }
 
     void Reset() override
@@ -1116,6 +1120,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
         cloned->liveSiteRank = liveSiteRank;
+        cloned->liveUntouched = liveUntouched;
+        cloned->savedUntouched = savedUntouched;
         cloned->savedSiteRank = savedSiteRank;
         cloned->hasSavedSiteRank = hasSavedSiteRank;
         cloned->pendingDeflate = pendingDeflate;

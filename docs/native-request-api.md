@@ -1308,8 +1308,11 @@ heuristic's strength to register size.
 On the QCSim chains, a circuit that holds measurements or resets uses these
 estimates without the option, and its routing model lowers the bond estimates
 at the measured and reset qubits. `mps_routing_virtual_bonds=false` or
-`mps_routing_legacy_cap=true` turns this off. GPU routing does not model
-measurements and resets.
+`mps_routing_legacy_cap=true` turns this off. When the circuit measures or
+resets before its end, qubits that no entangling operation has acted on yet
+(idle sites of a sparse register, ancillas before their first gate) are routed
+as the product states they are. GPU routing does not model measurements and
+resets.
 
 For an estimated dimension `d` and physical cap `c`, the routing score is
 `min(d,c)^3 * (1 + weight * max(0,d/c - 1))`. The first term models capped

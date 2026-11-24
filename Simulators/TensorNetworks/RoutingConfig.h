@@ -85,6 +85,56 @@ template <class OpPtr> bool ContainsDisentanglingOperations(const std::vector<Op
     return false;
 }
 
+// Whether the operations hold a measurement or reset that two-qubit gates still follow and that can change
+// the entanglement of the chain: a measurement before the last two-qubit gate, or such a reset of a qubit an
+// earlier operation acted on. Final measurements do not count (nothing is routed after them), nor do the
+// resets a circuit starts with (their qubits are still in |0>).
+template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<OpPtr> &operations)
+{
+    // Most circuits hold none before their end: find the first by type alone, without reading a qubit list.
+    size_t first = operations.size();
+    for (size_t i = 0; i < operations.size(); ++i)
+        if (operations[i] && IsDisentanglingOperationType(operations[i]->GetType()))
+        {
+            first = i;
+            break;
+        }
+    if (first == operations.size())
+        return false;
+    size_t lastTwoQubitGate = operations.size();
+    for (size_t i = operations.size(); i-- > first;)
+        if (operations[i] && operations[i]->GetType() == Circuits::OperationType::kGate && operations[i]->AffectedQubits().size() >= 2)
+        {
+            lastTwoQubitGate = i;
+            break;
+        }
+    if (lastTwoQubitGate == operations.size())
+        return false;
+    // Only a reset asks whether its qubit was acted on.
+    std::vector<bool> touched;
+    for (size_t i = 0; i < lastTwoQubitGate; ++i)
+    {
+        const auto &op = operations[i];
+        if (!op)
+            continue;
+        const auto type = op->GetType();
+        if (type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement)
+            return true;
+        const auto qubits = op->AffectedQubits();
+        if (type == Circuits::OperationType::kReset)
+            for (const auto q : qubits)
+                if (q < touched.size() && touched[q])
+                    return true;
+        for (const auto q : qubits)
+        {
+            if (q >= touched.size())
+                touched.resize(static_cast<size_t>(q) + 1, false);
+            touched[q] = true;
+        }
+    }
+    return false;
+}
+
 template <class Config> double TruncationWeight(const Config &config)
 {
     return config.IsSet(kTruncationWeight) ? ParseWeight(config.GetConfiguration(kTruncationWeight)) : 1.;

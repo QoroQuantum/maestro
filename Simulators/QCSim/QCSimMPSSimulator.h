@@ -1163,6 +1163,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
         cloned->liveSiteRank = liveSiteRank;
+        cloned->liveUntouched = liveUntouched;
+        cloned->savedUntouched = savedUntouched;
         cloned->savedSiteRank = savedSiteRank;
         cloned->hasSavedSiteRank = hasSavedSiteRank;
         if (configuration.IsSet("seed"))
