@@ -1,5 +1,6 @@
 #include "Simulators/Core/Factory.h"
 #define INCLUDED_BY_FACTORY
+#include "Execution/CheckpointRouting.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Fusion/FusionSimulator.h"
 #include "Simulators/Gpu/GpuMPOSimulator.h"
@@ -725,6 +726,78 @@ template <class Backend> static void CachedGpuRoutingSettings()
 }
 #endif
 
+static void LowBondCheckpointRounds()
+{
+    using MaestroExecution::LowBondCheckpointRound;
+    using MaestroExecution::SimulatorConfig;
+    const auto h = CF::CreateGate(Kind::kHadamardGateType, 0);
+    const auto cx = CF::CreateGate(Kind::kCXGateType, 0, 2);
+    const auto cz = CF::CreateGate(Kind::kCZGateType, 1, 3);
+    const auto measure = CF::CreateMeasurement({{2, 0}});
+    const auto reset = CF::CreateReset({3});
+    const auto wrong = CF::CreateReset({4});
+    const auto noise = std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2}, QuantumChannel::AmplitudeDamping(.1));
+    const auto prefix = CF::CreateCircuit({CF::CreateReset({0, 1, 2, 3}), h, cx, cz});
+    const auto rounds = CF::CreateCircuit({measure, reset, h, cx, cz, measure, reset, h, cx, cz, measure});
+    const auto oversizedPrefix = CF::CreateCircuit(std::vector<Op>(257, cx));
+    auto oversizedCopy = CF::CreateCircuit({measure});
+    for (const auto &gate : oversizedPrefix->GetOperations())
+        oversizedCopy->AddOperation(gate);
+    for (const auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
+    {
+        SimulatorConfig config;
+        config.simulation_type = method;
+        config.max_bond_dimension = 32;
+        const auto round = LowBondCheckpointRound::Capture(config, prefix, 4, false);
+        Check(round.Repeats(rounds), "exactly repeated projected low-bond rounds were missed");
+        Check(!round.Repeats(CF::CreateCircuit({h, cx, cz})), "round missing its leading projections was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, wrong, h, cx, cz})), "uncovered two-site gate was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cx, cz, measure, h, cx, cz})), "coverage carried over from the previous round");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cz, cx})), "reordered two-site gates were accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, CF::CreateGate(Kind::kCXGateType, 2, 0), cz})), "reversed CX was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, CF::CreateGate(Kind::kXGateType, 0), cx, cz})), "changed single-qubit gate was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, h, cx, cz})), "extra single-qubit gate was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cx})), "incomplete last round was accepted");
+        Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cx, cz, noise})), "noisy suffix was accepted");
+        Check(!LowBondCheckpointRound::Capture(config, CF::CreateCircuit({noise, h, cx, cz}), 4, false).Repeats(rounds), "noisy prefix was accepted");
+        Check(!LowBondCheckpointRound::Capture(config, oversizedPrefix, 4, false).Repeats(oversizedCopy), "oversized prefix signature was retained");
+
+        const auto accepted = [&](const SimulatorConfig &cfg, size_t peak, bool lookahead = false) {
+            return LowBondCheckpointRound::Capture(cfg, prefix, peak, lookahead).Repeats(rounds);
+        };
+        Check(!accepted(config, 0) && !accepted(config, 8), "missing or high observed peak was accepted");
+        Check(!accepted(config, 4, true), "prefix measured with active lookahead was accepted");
+        auto limited = config;
+        limited.max_bond_dimension = 4;
+        Check(!accepted(limited, 4), "prefix that reached its cap was accepted");
+        auto explicitDepth = config;
+        explicitDepth.lookahead_depth = 3;
+        Check(!accepted(explicitDepth, 4), "explicit routing depth was overridden");
+        auto explicitStrategy = config;
+        explicitStrategy.mps_routing_strategy = "combined";
+        Check(!accepted(explicitStrategy, 4), "explicit routing strategy was overridden");
+        auto native = config;
+        native.native_options["mps_routing_virtual_bonds"] = "true";
+        Check(!accepted(native, 4), "explicit native routing setting was overridden");
+        auto disabled = config;
+        disabled.disable_optimized_swapping = true;
+        Check(!accepted(disabled, 4), "disabled routing entered the round heuristic");
+        auto otherBackend = config;
+        otherBackend.simulator_type = SimulatorType::kGpuSim;
+        Check(!accepted(otherBackend, 4), "CPU checkpoint routing policy selected a GPU backend");
+    }
+
+    // Change a gate object in place after capturing its signature. A saved
+    // checkpoint still represents the original operation on qubits 0 and 2.
+    SimulatorConfig config;
+    config.simulation_type = SimulationType::kMatrixProductState;
+    config.max_bond_dimension = 32;
+    const auto stored = LowBondCheckpointRound::Capture(config, prefix, 4, false);
+    cx->SetQubit(4);
+    Check(!stored.Repeats(rounds), "editing a shared source gate changed the saved round");
+    Check(stored.Repeats(CF::CreateCircuit({measure, reset, h, CF::CreateGate(Kind::kCXGateType, 0, 2), cz})), "saved round lost its original operands");
+}
+
 template <class Backend> static void AutomaticCheckpointHistory(const char *cap)
 {
     HistoryProbe<Backend> sim;
@@ -1190,6 +1263,16 @@ template <class Backend> struct AutomaticRoutingProbe : RecordingImmediate<Backe
         return this->automaticRoutingDepth;
     }
 
+    int Depth() const
+    {
+        return this->lookaheadDepth;
+    }
+
+    bool UsesOptimalMeetingPosition() const
+    {
+        return this->useOptimalMeetingPosition;
+    }
+
     long long PreparedCap() const
     {
         return this->boundedRoutingCap;
@@ -1467,6 +1550,119 @@ struct AutomaticNetworkProbe : Network::SimpleDisconnectedNetwork<>
     using SimpleDisconnectedNetwork::OptimizeMPSInitialQubitsMap;
     using SimpleDisconnectedNetwork::SimpleDisconnectedNetwork;
 };
+
+template <class Backend> static void CheckpointRoundRoutingTransitions(size_t n)
+{
+    struct RoundNetwork : AutomaticNetworkProbe
+    {
+        using AutomaticNetworkProbe::AutomaticNetworkProbe;
+        mutable size_t suffixPlans = 0;
+
+        bool PrepareCheckpointRouting(const std::shared_ptr<ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<>> &circuit, bool fresh,
+                                      bool lowBondRound) const override
+        {
+            Check(!fresh, "checkpoint suffix replanned a fresh layout");
+            ++suffixPlans;
+            return AutomaticNetworkProbe::PrepareCheckpointRouting(sim, circuit, fresh, lowBondRound);
+        }
+    };
+
+    auto sim = std::make_shared<AutomaticRoutingProbe<Backend>>();
+    ConfigureExactAutomatic(*sim, n, false);
+    auto layout = sim->NativeMap();
+    std::reverse(layout.begin(), layout.end());
+    sim->SetInitialQubitsMap(layout);
+    RoundNetwork network(Types::qubits_vector{n}, std::vector<size_t>{n});
+    network.Configure("matrix_product_state_max_bond_dimension", "64");
+    network.Configure("matrix_product_operator_max_bond_dimension", "64");
+    MaestroExecution::SimulatorConfig config;
+    config.simulation_type = sim->GetSimulationType();
+    config.max_bond_dimension = 64;
+
+    // Eight sequential two-site gates give the normal network positive
+    // automatic lookahead. Applying the same CX twice disentangles the pair.
+    auto prefix = CF::CreateCircuit({CF::CreateGate(Kind::kHadamardGateType, 0)});
+    for (int i = 0; i < 8; ++i)
+        prefix->AddOperation(CF::CreateGate(Kind::kCXGateType, 0, 1));
+    Circuits::OperationState state(n);
+    size_t peak = 0;
+    prefix->ExecuteBD(sim, state, &peak);
+    sim->SaveState();
+    const auto round = MaestroExecution::LowBondCheckpointRound::Capture(config, prefix, peak, sim->IsRoutingLookaheadEnabled());
+    const auto measure = CF::CreateMeasurement({{0, 0}});
+    auto match = CF::CreateCircuit({measure});
+    for (const auto &gate : prefix->GetOperations())
+        match->AddOperation(gate);
+    auto changed = CF::CreateCircuit(match->GetOperations());
+    changed->AddOperation(CF::CreateGate(Kind::kXGateType, 0));
+
+    const auto prepare = [&](RoundNetwork &net, const auto &suffix, bool noisy = false) {
+        sim->RestoreState();
+        const size_t previous = net.suffixPlans;
+        net.PrepareCheckpointRouting(sim, suffix, false, !noisy && round.Repeats(suffix));
+        Check(net.suffixPlans == previous + 1 && sim->NativeMap() == layout, "suffix missed normal planning or replaced the saved site map");
+    };
+    const auto choseLocal = [&] { return sim->Automatic() && sim->Depth() == 0 && sim->UsesOptimalMeetingPosition() && network.GetMPSOptimizeSwaps(); };
+    sim->SetAutomaticLookaheadDepth(2);
+    prepare(network, match);
+    Check(choseLocal(), "matching suffix did not select automatic local swap optimization");
+    sim->ApplySwap(0, 1);
+    prepare(network, changed);
+    Check(sim->Automatic() && sim->Depth() > 0, "changed suffix failed to restore network lookahead");
+    prepare(network, match);
+    Check(choseLocal(), "matching suffix missed automatic local routing after a different suffix");
+    prepare(network, match, true);
+    Check(sim->Automatic() && sim->Depth() > 0, "external noise on a matched suffix overrode the normal depth");
+
+    auto repeated = CF::CreateCircuit();
+    const auto appendRound = [&] {
+        for (const auto &op : match->GetOperations())
+            repeated->AddOperation(op);
+    };
+    for (int i = 0; i < 4; ++i)
+        appendRound();
+    prepare(network, repeated);
+    Check(choseLocal(), "four matching rounds missed automatic local routing");
+    appendRound();
+    prepare(network, repeated);
+    Check(sim->Automatic() && sim->Depth() > 0, "long repeated suffix failed to restore normal routing");
+
+    auto invalid = CF::CreateCircuit(match->GetOperations());
+    invalid->AddOperation(CF::CreateMeasurement({{n, 0}}));
+    bool rejected = false;
+    const size_t beforeInvalid = network.suffixPlans;
+    try
+    {
+        prepare(network, invalid);
+    }
+    catch (const std::invalid_argument &)
+    {
+        rejected = true;
+    }
+    Check(rejected && network.suffixPlans == beforeInvalid + 1, "out-of-register final measurement bypassed network validation");
+
+    network.SetLookaheadDepth(3);
+    prepare(network, match);
+    Check(!sim->Automatic() && sim->Depth() == 3, "matched round overrode explicitly requested depth");
+    network.SetLookaheadDepth(-1);
+    network.SetLookaheadDepthWithHeuristic(2);
+    prepare(network, match);
+    Check(sim->Depth() > 0, "matched round overrode explicit heuristic depth");
+    network.SetLookaheadDepthWithHeuristic(-1);
+
+    for (const char *key : {"mps_routing_strategy", "mps_routing_virtual_bonds"})
+    {
+        RoundNetwork configured(Types::qubits_vector{n}, std::vector<size_t>{n});
+        configured.Configure("matrix_product_state_max_bond_dimension", "64");
+        configured.Configure("matrix_product_operator_max_bond_dimension", "64");
+        configured.Configure(key, std::string(key) == "mps_routing_strategy" ? "combined" : "true");
+        prepare(configured, match);
+        Check(sim->Depth() > 0, "matched round overrode explicit network routing options");
+    }
+    network.SetMPSOptimizeSwaps(false);
+    prepare(network, match);
+    Check(!sim->Automatic() && sim->Depth() == 0 && !network.GetMPSOptimizeSwaps(), "matched round enabled swaps disabled by the caller");
+}
 
 template <class Backend> static void AutomaticNetworkLayoutParity(size_t n)
 {
@@ -2165,6 +2361,9 @@ int main(int argc, char **argv)
         }
 #endif
         BoundaryPlanning();
+        LowBondCheckpointRounds();
+        CheckpointRoundRoutingTransitions<Private::QCSimMPSSimulator>(12);
+        CheckpointRoundRoutingTransitions<Private::QCSimMPOSimulator>(6);
         LazyBoundedRoutingAndSharing<Private::QCSimMPSSimulator>(12);
         LazyBoundedRoutingAndSharing<Private::QCSimMPOSimulator>(6);
         InactiveRoutingViewLifetime<Private::QCSimMPSSimulator>(12);

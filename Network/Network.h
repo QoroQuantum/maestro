@@ -1260,6 +1260,14 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     {
         return false;
     }
+
+    // A short suffix can repeat a round already observed at low bond dimension.
+    // Planners may use this evidence when choosing an automatic lookahead depth.
+    virtual bool PrepareCheckpointRouting(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+                                          bool freshRegister, bool /*repeatedLowBondRound*/) const
+    {
+        return PrepareCheckpointRouting(sim, circuit, freshRegister);
+    }
 };
 
 } // namespace Network

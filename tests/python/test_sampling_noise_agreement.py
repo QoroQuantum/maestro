@@ -1753,6 +1753,34 @@ def test_checkpoint_batch_honors_tensor_routing(method, width, cap):
     assert disabled["results"][0]["counts"].get("1", 0) > 0
 
 
+@pytest.mark.parametrize("method,width", [("matrix_product_state", 12), ("matrix_product_operator", 6)])
+@pytest.mark.parametrize("depth", [None, 3], ids=["automatic", "forced"])
+def test_checkpoint_batch_restores_repeated_tensor_round(method, width, depth):
+    def circuit(source):
+        return {"format": "instructions", "num_qubits": width, "num_clbits": 3, "source": source}
+
+    # The saved round puts 1 on q0, q5 and q2. Measuring q5 projects one
+    # endpoint of both interactions. Replaying the round leaves only q5 set.
+    cx = {"name": "cx", "qubits": [5, 2]}
+    gates = [{"name": "x", "qubits": [0]}, {"name": "cx", "qubits": [0, 5]}, cx]
+    replay = [{"name": "measure", "qubits": [5], "clbits": [2]}, *gates]
+    read = {"name": "measure", "qubits": [0, 2, 5], "clbits": [0, 1, 2]}
+    match = circuit([*replay, read])
+    # The changed suffix has enough two-site layers for normal lookahead and
+    # flips q2 an odd number of times. Its result must not leak into the replay.
+    changed = circuit(replay + [cx] * 7 + [read])
+    options = {"max_bond_dimension": 64, "gate_fusion": False}
+    if depth is not None:
+        options["lookahead_depth"] = depth
+    shots = 8
+    result = _native_request({"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit(gates),
+                              "suffixes": [match, changed, match],
+                              "simulator": {"backend": "qcsim", "method": method, "selection": "fixed", "options": options},
+                              "execution": {"shots": shots, "seed": 3}})
+    assert result["ok"], result
+    assert [item["counts"] for item in result["results"]] == [{"001": shots}, {"011": shots}, {"001": shots}]
+
+
 def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
     """A prefix runs once. PrefixCheckpointedSimulator and a checkpoint_batch request take the same
     resets, measurements and channel instructions in it, refuse the same ones, and prepare the same state."""

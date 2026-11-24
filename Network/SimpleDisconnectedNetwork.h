@@ -2980,6 +2980,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     bool PrepareCheckpointRouting(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
                                   bool freshRegister) const override
     {
+        return PrepareCheckpointRouting(sim, circuit, freshRegister, false);
+    }
+
+    bool PrepareCheckpointRouting(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+                                  bool freshRegister, bool repeatedLowBondRound) const override
+    {
         const auto method = sim->GetSimulationType();
         if ((method != Simulators::SimulationType::kMatrixProductState && method != Simulators::SimulationType::kMatrixProductOperator) ||
             !sim->SupportsMPSSwapOptimization())
@@ -2999,7 +3005,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 auto plan = freshRegister ? std::make_shared<Circuits::Circuit<Time>>(circuit->GetOperations()) : circuit;
                 // A prefix is part of the work only: a searched layout needs a large predicted gain to be taken.
                 prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister,
-                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0.);
+                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0., repeatedLowBondRound);
             }
         }
         if (!prepared || !mpsOptimizeSwaps)
@@ -3741,7 +3747,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // minLayoutGain: above zero, the predicted gain a searched layout needs to replace index order
     // (a line placed along the chain needs none: it is exact).
     bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
-                                     bool freshRegister = true, double minLayoutGain = 0.) const
+                                     bool freshRegister = true, double minLayoutGain = 0., bool repeatedLowBondRound = false) const
     {
         const bool placeQubits = freshRegister && optimizeInitialQubitsMap;
         if ((sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState ||
@@ -3761,6 +3767,21 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (maxBondDimValue <= 0 || static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue)
                 {
+                    // Replaying a short round with cheap observed contractions can cost less
+                    // than building its fused layers and forecasting each swap. Keep the
+                    // saved layout and let QCSim choose local swaps at automatic depth zero.
+                    namespace routing = Simulators::RoutingConfig;
+                    if (repeatedLowBondRound && !freshRegister && sim->GetType() == Simulators::SimulatorType::kQCSim &&
+                        lookaheadDepth == std::numeric_limits<int>::max() && lookaheadDepthWithHeuristic == std::numeric_limits<int>::max() &&
+                        growthFactorGate == 0.7 && growthFactorSwap == 1. && !configuration.IsSet(routing::kStrategy) &&
+                        !configuration.IsSet(routing::kVirtualBonds) && !configuration.IsSet(routing::kLegacyCap) &&
+                        !configuration.IsSet(routing::kTruncationWeight))
+                    {
+                        sim->SetUseOptimalMeetingPosition(true);
+                        sim->SetAutomaticLookaheadDepth(0);
+                        sim->SetLookaheadDepthWithHeuristic(0);
+                        return true;
+                    }
                     if (freshRegister)
                         dcirc->ConvertForCutting(); // convert the three qubit gates
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
