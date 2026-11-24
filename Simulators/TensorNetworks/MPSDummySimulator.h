@@ -742,57 +742,10 @@ class MPSDummySimulator
         }
 
         uint64_t stateHash = 14695981039346656037ULL;
-        auto mixHash = [&](uint64_t v) {
-            stateHash ^= v;
+        VisitRoutingInputs(windowPtr, windowSize, lookaheadDepth, lookaheadDepthWithHeuristic, [&](uint64_t word) {
+            stateHash ^= word;
             stateHash *= 1099511628211ULL;
-        };
-        auto mixDouble = [&](double d) {
-            uint64_t bits = 0;
-            std::memcpy(&bits, &d, sizeof(double));
-            mixHash(bits);
-        };
-
-        mixHash(static_cast<uint64_t>(windowSize));
-        mixHash(static_cast<uint64_t>(lookaheadDepth));
-        mixHash(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
-        mixHash(static_cast<uint64_t>(physExtent));
-        mixHash(static_cast<uint64_t>(maxVirtualExtent));
-        mixHash(static_cast<uint64_t>(swapGatesRelabelQubits));
-        mixDouble(growthFactorSwap);
-        mixDouble(growthFactorGate);
-        for (IndexType q : qubitsMap)
-            mixHash(static_cast<uint64_t>(q));
-        for (double d : currentBondDim)
-            mixDouble(d);
-        for (double c : bondCost)
-            mixDouble(c);
-        for (double m : maxBondDim)
-            mixDouble(m);
-        for (double sr : siteRank)
-            mixDouble(sr);
-        for (size_t w = 0; w < windowSize; ++w)
-        {
-            const FastGateOp &fg = windowPtr[w];
-            mixHash(static_cast<uint64_t>(fg.q1));
-            mixHash(static_cast<uint64_t>(fg.q2));
-            mixHash(static_cast<uint64_t>(fg.q3));
-            mixHash(static_cast<uint64_t>(fg.numQubits));
-            mixHash(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
-            mixDouble(fg.schmidtRank);
-            mixHash(static_cast<uint64_t>(fg.preCount));
-            for (uint32_t ei = 0; ei < fg.preCount; ++ei)
-            {
-                mixHash(static_cast<uint64_t>(fg.events[fg.preStart + ei].qubit));
-                mixDouble(fg.events[fg.preStart + ei].probability);
-            }
-            mixHash(static_cast<uint64_t>(fg.postCount));
-            for (uint32_t ei = 0; ei < fg.postCount; ++ei)
-            {
-                mixHash(static_cast<uint64_t>(fg.events[fg.postStart + ei].qubit));
-                mixDouble(fg.events[fg.postStart + ei].probability);
-            }
-        }
-
+        });
         MemoEntry &slot = memoCache[(static_cast<size_t>(currentGateIndex) ^ static_cast<size_t>(stateHash)) & (kMemoCacheSize - 1)];
         if (slot.valid && slot.hash == stateHash)
         {
@@ -1864,6 +1817,61 @@ class MPSDummySimulator
         const DisentangleEvent *events = nullptr;
     };
 
+    // Describe the effective operation window by value. The same source gate can
+    // be edited between runs, and fusion can replace it with a different matrix.
+    template <class Word>
+    void VisitRoutingInputs(const FastGateOp *window, size_t windowSize, int lookaheadDepth, int lookaheadDepthWithHeuristic, Word word) const
+    {
+        auto mixDouble = [&](double d) {
+            uint64_t bits = 0;
+            std::memcpy(&bits, &d, sizeof(double));
+            word(bits);
+        };
+
+        word(static_cast<uint64_t>(windowSize));
+        word(static_cast<uint64_t>(lookaheadDepth));
+        word(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
+        word(static_cast<uint64_t>(physExtent));
+        word(static_cast<uint64_t>(maxVirtualExtent));
+        word(static_cast<uint64_t>(swapGatesRelabelQubits));
+        word(static_cast<uint64_t>(runtimeBondCap));
+        mixDouble(truncationWeight);
+        mixDouble(growthFactorSwap);
+        mixDouble(growthFactorGate);
+        for (IndexType q : qubitsMap)
+            word(static_cast<uint64_t>(q));
+        for (double d : currentBondDim)
+            mixDouble(d);
+        for (double c : bondCost)
+            mixDouble(c);
+        for (double m : maxBondDim)
+            mixDouble(m);
+        for (double sr : siteRank)
+            mixDouble(sr);
+        for (size_t w = 0; w < windowSize; ++w)
+        {
+            const FastGateOp &fg = window[w];
+            word(static_cast<uint64_t>(fg.q1));
+            word(static_cast<uint64_t>(fg.q2));
+            word(static_cast<uint64_t>(fg.q3));
+            word(static_cast<uint64_t>(fg.numQubits));
+            word(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
+            mixDouble(fg.schmidtRank);
+            word(static_cast<uint64_t>(fg.preCount));
+            for (uint32_t ei = 0; ei < fg.preCount; ++ei)
+            {
+                word(static_cast<uint64_t>(fg.events[fg.preStart + ei].qubit));
+                mixDouble(fg.events[fg.preStart + ei].probability);
+            }
+            word(static_cast<uint64_t>(fg.postCount));
+            for (uint32_t ei = 0; ei < fg.postCount; ++ei)
+            {
+                word(static_cast<uint64_t>(fg.events[fg.postStart + ei].qubit));
+                mixDouble(fg.events[fg.postStart + ei].probability);
+            }
+        }
+    }
+
     static constexpr size_t kMaxStackQubits = 64;
 
     struct FastStateSnapshot
@@ -2893,6 +2901,26 @@ class MPSDummySimulator
             return posP0;
         }
 
+        // Independent shots often reach exactly the same routing problem even
+        // when measurement bits differ. Reuse only an unbounded root search and
+        // compare every model input, including virtual bonds and projections.
+        // Most gates never need a meeting choice. Index by gate for repeated
+        // shots and allocate keys only for visited slots (about 2 MiB maximum).
+        AdaptiveChoice *replay = nullptr;
+        if (currentCost == 0. && bestCost == std::numeric_limits<double>::infinity() && nrQubits <= 64 && windowSize <= 64 && disentangleBuf.size <= 96)
+        {
+            if (adaptiveChoices.empty())
+                adaptiveChoices.resize(256);
+            replay = &adaptiveChoices[static_cast<size_t>(currentGateIndex) % adaptiveChoices.size()];
+            adaptiveKey.clear();
+            VisitRoutingInputs(windowPtr, windowSize, lookaheadDepth, lookaheadDepthWithHeuristic, [&](uint64_t value) { adaptiveKey.push_back(value); });
+            if (replay->key == adaptiveKey)
+            {
+                bestCost = replay->cost;
+                return replay->position;
+            }
+        }
+
         auto searchAdaptive = [&](auto &self, size_t stepIdx, double stepStartCost, double &boundCost) -> IndexType {
             if (stepIdx >= endStep)
             {
@@ -3073,6 +3101,12 @@ class MPSDummySimulator
         const IndexType chosenPos = searchAdaptive(searchAdaptive, 0, currentCost, bestRolloutCost);
         if (bestRolloutCost < bestCost)
             bestCost = bestRolloutCost;
+        if (replay)
+        {
+            replay->key = adaptiveKey;
+            replay->position = chosenPos;
+            replay->cost = bestCost;
+        }
         return chosenPos;
     }
 
@@ -3146,6 +3180,16 @@ class MPSDummySimulator
     }
 
   private:
+    struct AdaptiveChoice
+    {
+        std::vector<uint64_t> key;
+        IndexType position = -1;
+        double cost = 0.;
+    };
+
+    std::vector<AdaptiveChoice> adaptiveChoices;
+    std::vector<uint64_t> adaptiveKey;
+
     struct MemoEntry
     {
         uint64_t hash = 0;

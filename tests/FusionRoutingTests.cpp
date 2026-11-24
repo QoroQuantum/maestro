@@ -1165,6 +1165,65 @@ static void DecompositionAndFusionRanks(bool gpu = false)
     }
 }
 
+static void AdaptiveRoutingReplay()
+{
+    const auto cx = [](size_t a, size_t b) { return CF::CreateGate(Kind::kCXGateType, a, b); };
+    constexpr auto infinity = std::numeric_limits<double>::infinity();
+    for (bool mpo : {false, true})
+    {
+        MPSDummySimulator warm(6, mpo), inputs(6, mpo);
+        const auto update = [&](auto change) {
+            change(warm);
+            change(inputs);
+        };
+        update([](auto &planner) {
+            planner.SetRoutingCostModel(4, 1.);
+            planner.SetCurrentBondDimensions({2, 3, 4, 2, 2});
+        });
+        const auto future = cx(5, 2);
+        const auto measurement = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{2, 0}}));
+        std::vector<Op> suffix{cx(0, 5), future, measurement, cx(3, 0), cx(1, 4), cx(5, 0)};
+        const auto alternate = std::vector<Op>{cx(0, 5), cx(0, 1), cx(3, 1), cx(2, 4)};
+        const auto verify = [&](const std::vector<Op> &ops, int depth = 4, double incurred = 0., double incumbent = std::numeric_limits<double>::infinity()) {
+            // 'inputs' has never planned a route. Each comparison starts from a fresh estimator.
+            auto cold = inputs.Clone();
+            double cost = incumbent, expected = incumbent;
+            const auto position = warm.SelectMeetingPositionAdaptive(ops, 0, depth, depth - 1, incurred, cost);
+            const auto reference = cold->SelectMeetingPositionAdaptive(ops, 0, depth, depth - 1, incurred, expected);
+            Check(position == reference && cost == expected, "warm adaptive route or cost differs from a fresh estimator");
+            return std::make_pair(reference, expected);
+        };
+
+        const auto original = verify(suffix);
+        verify(suffix);
+        Check(verify(alternate) != original, "alternate suffix must distinguish a stale adaptive route");
+        Check(verify(suffix) == original, "alternating suffixes changed a repeated forecast");
+        // Keep the window and gate addresses stable while the next directed interaction and projection change.
+        future->SetQubit(0, 0);
+        verify(suffix);
+        measurement->SetQubit(0, 4);
+        verify(suffix);
+        suffix[2] = CF::CreateConditionalMeasurement(measurement, CF::CreateEqualCondition({0}, {true}));
+        verify(suffix);
+        suffix[2] = CF::CreateReset({1, 3});
+        verify(suffix);
+        verify(suffix, 3);
+        verify(suffix);
+        update([](auto &planner) { planner.SetRoutingMap({3, 1, 2, 5, 4, 0}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetCurrentBondDimensions({2, 2, 8, 3, 2}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetCurrentSiteRanks({1, 2, 1, 2, 1, 2}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetRoutingCostModel(2, 3.); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetModelDisentangling(false); });
+        const auto unbounded = verify(suffix);
+        Check(verify(suffix, 4, 0., 0.).second == 0., "adaptive replay replaced a better incumbent");
+        Check(verify(suffix, 4, 7., infinity).second > unbounded.second, "adaptive replay lost prior cost");
+    }
+}
+
 static void NonGateRoutingFallbacks(bool gpu = false)
 {
     for (bool fusion : {false, true})
@@ -2402,6 +2461,7 @@ int main(int argc, char **argv)
         CallbackFallback();
         DeferredGatesKeepRouting();
         FiringConditionalKeepsRouting();
+        AdaptiveRoutingReplay();
         NonGateRoutingFallbacks();
         VirtualHistoryBoundaries<Private::QCSimMPSSimulator>("2");
         VirtualHistoryBoundaries<Private::QCSimMPOSimulator>("4");
