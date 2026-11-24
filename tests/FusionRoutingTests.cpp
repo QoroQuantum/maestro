@@ -751,6 +751,10 @@ static void LowBondCheckpointRounds()
         const auto round = LowBondCheckpointRound::Capture(config, prefix, 4, false);
         Check(round.Repeats(rounds), "exactly repeated projected low-bond rounds were missed");
         Check(!round.Repeats(CF::CreateCircuit({h, cx, cz})), "round missing its leading projections was accepted");
+        // A conditional measurement may not run: it does not start a round, and the suffix keeps the normal lookahead.
+        const auto conditional =
+            CF::CreateConditionalMeasurement(std::static_pointer_cast<Circuits::MeasurementOperation<>>(measure), CF::CreateEqualCondition({1}, {true}));
+        Check(!round.Repeats(CF::CreateCircuit({conditional, reset, h, cx, cz})), "conditional measurement was taken for a certain projection");
         Check(!round.Repeats(CF::CreateCircuit({measure, wrong, h, cx, cz})), "uncovered two-site gate was accepted");
         Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cx, cz, measure, h, cx, cz})), "coverage carried over from the previous round");
         Check(!round.Repeats(CF::CreateCircuit({measure, reset, h, cz, cx})), "reordered two-site gates were accepted");

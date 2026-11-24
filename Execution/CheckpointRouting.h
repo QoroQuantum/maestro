@@ -1,6 +1,10 @@
 #pragma once
 
+#include "../Circuit/Circuit.h"
+#include "../Simulators/TensorNetworks/RoutingConfig.h"
 #include "SimulatorConfig.h"
+#include <cstddef>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <unordered_set>
@@ -85,6 +89,9 @@ class LowBondCheckpointRound
             const auto type = op->GetType();
             if (type == Circuits::OperationType::kNoOp || type == Circuits::OperationType::kDelay)
                 continue;
+            // Only an unconditional projection starts a round. A conditional
+            // measurement may not run, so its qubit can stay entangled: the
+            // suffix then keeps the normal lookahead (it is refused below).
             if (type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kReset)
             {
                 if (next)
