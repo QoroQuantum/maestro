@@ -1245,9 +1245,15 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     // QCSim's MPOSimulatorImpl applies single-qubit Reset and Measure in-place
     // without running an SVD sweep, so mpoSimulator->getBondDimensions() retains
     // pre-reset bond dimensions until a two-site gate sweeps across those bonds.
-    void DeflateLiveBondDimensions(const std::vector<long long> &map, double *dims, size_t count) const override
+    void DeflateLiveBondDimensions(const std::vector<long long> &map, double *dims, size_t count, bool automaticLookahead = false) const override
     {
         if (!pendingDeflate.count || !dims || !count || map.size() != nrQubits || count + 1 != nrQubits)
+            return;
+        // The next two-site decomposition still pays for the allocated tensors.
+        // In automatic lookahead, price that work from the observed dimensions
+        // while every cut has headroom. Once any cut reaches the cap, use the
+        // projected ranks to estimate the truncation cost of competing routes.
+        if (automaticLookahead && (physicalBondCap <= 0 || *std::max_element(dims, dims + count) < physicalBondCap))
             return;
         // Every cut across a run of product sites has the same rank. Compute the
         // estimates from the incoming bonds before assigning one rank to the run.

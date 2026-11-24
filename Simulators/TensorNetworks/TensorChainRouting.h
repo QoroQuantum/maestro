@@ -223,7 +223,8 @@ template <class Backend> class TensorChainRouting : public Backend
         }
     }
 
-    virtual void DeflateLiveBondDimensions(const std::vector<long long> & /*map*/, double * /*dims*/, size_t /*count*/) const
+    virtual void DeflateLiveBondDimensions(const std::vector<long long> & /*map*/, double * /*dims*/, size_t /*count*/,
+                                           bool /*automaticLookahead*/ = false) const
     {
     }
 
@@ -319,7 +320,7 @@ template <class Backend> class TensorChainRouting : public Backend
         EnsureDummySimulator(nrQubits);
         EnsureLiveSiteRanks();
         std::vector<double> estimates(bonds, bonds + count);
-        DeflateLiveBondDimensions(map, estimates.data(), estimates.size());
+        DeflateLiveBondDimensions(map, estimates.data(), estimates.size(), automaticDepth);
         if (trackVirtualBonds && dummyHistoryValid && dummySim->getQubitsMap() == map)
         {
             const auto &previous = dummySim->getCurrentBondDimensions();

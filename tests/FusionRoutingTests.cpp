@@ -1424,6 +1424,95 @@ static void ConfigureExactAutomatic(ISimulator &sim, size_t n, bool optIn = true
     sim.SetUseOptimalMeetingPosition(true);
 }
 
+template <class Backend> struct ProjectionSeedProbe : AutomaticRoutingProbe<Backend>
+{
+    mutable std::vector<double> seededBonds;
+
+    void DeflateLiveBondDimensions(const std::vector<long long> &map, double *dims, size_t count, bool automaticLookahead) const override
+    {
+        Backend::DeflateLiveBondDimensions(map, dims, count, automaticLookahead);
+        seededBonds.assign(dims, dims + count);
+    }
+
+    std::vector<double> Seed()
+    {
+        seededBonds.clear();
+        this->SaveState();
+        this->SetGatesCounter(0);
+        this->ApplyCX(0, 6);
+        this->RestoreState();
+        Check(seededBonds.size() + 1 == this->nrQubits, "native routing callback did not seed the forecast");
+        return seededBonds;
+    }
+};
+
+static void ProjectedMpsRoutingSeed()
+{
+    for (const bool reset : {false, true})
+    {
+        ProjectionSeedProbe<Private::QCSimMPSSimulator> sim;
+        ConfigureExactAutomatic(sim, 7);
+        sim.Configure("matrix_product_state_truncation_threshold", "1e-12");
+        // The product cut after site 4 separates a GHZ block from a Bell pair.
+        sim.ApplyH(0);
+        for (size_t q = 0; q < 4; ++q)
+            sim.ApplyCX(q, q + 1);
+        sim.ApplyH(5);
+        sim.ApplyCX(5, 6);
+        Check(sim.NativeBonds() == std::vector<double>{2., 2., 2., 2., 1., 2.}, "unexpected physical MPS ranks before projection");
+        if (reset)
+            sim.ApplyReset({2});
+        else
+            sim.Measure({2});
+        const auto physical = sim.NativeBonds();
+        Check(physical == std::vector<double>{1., 1., 1., 1., 1., 2.}, "MPS projection did not compress the GHZ block up to the product cut");
+        sim.SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 6), CF::CreateGate(Kind::kCXGateType, 1, 5)});
+        sim.SetAutomaticLookaheadDepth(2);
+        Check(sim.Seed() == physical, "MPS lookahead did not see the remote cuts reduced by the projection");
+    }
+}
+
+static void ProjectedMpoRoutingSeed()
+{
+    for (const bool reset : {false, true})
+    {
+        ProjectionSeedProbe<Private::QCSimMPOSimulator> sim;
+        ConfigureExactAutomatic(sim, 7);
+        // A GHZ state on sites 0..2 gives the projection two rank-four neighbors.
+        sim.ApplyH(0);
+        sim.ApplyCX(0, 1);
+        sim.ApplyCX(1, 2);
+        // Two crossing Bell pairs give the independent cut between sites 4 and 5 rank 16.
+        sim.ApplyH(3);
+        sim.ApplyCX(3, 4);
+        sim.ApplyH(5);
+        sim.ApplyCX(5, 6);
+        sim.ApplyCX(4, 5);
+        sim.ApplyCX(5, 4);
+        sim.ApplyCX(4, 5);
+        const auto physical = sim.NativeBonds();
+        Check(physical == std::vector<double>{4., 4., 1., 4., 16., 4.}, "unexpected physical MPO ranks before projection");
+        if (reset)
+            sim.ApplyReset({1});
+        else
+            sim.Measure({1});
+        Check(sim.NativeBonds() == physical, "MPO projection did not retain the native tensor sizes");
+        sim.SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 6), CF::CreateGate(Kind::kCXGateType, 1, 5)});
+        sim.SetLookaheadDepth(2);
+        const auto analytical = sim.Seed();
+        Check(analytical[0] < physical[0] && analytical[1] < physical[1] && std::equal(analytical.begin() + 2, analytical.end(), physical.begin() + 2),
+              "explicit MPO forecast did not reduce only the cuts neighboring the projection");
+        sim.SetAutomaticLookaheadDepth(0);
+        Check(sim.Seed() == analytical, "bounded MPO routing changed its projection estimate");
+        sim.SetAutomaticLookaheadDepth(2);
+        Check(sim.Seed() == physical, "automatic MPO lookahead underestimated the below-cap cost of moving allocated tensors");
+        sim.Configure("matrix_product_operator_max_bond_dimension", "0");
+        Check(sim.Seed() == physical, "automatic MPO lookahead underestimated the cost of moving uncapped tensors");
+        sim.Configure("matrix_product_operator_max_bond_dimension", "16");
+        Check(sim.Seed() == analytical, "MPO lookahead ignored a saturated cut elsewhere in the same chain");
+    }
+}
+
 template <class Backend> static void AutomaticRoutingSelection(size_t n, bool eligible)
 {
     AutomaticRoutingProbe<Backend> sim;
@@ -2441,6 +2530,8 @@ int main(int argc, char **argv)
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(6, true);
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(8, true);
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(9, false);
+        ProjectedMpsRoutingSeed();
+        ProjectedMpoRoutingSeed();
         AutomaticRoutingLifecycle<Private::QCSimMPSSimulator>(12);
         AutomaticRoutingLifecycle<Private::QCSimMPOSimulator>(6);
         AutomaticFactoryFusionAndChannels();
