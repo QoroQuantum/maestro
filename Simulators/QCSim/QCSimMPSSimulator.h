@@ -28,6 +28,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
+        ResetLiveSiteRanks();
         if (nrQubits != 0)
         {
             InitializeSamplingSeed();
@@ -87,6 +88,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             mpsSimulator->SetInitialQubitsMap(initialMap);
             EnsureDummySimulator(initialMap.size());
             dummySim->SetInitialQubitsMap(initialMap);
+            ResetLiveSiteRanks();
         }
     }
 
@@ -179,7 +181,6 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     size_t Measure(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         if (qubits.size() > sizeof(size_t) * 8)
             std::cerr << "Warning: The number of qubits to measure is larger than the "
                          "number of bits in the size_t type, the outcome will be undefined"
@@ -197,6 +198,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 mask <<= 1;
             }
         }
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
         return res;
@@ -204,7 +206,6 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         std::vector<bool> res(qubits.size(), false);
         DontNotify();
         {
@@ -214,6 +215,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 if (measured[qubits[q]])
                     res[q] = true;
         }
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
         return res;
@@ -221,13 +223,31 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         DontNotify();
         {
             for (size_t qubit : qubits)
                 if (mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
                     mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubit));
         }
+        RecordDisentangledQubits(qubits);
+        Notify();
+        NotifyObservers(qubits);
+    }
+
+    void ApplyResetToTargets(const Types::qubits_vector &qubits, const std::vector<bool> &resetTargets) override
+    {
+        DontNotify();
+        {
+            for (size_t qi = 0; qi < qubits.size(); ++qi)
+            {
+                const size_t qubit = qubits[qi];
+                const bool wantOne = qi < resetTargets.size() && resetTargets[qi];
+                const bool measuredOne = mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit));
+                if (measuredOne != wantOne)
+                    mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubit));
+            }
+        }
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
     }
@@ -355,6 +375,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                         random = std::min((random - mixture.identity - mixture.phaseFlip) / mixture.reset, std::nextafter(1.0, 0.0));
                         mpsSimulator->ApplyKrausOperator(QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation), random,
                                                          static_cast<Eigen::Index>(first));
+                        RecordDisentangledQubits({first});
                     }
                     else if (random >= mixture.identity)
                         ApplyZ(first);
@@ -559,12 +580,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             {
                 auto savedState = mpsSimulator->getState();
                 const auto savedHistory = CaptureDummyHistory();
+                const auto savedRanks = liveSiteRank; // each measurement below marks its qubits as collapsed
                 for (size_t shot = 0; shot < shots; ++shot)
                 {
                     const size_t meas = Measure(qubits);
                     ++result[meas];
                     mpsSimulator->setState(savedState);
                 }
+                liveSiteRank = savedRanks;
                 RestoreDummyHistory(savedHistory);
             }
         }
@@ -629,12 +652,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             {
                 auto savedState = mpsSimulator->getState();
                 const auto savedHistory = CaptureDummyHistory();
+                const auto savedRanks = liveSiteRank; // each measurement below marks its qubits as collapsed
                 for (size_t shot = 0; shot < shots; ++shot)
                 {
                     const auto meas = MeasureMany(qubits);
                     ++result[meas];
                     mpsSimulator->setState(savedState);
                 }
+                liveSiteRank = savedRanks;
                 RestoreDummyHistory(savedHistory);
             }
         }
@@ -1132,10 +1157,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         }
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
+        cloned->upcomingHasDisentangle = upcomingHasDisentangle;
         cloned->RefreshRoutingSettings();
         cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
+        cloned->liveSiteRank = liveSiteRank;
+        cloned->savedSiteRank = savedSiteRank;
+        cloned->hasSavedSiteRank = hasSavedSiteRank;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(seed);
         else

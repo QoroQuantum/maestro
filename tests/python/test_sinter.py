@@ -1387,6 +1387,28 @@ def test_noisy_fidelity_with_circuit_channel_on_statevector():
     assert result["fidelity"] == pytest.approx(0.75, abs=0.05)
 
 
+def test_a_memory_checkpoint_keeps_the_bonds_of_index_order():
+    """The checkpoint of a memory experiment is its first round. A layout searched from that round alone ran
+    the following rounds with larger bonds (a d=5 memory truncated at a bond dimension index order never
+    reaches): it is taken only at a large predicted gain, which a memory circuit does not show."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=2)
+
+    def compiled(disable):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                         max_bond_dimension=64, disable_optimized_swapping=disable)
+        sampler = MaestroCompiledSampler(circuit, config=config, seed=5)
+        assert sampler.checkpoint_sim is not None  # a fixed MPS backend samples from the checkpoint
+        return sampler
+
+    routed, unrouted = compiled(False), compiled(True)
+    assert routed.checkpoint_sim.max_bond_dim == unrouted.checkpoint_sim.max_bond_dim
+    result = routed.checkpoint_sim.execute_suffix(routed.suffix_qc, shots=2, noise_seed=17,
+                                                  num_measurements=routed.num_measurements, return_samples=True)
+    measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+    events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
+    assert not events.any()  # a noiseless memory flips no detector and no observable
+
+
 def test_sinter_public_api_is_the_documented_entry_points():
     import maestro.sinter as module
     assert set(module.__all__) == {"MaestroCompiledSampler", "MaestroSinterSampler", "translate_stim_to_maestro"}

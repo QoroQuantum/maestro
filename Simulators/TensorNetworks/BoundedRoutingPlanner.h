@@ -55,12 +55,19 @@ class BoundedRoutingPlanner
     };
 
   private:
+    struct Disentangle
+    {
+        Index qubit = 0;
+        double probability = 1.;
+    };
+
     struct Gate
     {
         Index a = 0, b = 0;
         bool valid = false, swap = false;
         double rank = 4.;
         std::vector<std::pair<Index, size_t>> singlesBefore;
+        std::vector<Disentangle> disentanglesBefore;
     };
 
   public:
@@ -116,36 +123,56 @@ class BoundedRoutingPlanner
         prepared->operationToGate.assign(operations.size(), -1);
         std::vector<size_t> singles(n, 0);
         std::vector<Index> touchedSingles;
+        std::vector<Disentangle> pendingDisentangles;
         for (size_t i = 0; i < operations.size(); ++i)
         {
             const auto &operation = operations[i];
             Gate item;
-            if (operation && operation->GetType() == Circuits::OperationType::kGate)
+            if (operation)
             {
-                const auto qubits = operation->AffectedQubits();
-                const bool validQubits = std::all_of(qubits.begin(), qubits.end(), [n](auto q) { return q < n; });
-                if (validQubits && qubits.size() == 1)
+                const auto opType = operation->GetType();
+                if (opType == Circuits::OperationType::kMeasurement || opType == Circuits::OperationType::kConditionalMeasurement ||
+                    opType == Circuits::OperationType::kReset)
                 {
-                    // A majority-length list is a sentinel: the dense path
-                    // scans and resets every counter, so later indices are unused.
-                    if (!singles[qubits[0]] && touchedSingles.size() <= n / 2)
-                        touchedSingles.push_back(static_cast<Index>(qubits[0]));
-                    ++singles[qubits[0]];
-                    continue;
+                    const auto qubits = operation->AffectedQubits();
+                    const bool validQubits = std::all_of(qubits.begin(), qubits.end(), [n](auto q) { return q < n; });
+                    if (validQubits)
+                    {
+                        const double prob = (opType == Circuits::OperationType::kConditionalMeasurement) ? 0.5 : 1.;
+                        for (const auto q : qubits)
+                            pendingDisentangles.push_back({static_cast<Index>(q), prob});
+                        continue;
+                    }
                 }
-                if (validQubits && qubits.size() == 2 && qubits[0] != qubits[1])
+                else if (opType == Circuits::OperationType::kGate)
                 {
-                    item.a = qubits[0];
-                    item.b = qubits[1];
-                    item.valid = true;
-                    const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(operation);
-                    const auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(operation);
-                    item.swap = (info && info->isSwap) ||
-                                (gate && (gate->GetGateType() == Circuits::QuantumGateType::kSwapGateType || ExactSwapMatrix(gate->GetMatrix())));
-                    item.rank = info ? info->schmidtRank : gate ? GateSchmidtRank(*gate) : 4.;
-                    prepared->operationToGate[i] = static_cast<Index>(prepared->gates.size());
+                    const auto qubits = operation->AffectedQubits();
+                    const bool validQubits = std::all_of(qubits.begin(), qubits.end(), [n](auto q) { return q < n; });
+                    if (validQubits && qubits.size() == 1)
+                    {
+                        // A majority-length list is a sentinel: the dense path
+                        // scans and resets every counter, so later indices are unused.
+                        if (!singles[qubits[0]] && touchedSingles.size() <= n / 2)
+                            touchedSingles.push_back(static_cast<Index>(qubits[0]));
+                        ++singles[qubits[0]];
+                        continue;
+                    }
+                    if (validQubits && qubits.size() == 2 && qubits[0] != qubits[1])
+                    {
+                        item.a = qubits[0];
+                        item.b = qubits[1];
+                        item.valid = true;
+                        const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(operation);
+                        const auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(operation);
+                        item.swap = (info && info->isSwap) ||
+                                    (gate && (gate->GetGateType() == Circuits::QuantumGateType::kSwapGateType || ExactSwapMatrix(gate->GetMatrix())));
+                        item.rank = info ? info->schmidtRank : gate ? GateSchmidtRank(*gate) : 4.;
+                        prepared->operationToGate[i] = static_cast<Index>(prepared->gates.size());
+                    }
                 }
             }
+            item.disentanglesBefore = std::move(pendingDisentangles);
+            pendingDisentangles.clear();
             const auto emitSingle = [&item, &singles](Index q) {
                 item.singlesBefore.emplace_back(q, singles[q]);
                 singles[q] = 0;
@@ -172,10 +199,11 @@ class BoundedRoutingPlanner
     }
 
     /** Return a physical meeting bond, or -1 to use the native fallback. */
-    template <class Bond> Index Select(const Map &map, const Bond *bonds, size_t bondCount, size_t operationIndex)
+    template <class Bond>
+    Index Select(const Map &map, const Bond *bonds, size_t bondCount, size_t operationIndex, const double *siteRanks = nullptr, size_t siteRankCount = 0)
     {
         const Index entry = operationIndex < operationToGate_.size() ? operationToGate_[operationIndex] : -1;
-        if (entry < 0 || !gates_[entry].valid || gates_[entry].swap || !Seed(map, bonds, bondCount))
+        if (entry < 0 || !gates_[entry].valid || gates_[entry].swap || !Seed(map, bonds, bondCount, siteRanks, siteRankCount))
             return -1;
         const auto &gate = gates_[entry];
         const Index low = std::min(map[gate.a], map[gate.b]);
@@ -202,7 +230,12 @@ class BoundedRoutingPlanner
 
     template <class Bond> Index Select(const Map &map, const std::vector<Bond> &bonds, size_t operationIndex)
     {
-        return Select(map, bonds.data(), bonds.size(), operationIndex);
+        return Select(map, bonds.data(), bonds.size(), operationIndex, nullptr, 0);
+    }
+
+    template <class Bond> Index Select(const Map &map, const std::vector<Bond> &bonds, size_t operationIndex, const std::vector<double> &siteRanks)
+    {
+        return Select(map, bonds.data(), bonds.size(), operationIndex, siteRanks.data(), siteRanks.size());
     }
 
   private:
@@ -210,6 +243,8 @@ class BoundedRoutingPlanner
     {
         Map map, inverse;
         std::vector<double> bonds;
+        std::vector<double> siteRanks;
+        bool hasSiteRanks = false;
     };
 
     struct CandidateSet
@@ -273,9 +308,10 @@ class BoundedRoutingPlanner
         state.map.resize(n_);
         state.inverse.resize(n_);
         state.bonds.resize(n_ - 1);
+        state.siteRanks.resize(n_, operatorChain_ ? 4. : 2.);
     }
 
-    template <class Bond> bool Seed(const Map &map, const Bond *bonds, size_t bondCount)
+    template <class Bond> bool Seed(const Map &map, const Bond *bonds, size_t bondCount, const double *siteRanks = nullptr, size_t siteRankCount = 0)
     {
         if (map.size() != n_ || bondCount != n_ - 1 || bonds == nullptr)
             return false;
@@ -294,13 +330,29 @@ class BoundedRoutingPlanner
                 return false;
             initial_.bonds[b] = rank;
         }
+        const double d = operatorChain_ ? 4. : 2.;
+        if (siteRanks != nullptr && siteRankCount == n_)
+        {
+            initial_.hasSiteRanks = true;
+            for (size_t q = 0; q < n_; ++q)
+            {
+                const double given = std::isfinite(siteRanks[q]) ? siteRanks[q] : d;
+                initial_.siteRanks[q] = std::clamp(given, 1., d);
+            }
+        }
+        else
+        {
+            initial_.hasSiteRanks = false;
+            std::fill(initial_.siteRanks.begin(), initial_.siteRanks.end(), d);
+        }
         return true;
     }
 
     // The installed native local routing policy. This also chooses every
     // future meeting position in a forecast; only the first meeting varies.
-    static Index LocalMeeting(const std::vector<double> &dims, Index low, Index high, bool operatorChain)
+    static Index LocalMeeting(const State &state, Index low, Index high, bool operatorChain)
     {
+        const auto &dims = state.bonds;
         const Index span = high - low;
         if (span <= 1)
             return low;
@@ -320,16 +372,21 @@ class BoundedRoutingPlanner
             b[i + 1] = dims[low + i];
         b[span + 1] = high < static_cast<Index>(dims.size()) ? dims[high] : 1.;
         const double d = operatorChain ? 4. : 2.;
-        const double e1 = std::max(b[0], b[1]), e2 = std::max(b[span], b[span + 1]);
+        const double sr1 = state.hasSiteRanks ? state.siteRanks[state.inverse[low]] : d;
+        const double sr2 = state.hasSiteRanks ? state.siteRanks[state.inverse[high]] : d;
+        const double e1 = (sr1 <= 1. + 1e-9) ? 1. : std::max(b[0], b[1]);
+        const double e2 = (sr2 <= 1. + 1e-9) ? 1. : std::max(b[span], b[span + 1]);
         for (Index i = 0; i < span - 1; ++i)
-            p[i + 1] = p[i] + std::max(0., Cube(std::min(e1, d * b[i + 1])) - Cube(b[i + 1]));
+            p[i + 1] = p[i] + ((sr1 <= 1. + 1e-9) ? 0. : std::max(0., Cube(std::min(e1, sr1 * b[i + 1])) - Cube(b[i + 1])));
         for (Index i = span - 1; i > 0; --i)
-            s[i - 1] = s[i] + std::max(0., Cube(std::min(e2, d * b[i + 1])) - Cube(b[i + 1]));
+            s[i - 1] = s[i] + ((sr2 <= 1. + 1e-9) ? 0. : std::max(0., Cube(std::min(e2, sr2 * b[i + 1])) - Cube(b[i + 1])));
+        const double w1 = (sr1 <= 1. + 1e-9 ? 0. : 1.) * b[0] * b[1];
+        const double w2 = (sr2 <= 1. + 1e-9 ? 0. : 1.) * b[span] * b[span + 1];
         Index chosen = low;
         double best = std::numeric_limits<double>::infinity();
         for (Index i = 0; i < span; ++i)
         {
-            const double tie = 1e-6 * (b[span] * b[span + 1] > b[0] * b[1] ? span - 1 - i : i);
+            const double tie = 1e-6 * (w2 > w1 ? span - 1 - i : i);
             const double score = Cube(b[i + 1]) + .5 * (p[i] + s[i]) + .05 * b[i] * b[i + 1] * b[i + 2] + tie;
             if (score < best)
             {
@@ -353,7 +410,7 @@ class BoundedRoutingPlanner
             out.positions[out.count++] = position;
         };
         // Ordering is part of the policy: exact score ties keep the first.
-        add(LocalMeeting(initial_.bonds, low, high, operatorChain_));
+        add(LocalMeeting(initial_, low, high, operatorChain_));
         add(low);
         add(high - 1);
         add(low + (high - low) / 2);
@@ -388,14 +445,22 @@ class BoundedRoutingPlanner
         return steps;
     }
 
-    double Grow(double left, double middle, double right, double maximum, bool swap, double gateRank) const
+    double Grow(double left, double middle, double right, double maximum, bool swap, double gateRank, double eLeft, double eRight) const
     {
         const double d = operatorChain_ ? 4. : 2., rank = operatorChain_ ? gateRank * gateRank : gateRank;
         if (swap)
         {
             if (left == 1. && middle == 1. && right == 1.)
                 return 1.;
-            return std::max(1., std::min({d * left, d * right, rank * middle, maximum}));
+            const bool leftProd = eLeft <= 1. + 1e-9;
+            const bool rightProd = eRight <= 1. + 1e-9;
+            if (leftProd && rightProd)
+                return std::clamp(middle, 1., maximum);
+            if (leftProd)
+                return std::clamp(right, 1., maximum);
+            if (rightProd)
+                return std::clamp(left, 1., maximum);
+            return std::max(1., std::min({eRight * left, eLeft * right, eLeft * eRight * middle, maximum}));
         }
         const auto at = [&](double r) { return std::max(1., std::min(.7 * std::min(d * std::min(left, right), middle * r), maximum)); };
         return rank >= 2. ? at(rank) : middle + (std::max(rank, 1.) - 1.) * (at(2.) - middle);
@@ -417,15 +482,85 @@ class BoundedRoutingPlanner
         scratch_.inverse[scratch_.map[b]] = b;
     }
 
+    void ApplyScratchDisentangle(Index q, double probability)
+    {
+        if (q < 0 || static_cast<size_t>(q) >= n_ || n_ < 2 || probability <= 0.)
+            return;
+        scratch_.hasSiteRanks = true;
+        const Index p = scratch_.map[q];
+        const double d = operatorChain_ ? 4. : 2.;
+        const Index nBonds = static_cast<Index>(n_ - 1);
+        const auto blend = [probability](double collapsed, double current) {
+            return probability >= 1. ? collapsed : (current + probability * (collapsed - current));
+        };
+
+        Index sweepLeft = p - 1, sweepRight = p;
+        if (p == 0)
+        {
+            scratch_.bonds[0] = std::clamp(blend(1., scratch_.bonds[0]), 1., maximum_[0]);
+            sweepLeft = -1;
+            sweepRight = 1;
+        }
+        else if (p == static_cast<Index>(n_ - 1))
+        {
+            scratch_.bonds[nBonds - 1] = std::clamp(blend(1., scratch_.bonds[nBonds - 1]), 1., maximum_[nBonds - 1]);
+            sweepLeft = nBonds - 2;
+            sweepRight = nBonds;
+        }
+        else
+        {
+            const double chiL = scratch_.bonds[p - 1], chiR = scratch_.bonds[p];
+            const double chiMin = std::min(chiL, chiR), chiMax = std::max(chiL, chiR);
+            double collapsed = chiMin;
+            if (scratch_.siteRanks[q] > 1. + 1e-9)
+            {
+                const double eSym = std::max(1., scratch_.siteRanks[q] / (chiMax / std::max(1., chiMin)));
+                collapsed = std::max(1., chiMin / std::pow(eSym, 0.75));
+            }
+            scratch_.bonds[p - 1] = std::clamp(blend(collapsed, chiL), 1., maximum_[p - 1]);
+            scratch_.bonds[p] = std::clamp(blend(collapsed, chiR), 1., maximum_[p]);
+            sweepLeft = p - 2;
+            sweepRight = p + 1;
+        }
+        scratch_.siteRanks[q] = std::max(1., blend(1., scratch_.siteRanks[q]));
+        for (Index b = std::max<Index>(1, sweepRight); b < nBonds; ++b)
+        {
+            const double limit = d * scratch_.bonds[b - 1];
+            if (scratch_.bonds[b] > limit)
+                scratch_.bonds[b] = std::clamp(limit, 1., maximum_[b]);
+            else
+                break;
+        }
+        for (Index b = std::min<Index>(nBonds - 2, sweepLeft); b >= 0; --b)
+        {
+            const double limit = d * scratch_.bonds[b + 1];
+            if (scratch_.bonds[b] > limit)
+                scratch_.bonds[b] = std::clamp(limit, 1., maximum_[b]);
+            else
+                break;
+        }
+    }
+
     void Adjacent(Index bond, bool swap, double gateRank, double &work)
     {
+        const double d = operatorChain_ ? 4. : 2.;
         const double left = bond ? scratch_.bonds[bond - 1] : 1., middle = scratch_.bonds[bond];
         const double right = bond + 1 < static_cast<Index>(n_ - 1) ? scratch_.bonds[bond + 1] : 1.;
-        const double post = Grow(left, middle, right, maximum_[bond], swap, gateRank);
+        const Index qL = scratch_.inverse[bond], qR = scratch_.inverse[bond + 1];
+        const double eL = scratch_.hasSiteRanks ? scratch_.siteRanks[qL] : d;
+        const double eR = scratch_.hasSiteRanks ? scratch_.siteRanks[qR] : d;
+        const double post = Grow(left, middle, right, maximum_[bond], swap, gateRank, eL, eR);
         work += StepWork(left, middle, right, post, swap);
         scratch_.bonds[bond] = post;
         if (swap)
-            Relabel(scratch_.inverse[bond], scratch_.inverse[bond + 1]);
+            Relabel(qL, qR);
+        else if (scratch_.hasSiteRanks && gateRank > 1. + 1e-9)
+        {
+            const double fullRank = operatorChain_ ? gateRank * gateRank : gateRank;
+            const double factor = 1. + .7 * (std::min(d, fullRank) - 1.);
+            scratch_.siteRanks[qL] = std::clamp(scratch_.siteRanks[qL] * factor, 1., d);
+            scratch_.siteRanks[qR] = std::clamp(scratch_.siteRanks[qR] * factor, 1., d);
+        }
     }
 
     double Evaluate(Index entry, Index meeting, size_t horizon, double incumbent)
@@ -439,6 +574,9 @@ class BoundedRoutingPlanner
             if (!gate.valid)
                 break;
             if (step)
+            {
+                for (const auto &dis : gate.disentanglesBefore)
+                    ApplyScratchDisentangle(dis.qubit, dis.probability);
                 for (const auto &single : gate.singlesBefore)
                 {
                     const Index position = scratch_.map[single.first];
@@ -446,6 +584,7 @@ class BoundedRoutingPlanner
                     const double right = position < static_cast<Index>(n_ - 1) ? scratch_.bonds[position] : 1.;
                     work += static_cast<double>(single.second) * d * d * left * right;
                 }
+            }
             if (gate.swap)
             {
                 Relabel(gate.a, gate.b);
@@ -453,7 +592,7 @@ class BoundedRoutingPlanner
             }
             const Index low = std::min(scratch_.map[gate.a], scratch_.map[gate.b]);
             const Index high = std::max(scratch_.map[gate.a], scratch_.map[gate.b]);
-            const Index meet = step == 0 ? meeting : LocalMeeting(scratch_.bonds, low, high, operatorChain_);
+            const Index meet = step == 0 ? meeting : LocalMeeting(scratch_, low, high, operatorChain_);
             // Native routing moves the lower endpoint right before moving the
             // upper endpoint left. Each step sees the updated adjacent ranks.
             for (Index bond = low; bond < meet; ++bond)

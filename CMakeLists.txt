@@ -758,6 +758,7 @@ if(COMPILE_TESTS)
 
     set(TESTSSRC
         tests/AerTests.cpp
+        tests/BoundedRoutingPlannerTests.cpp
         tests/DensityMatrixTests.cpp
         tests/CircTests.cpp
         tests/CliffordTests.cpp
@@ -1251,6 +1252,7 @@ if(COMPILE_TESTS)
     target_link_libraries(fusion_routing_tests PRIVATE maestro)
     add_test(NAME fusion_routing_tests COMMAND fusion_routing_tests)
     add_executable(bounded_routing_planner_tests tests/BoundedRoutingPlannerTests.cpp)
+    target_compile_definitions(bounded_routing_planner_tests PRIVATE MAESTRO_BOUNDED_ROUTING_TEST_MAIN)
     target_include_directories(bounded_routing_planner_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(bounded_routing_planner_tests PRIVATE maestro)
     add_test(NAME bounded_routing_planner COMMAND bounded_routing_planner_tests)

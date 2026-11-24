@@ -2478,11 +2478,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const uint64_t suffix_head_streams = draws ? Simulators::IState::DeriveSeed(suffix_seed, 0x6865616473ULL) : head_streams;
             if (draws)
                 simulator->SetSeed(Simulators::IState::DeriveSeed(suffix_seed, outputs.size()));
+            // The lookahead follows the suffix's two-qubit gates, which its noise realizations share: resolved once.
+            context.network->PrepareCheckpointRouting(simulator, suffix.circuit, false);
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = runtime_suffix ? runtime_suffix : r == 0 ? first_sample : Inject(suffixPlan, noise, rng);
                 const size_t repetitions = shots / samples + (r < shots % samples ? 1 : 0);
-                context.network->PrepareCheckpointRouting(simulator, noisy, false);
                 simulator->RestoreState();
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());

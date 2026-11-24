@@ -1,7 +1,10 @@
 #pragma once
+#include "../../Circuit/Operations/Operations.h"
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace Simulators::RoutingConfig
 {
@@ -54,6 +57,32 @@ template <class Config> bool VirtualBondsEnabled(const Config &config)
     if (config.IsSet(kLegacyCap) && ParseFlag(config.GetConfiguration(kLegacyCap)))
         return false;
     return config.IsSet(kVirtualBonds) && ParseFlag(config.GetConfiguration(kVirtualBonds));
+}
+
+// When mid-circuit disentangling operations (measurements or resets) are present,
+// bond dimensions oscillate across syndrome rounds instead of saturating globally.
+// Auto-enabling virtual-bond truncation overflow pricing protects accuracy unless
+// explicitly disabled by mps_routing_legacy_cap or mps_routing_virtual_bonds=false.
+template <class Config> bool VirtualBondsAutoAllowed(const Config &config)
+{
+    if (config.IsSet(kLegacyCap) && ParseFlag(config.GetConfiguration(kLegacyCap)))
+        return false;
+    if (config.IsSet(kVirtualBonds))
+        return ParseFlag(config.GetConfiguration(kVirtualBonds));
+    return true;
+}
+
+inline bool IsDisentanglingOperationType(Circuits::OperationType type) noexcept
+{
+    return type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement || type == Circuits::OperationType::kReset;
+}
+
+template <class OpPtr> bool ContainsDisentanglingOperations(const std::vector<OpPtr> &operations) noexcept
+{
+    for (const auto &op : operations)
+        if (op && IsDisentanglingOperationType(op->GetType()))
+            return true;
+    return false;
 }
 
 template <class Config> double TruncationWeight(const Config &config)

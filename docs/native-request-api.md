@@ -1270,8 +1270,11 @@ The same optional field is available on Python `SimulatorConfig`; `None`
 retains a native request value or the default. Direct simulator callers retain
 native routing until the network explicitly resolves automatic lookahead.
 For `checkpoint_batch` and Python's `PrefixCheckpointedSimulator`, the
-network chooses the initial layout before executing the prefix. Each suffix
-uses the saved layout and resolves lookahead for its own gates.
+network chooses the initial layout before executing the prefix. Qubits whose
+two-qubit gates form lines are placed along the chain. Any other layout is
+searched from the prefix alone, which is only part of the work, so it replaces
+index order only at a predicted gain of 100 or more. Each suffix uses the saved
+layout and resolves lookahead once per call, from its own gates.
 `disable_optimized_swapping=true` disables both the initial layout search and lookahead.
 At finite bond caps, routing can change truncation error as well as runtime.
 The combined policy has measured MPS and MPO accuracy regressions, including a
@@ -1302,6 +1305,11 @@ requires optimized swapping, positive lookahead, and room above the physical cap
 The virtual limit is at most four times that cap and never exceeds the exact
 central-cut rank. This allows two additional rank doublings without tying the
 heuristic's strength to register size.
+On the QCSim chains, a circuit that holds measurements or resets uses these
+estimates without the option, and its routing model lowers the bond estimates
+at the measured and reset qubits. `mps_routing_virtual_bonds=false` or
+`mps_routing_legacy_cap=true` turns this off. GPU routing does not model
+measurements and resets.
 
 For an estimated dimension `d` and physical cap `c`, the routing score is
 `min(d,c)^3 * (1 + weight * max(0,d/c - 1))`. The first term models capped

@@ -131,7 +131,14 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
                             PrepareBoundedRouting();
                     }
                     if (boundedRouting)
-                        return boundedRouting->Select(CurrentRoutingMap(), bonds.data(), bonds.size(), static_cast<size_t>(upcomingGateIndex));
+                    {
+                        const auto map = CurrentRoutingMap();
+                        std::vector<double> liveBonds(bonds.begin(), bonds.end());
+                        DeflateLiveBondDimensions(map, liveBonds.data(), liveBonds.size());
+                        EnsureLiveSiteRanks();
+                        return boundedRouting->Select(map, liveBonds.data(), liveBonds.size(), static_cast<size_t>(upcomingGateIndex),
+                                                      liveSiteRank.size() == nrQubits ? liveSiteRank.data() : nullptr, liveSiteRank.size());
+                    }
                 }
                 return PlanMeetingPosition(bonds.data(), bonds.size());
             }
@@ -144,12 +151,18 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
         bondDimensionCallback = [this](auto maximum) { curMaxBondDim = std::max(curMaxBondDim, static_cast<size_t>(maximum)); };
     }
 
+    // Measure, MeasureMany and ApplyReset of the QCSim chains report the qubits they collapse.
+    bool TracksDisentangling() const override
+    {
+        return true;
+    }
+
     bool UsesBoundedRouting() const
     {
         // Apply the measured policy only to automatic CPU routing. Explicit
         // depth and cost-model overrides continue to select the legacy policy.
         return automaticRoutingDepth && useOptimalMeetingPosition && lookaheadDepth == 0 && nrQubits > 1 &&
-               RoutingConfig::GetStrategy(configuration) == RoutingConfig::Strategy::Combined && !virtualBondsEnabled && growthFactorGate == 0.7 &&
+               RoutingConfig::GetStrategy(configuration) == RoutingConfig::Strategy::Combined && !explicitVirtualBondsEnabled && growthFactorGate == 0.7 &&
                growthFactorSwap == 1. && (operatorChain ? nrQubits <= 8 : nrQubits > 10);
     }
 

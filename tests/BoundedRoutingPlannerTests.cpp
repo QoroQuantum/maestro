@@ -1,3 +1,9 @@
+#ifndef MAESTRO_BOUNDED_ROUTING_TEST_MAIN
+#include <boost/test/unit_test.hpp>
+#undef min
+#undef max
+#endif
+
 #include "Circuit/Factory.h"
 #include "Circuit/Operations/QuantumChannelOperation.h"
 #include "Simulators/TensorNetworks/BoundedRoutingPlanner.h"
@@ -76,6 +82,11 @@ struct BoundedRoutingPlannerTestAccess
         return operations->gates.at(gate).singlesBefore;
     }
 
+    static const auto &Disentangles(const Planner::SharedOperations &operations, size_t gate)
+    {
+        return operations->gates.at(gate).disentanglesBefore;
+    }
+
     static size_t GateCount(const Planner::SharedOperations &operations)
     {
         return operations->gates.size();
@@ -94,8 +105,12 @@ using Factory = Circuits::CircuitFactory<>;
 
 void Check(bool condition, const char *message)
 {
+#ifdef MAESTRO_BOUNDED_ROUTING_TEST_MAIN
     if (!condition)
         throw std::runtime_error(message);
+#else
+    BOOST_REQUIRE_MESSAGE(condition, message);
+#endif
 }
 
 template <class Function> void Invalid(Function function)
@@ -481,8 +496,63 @@ void ImmutableTablesAndIndependentScratch()
     metadata.reset();
     Check(source.Select(map, ranks, 0) == expected, "Prepared operations depended on source-vector lifetime");
 }
+
+void DisentangleAndSiteRankForecast()
+{
+    const auto map = Identity(6);
+    const std::vector<double> bonds{16., 16., 16., 16., 16.};
+    const std::vector<Op> measOnly{Gate(0, 5), Factory::CreateMeasurement({{5, 0}}), Gate(5, 1), Gate(1, 2)};
+    const std::vector<Op> measReset{Gate(0, 5), Factory::CreateMeasurement({{5, 0}}), Factory::CreateReset({5}), Gate(5, 1), Gate(1, 2)};
+    const std::vector<Op> noDisentangle{Gate(0, 5), Gate(5, 1), Gate(1, 2)};
+
+    const auto sharedMR = Planner::PrepareOperations(6, measReset);
+    Check(Access::GateCount(sharedMR) == 3, "Measurement or reset split two-qubit gate table");
+    Check(Access::Disentangles(sharedMR, 1).size() == 2 && Access::Disentangles(sharedMR, 1)[0].qubit == 5 &&
+              Access::Disentangles(sharedMR, 1)[0].probability == 1.,
+          "Prepared disentangle metadata missing");
+
+    for (bool mpo : {false, true})
+        for (const auto policy : {Planner::Policy::Work4, Planner::Policy::Work24})
+        {
+            Planner pM(6, mpo, 16, measOnly, policy);
+            Planner pMR(6, mpo, 16, sharedMR, policy);
+            Planner pNone(6, mpo, 16, noDisentangle, policy);
+
+            Check(pMR.Select(map, bonds, 1) == -1 && pMR.Select(map, bonds, 2) == -1, "Direct measurement/reset query did not delegate to native");
+            if (policy == Planner::Policy::Work24)
+                Check(Access::Horizon(pMR, map, 1) == 3, "Measurement or reset truncated bounded forecast horizon");
+
+            const auto scoresM = Access::Inspect(pM, map, bonds, 0);
+            const auto scoresMR = Access::Inspect(pMR, map, bonds, 0);
+            const auto scoresNone = Access::Inspect(pNone, map, bonds, 0);
+            Check(scoresM.positions == scoresMR.positions && scoresM.full.size() == scoresMR.full.size(), "MR changed candidate list");
+            for (size_t i = 0; i < scoresM.full.size(); ++i)
+                Check(std::abs(scoresM.full[i] - scoresMR.full[i]) < 1e-9, "Measure followed by Reset double-counted bond drop");
+
+            // Meeting at m = 4 keeps qubit 5 at the right boundary (site 5), so
+            // Measure/Reset(5) collapses bond 4 to 1 and strictly lowers future work.
+            size_t idx4 = 0;
+            while (idx4 < scoresMR.positions.size() && scoresMR.positions[idx4] != 4)
+                ++idx4;
+            Check(idx4 < scoresMR.positions.size() && scoresMR.full[idx4] < scoresNone.full[idx4],
+                  "Forecast did not credit boundary bond collapse after Measure/Reset");
+
+            // Interior ancilla 3 reset inside symmetric bystander entanglement [2,4,8,8,8,8,8,4,2]:
+            // without siteRanks, symmetry tie-breaking selects low (m = 3);
+            // with siteRanks[3] = 1, swapping 3 rightwards conserves bystander rank 8
+            // without cap inflation and anchors entangled partner 6 at m = 5.
+            const auto map10 = Identity(10);
+            const std::vector<double> bonds10{2., 4., 8., 8., 8., 8., 8., 4., 2.};
+            Planner single(10, mpo, mpo ? 32 : 16, std::vector<Op>{Gate(3, 6)}, policy);
+            Check(single.Select(map10, bonds10, 0) == 3, "Unweighted bystander baseline changed");
+            const double d = mpo ? 4. : 2.;
+            const std::vector<double> siteRanks{d, d, d, 1., d, d, d, d, d, d};
+            Check(single.Select(map10, bonds10, 0, siteRanks) == 5, "Reset interior ancilla was not shuttled to entangled partner");
+        }
+}
 } // namespace
 
+#ifdef MAESTRO_BOUNDED_ROUTING_TEST_MAIN
 int main()
 {
     try
@@ -493,7 +563,8 @@ int main()
         AnalyticTiesAndHorizons();
         InputsSwapsAndBarriers();
         ImmutableTablesAndIndependentScratch();
-        std::cout << "Bounded routing expected choices, pruning, horizons, inputs, SWAPs, barriers and immutable sharing passed\n";
+        DisentangleAndSiteRankForecast();
+        std::cout << "Bounded routing expected choices, pruning, horizons, inputs, SWAPs, barriers, disentangle forecast and immutable sharing passed\n";
         return 0;
     }
     catch (const std::exception &error)
@@ -502,3 +573,43 @@ int main()
         return 1;
     }
 }
+#else
+BOOST_AUTO_TEST_SUITE(BoundedRoutingPlannerTests)
+
+BOOST_AUTO_TEST_CASE(ExpectedSelectionsAndPruningCase)
+{
+    ExpectedSelectionsAndPruning();
+}
+
+BOOST_AUTO_TEST_CASE(SingleQubitWorkGoldensCase)
+{
+    SingleQubitWorkGoldens();
+}
+
+BOOST_AUTO_TEST_CASE(SparseDenseSingleAggregationCase)
+{
+    SparseDenseSingleAggregation();
+}
+
+BOOST_AUTO_TEST_CASE(AnalyticTiesAndHorizonsCase)
+{
+    AnalyticTiesAndHorizons();
+}
+
+BOOST_AUTO_TEST_CASE(InputsSwapsAndBarriersCase)
+{
+    InputsSwapsAndBarriers();
+}
+
+BOOST_AUTO_TEST_CASE(ImmutableTablesAndIndependentScratchCase)
+{
+    ImmutableTablesAndIndependentScratch();
+}
+
+BOOST_AUTO_TEST_CASE(DisentangleAndSiteRankForecastCase)
+{
+    DisentangleAndSiteRankForecast();
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+#endif

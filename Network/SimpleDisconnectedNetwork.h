@@ -2997,7 +2997,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 // Keep the prefix's executable instructions, including classical
                 // and noise operations, in their original order.
                 auto plan = freshRegister ? std::make_shared<Circuits::Circuit<Time>>(circuit->GetOperations()) : circuit;
-                prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister);
+                // A prefix is part of the work only: a searched layout needs a large predicted gain to be taken.
+                prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister,
+                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0.);
             }
         }
         if (!prepared || !mpsOptimizeSwaps)
@@ -3736,8 +3738,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
     // Returns whether the planner prepared a gate window for this circuit.
+    // minLayoutGain: above zero, the predicted gain a searched layout needs to replace index order
+    // (a line placed along the chain needs none: it is exact).
     bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
-                                     bool freshRegister = true) const
+                                     bool freshRegister = true, double minLayoutGain = 0.) const
     {
         const bool placeQubits = freshRegister && optimizeInitialQubitsMap;
         if ((sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState ||
@@ -3780,11 +3784,16 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     // executed window after restore; only fusion needs a view now.
                     if (freshRegister || sim->IsGateFusionEnabled())
                         sim->SetUpcomingGates(dcirc->GetOperations());
+                    // Measurements and resets enter the model of a backend that reports them (the QCSim chains).
+                    const bool tracksDisentangling = sim->GetType() == Simulators::SimulatorType::kQCSim;
+                    const bool circuitHasDisentangle =
+                        tracksDisentangling && Simulators::RoutingConfig::ContainsDisentanglingOperations(dcirc->GetOperations());
                     if (sim->IsGateFusionEnabled())
                     {
                         Circuits::Circuit<Time> routingCircuit;
                         for (const auto &op : sim->GetUpcomingRoutingOperations())
-                            if (op->GetType() == Circuits::OperationType::kGate)
+                            if (op && (op->GetType() == Circuits::OperationType::kGate ||
+                                       (tracksDisentangling && Simulators::RoutingConfig::IsDisentanglingOperationType(op->GetType()))))
                                 routingCircuit.AddOperation(op);
                         layers = routingCircuit.ToMultipleQubitsLayersNoClone();
                     }
@@ -3793,17 +3802,21 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     {
                         Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
                         dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
+                        dummySim.SetModelDisentangling(tracksDisentangling);
                         dummySim.setGrowthFactorGate(growthFactorGate);
                         dummySim.setGrowthFactorSwap(growthFactorSwap);
                         if (maxBondDimValue > 0)
                         {
-                            const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(configuration);
+                            const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(configuration) ||
+                                                      (circuitHasDisentangle && Simulators::RoutingConfig::VirtualBondsAutoAllowed(configuration));
                             dummySim.SetMaxBondDimension(
                                 virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
                                                    nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
                                              : maxBondDimValue);
                             dummySim.SetRoutingCostModel(virtualBonds ? maxBondDimValue : 0, Simulators::RoutingConfig::TruncationWeight(configuration));
                         }
+                        if (minLayoutGain > 0.)
+                            dummySim.setMinLayoutGain(minLayoutGain);
                         const auto optimalMap = line.empty() ? dummySim.ComputeOptimalQubitsMap(layers) : line;
                         sim->SetInitialQubitsMap(optimalMap);
                     }
@@ -3811,39 +3824,44 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     if (mpsOptimizeSwaps)
                     {
                         int lookaheadDepthLocal = lookaheadDepth;
+                        size_t effectiveLayerCount = layers.size();
 
                         if (lookaheadDepthLocal == std::numeric_limits<int>::max())
                         {
                             double avgTwoQubitGatesPerLayer = 0.0;
+                            size_t realTwoQubitLayers = 0;
                             for (const auto &layer : layers)
                             {
                                 int twoQubitGates = 0;
                                 for (const auto &op : layer->GetOperations())
                                 {
-                                    if (op->AffectedQubits().size() >= 2)
+                                    if (op && op->GetType() == Circuits::OperationType::kGate && op->AffectedQubits().size() >= 2)
                                     {
                                         ++twoQubitGates;
                                     }
                                 }
                                 avgTwoQubitGatesPerLayer += twoQubitGates;
+                                if (twoQubitGates > 0 || !circuitHasDisentangle)
+                                    ++realTwoQubitLayers;
                             }
-                            if (!layers.empty())
-                                avgTwoQubitGatesPerLayer /= layers.size();
+                            effectiveLayerCount = circuitHasDisentangle ? realTwoQubitLayers : layers.size();
+                            if (effectiveLayerCount > 0)
+                                avgTwoQubitGatesPerLayer /= static_cast<double>(effectiveLayerCount);
 
                             int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
                             if (lookaheadVal > 15)
                                 lookaheadVal = 15;
 
-                            lookaheadDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0
-                                                  : layers.size() < 15                    ? static_cast<int>(lookaheadVal)
-                                                  : layers.size() < 25                    ? static_cast<int>(1.5 * lookaheadVal)
-                                                                                          : 2 * lookaheadVal;
+                            lookaheadDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0
+                                                  : effectiveLayerCount < 15                    ? static_cast<int>(lookaheadVal)
+                                                  : effectiveLayerCount < 25                    ? static_cast<int>(1.5 * lookaheadVal)
+                                                                                                : 2 * lookaheadVal;
                         }
 
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
+                            lookaheadHeuristicDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;

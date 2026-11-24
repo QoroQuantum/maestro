@@ -377,6 +377,14 @@ class FusionState : public ISimulator
         NotifyObservers(qs);
     }
 
+    void ApplyResetToTargets(const Types::qubits_vector &qs, const std::vector<bool> &resetTargets) override
+    {
+        Flush();
+        immediate_->ApplyResetToTargets(qs, resetTargets);
+        ConsumeBoundary(Circuits::OperationType::kReset);
+        NotifyObservers(qs);
+    }
+
     void ApplyQuantumChannel(const Types::qubits_vector &qs, const QuantumChannel &channel) override
     {
         if (FusesQuantumChannels())

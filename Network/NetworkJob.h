@@ -726,22 +726,29 @@ template <typename Time = Types::time_type> class ExecuteJob
                                                                 : std::vector<long long int>();
                     dcirc->SetOperations(ordered->GetOperations());
                     sim->SetUpcomingGates(dcirc->GetOperations());
+                    // Measurements and resets enter the model of a backend that reports them (the QCSim chains).
+                    const bool tracksDisentangling = sim->GetType() == Simulators::SimulatorType::kQCSim;
+                    const bool circuitHasDisentangle =
+                        tracksDisentangling && Simulators::RoutingConfig::ContainsDisentanglingOperations(dcirc->GetOperations());
                     if (sim->IsGateFusionEnabled() && !sim->GetUpcomingRoutingOperations().empty())
                     {
                         Circuits::Circuit<Time> routingCircuit;
                         for (const auto &op : sim->GetUpcomingRoutingOperations())
-                            if (op->GetType() == Circuits::OperationType::kGate)
+                            if (op && (op->GetType() == Circuits::OperationType::kGate ||
+                                       (tracksDisentangling && Simulators::RoutingConfig::IsDisentanglingOperationType(op->GetType()))))
                                 routingCircuit.AddOperation(op);
                         layers = routingCircuit.ToMultipleQubitsLayersNoClone();
                     }
 
                     Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
                     dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
+                    dummySim.SetModelDisentangling(tracksDisentangling);
                     dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
                     dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
                     if (maxBondDimValue != 0)
                     {
-                        const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(config);
+                        const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(config) ||
+                                                  (circuitHasDisentangle && Simulators::RoutingConfig::VirtualBondsAutoAllowed(config));
                         dummySim.SetMaxBondDimension(
                             virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
                                                nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
@@ -758,39 +765,44 @@ template <typename Time = Types::time_type> class ExecuteJob
                     if (network->GetMPSOptimizeSwaps())
                     {
                         int lookaheadDepthLocal = network->GetLookaheadDepth();
+                        size_t effectiveLayerCount = layers.size();
 
                         if (lookaheadDepthLocal == std::numeric_limits<int>::max())
                         {
                             double avgTwoQubitGatesPerLayer = 0.0;
+                            size_t realTwoQubitLayers = 0;
                             for (const auto &layer : layers)
                             {
                                 int twoQubitGates = 0;
                                 for (const auto &op : layer->GetOperations())
                                 {
-                                    if (op->AffectedQubits().size() >= 2)
+                                    if (op && op->GetType() == Circuits::OperationType::kGate && op->AffectedQubits().size() >= 2)
                                     {
                                         ++twoQubitGates;
                                     }
                                 }
                                 avgTwoQubitGatesPerLayer += twoQubitGates;
+                                if (twoQubitGates > 0 || !circuitHasDisentangle)
+                                    ++realTwoQubitLayers;
                             }
-                            if (!layers.empty())
-                                avgTwoQubitGatesPerLayer /= layers.size();
+                            effectiveLayerCount = circuitHasDisentangle ? realTwoQubitLayers : layers.size();
+                            if (effectiveLayerCount > 0)
+                                avgTwoQubitGatesPerLayer /= static_cast<double>(effectiveLayerCount);
 
                             int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
                             if (lookaheadVal > 15)
                                 lookaheadVal = 15;
 
-                            lookaheadDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0
-                                                  : layers.size() < 15                    ? static_cast<int>(lookaheadVal)
-                                                  : layers.size() < 25                    ? static_cast<int>(1.5 * lookaheadVal)
-                                                                                          : 2 * lookaheadVal;
+                            lookaheadDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0
+                                                  : effectiveLayerCount < 15                    ? static_cast<int>(lookaheadVal)
+                                                  : effectiveLayerCount < 25                    ? static_cast<int>(1.5 * lookaheadVal)
+                                                                                                : 2 * lookaheadVal;
                         }
 
                         int lookaheadHeuristicDepthLocal = network->GetLookaheadDepthWithHeuristic();
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
+                            lookaheadHeuristicDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;
