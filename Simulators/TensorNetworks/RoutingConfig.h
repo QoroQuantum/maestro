@@ -86,9 +86,12 @@ template <class OpPtr> bool ContainsDisentanglingOperations(const std::vector<Op
 }
 
 // Whether the operations hold a measurement or reset that two-qubit gates still follow and that can change
-// the entanglement of the chain: a measurement before the last two-qubit gate, or such a reset of a qubit an
-// earlier operation acted on. Final measurements do not count (nothing is routed after them), nor do the
-// resets a circuit starts with (their qubits are still in |0>).
+// the entanglement of the chain: a measurement before the last two-qubit gate, or such a reset of a qubit that
+// an operation on several qubits acted on since its last reset. Final measurements do not count (nothing is
+// routed after them). Nor do resets of qubits that are still products: the resets a circuit starts with, however
+// often they repeat, and a reset after one-qubit gates only. A measurement counts whatever came before it: the
+// operations can be the rest of a circuit (a checkpoint suffix, a routing window), whose first measurements
+// act on qubits entangled earlier.
 template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<OpPtr> &operations)
 {
     // Most circuits hold none before their end: find the first by type alone, without reading a qubit list.
@@ -110,8 +113,8 @@ template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<Op
         }
     if (lastTwoQubitGate == operations.size())
         return false;
-    // Only a reset asks whether its qubit was acted on.
-    std::vector<bool> touched;
+    // Only a reset asks whether its qubit can be entangled: whether an operation on several qubits acted on it.
+    std::vector<bool> entangled;
     for (size_t i = 0; i < lastTwoQubitGate; ++i)
     {
         const auto &op = operations[i];
@@ -120,16 +123,24 @@ template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<Op
         const auto type = op->GetType();
         if (type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement)
             return true;
+        if (type == Circuits::OperationType::kDelay || type == Circuits::OperationType::kNoOp)
+            continue;
         const auto qubits = op->AffectedQubits();
         if (type == Circuits::OperationType::kReset)
+        {
+            // A reset leaves its qubit a product state, so it marks nothing.
             for (const auto q : qubits)
-                if (q < touched.size() && touched[q])
+                if (q < entangled.size() && entangled[q])
                     return true;
+            continue;
+        }
+        if (qubits.size() < 2)
+            continue; // a one-qubit operation keeps a product state a product state
         for (const auto q : qubits)
         {
-            if (q >= touched.size())
-                touched.resize(static_cast<size_t>(q) + 1, false);
-            touched[q] = true;
+            if (q >= entangled.size())
+                entangled.resize(static_cast<size_t>(q) + 1, false);
+            entangled[q] = true;
         }
     }
     return false;

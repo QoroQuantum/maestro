@@ -2548,6 +2548,37 @@ BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
     }
 }
 
+// Which circuits count as measuring or resetting before their end (RoutingConfig::ContainsMidCircuitDisentangling).
+// A reset of a qubit that is still a product state disentangles nothing, however often it repeats.
+BOOST_AUTO_TEST_CASE(MidCircuitDisentanglingIgnoresResetsOfProductQubits)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    using Ops = std::vector<std::shared_ptr<Circuits::IOperation<>>>;
+
+    const auto R = [](std::initializer_list<Types::qubit_t> q) { return CF::CreateReset(Types::qubits_vector(q)); };
+    const auto H = [](size_t q) { return std::static_pointer_cast<Circuits::IOperation<>>(CF::CreateGate(Kind::kHadamardGateType, q)); };
+    const auto CX = [](size_t a, size_t b) { return std::static_pointer_cast<Circuits::IOperation<>>(CF::CreateGate(Kind::kCXGateType, a, b)); };
+    const auto M = [](size_t q, size_t c) { return CF::CreateMeasurement({{q, c}}); };
+    const auto midCircuit = [](const Ops &ops) { return Simulators::RoutingConfig::ContainsMidCircuitDisentangling(ops); };
+
+    // The resets a circuit starts with, once or repeated, and final measurements.
+    BOOST_CHECK(!midCircuit({R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(!midCircuit({R({0}), R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(!midCircuit({R({0, 1}), R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    // A reset after one-qubit gates only: the qubit was a product state all along.
+    BOOST_CHECK(!midCircuit({H(0), R({0}), CX(0, 1), M(0, 0), M(1, 1)}));
+    // A reset or a measurement that nothing routed follows.
+    BOOST_CHECK(!midCircuit({H(0), CX(0, 1), R({0}), M(0, 0), M(1, 1)}));
+    // Real ones: after an entangling gate, with two-qubit gates still to come.
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), R({0}), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), M(0, 0), CX(0, 1), M(1, 1)}));
+    // The reset of one entangled qubit among product ones.
+    BOOST_CHECK(midCircuit({R({0, 1, 2}), H(0), CX(0, 1), R({2}), R({1}), CX(0, 2), M(0, 0)}));
+    // The rest of a circuit: its first measurement acts on a qubit entangled before these operations.
+    BOOST_CHECK(midCircuit({M(0, 0), R({0}), CX(0, 1), M(1, 1)}));
+}
+
 // A logical SWAP exchanges the states of its qubits, so the site ranks, which describe states, go with them:
 // after a Bell pair on (0, 1), a reset of 2 and SWAP(0, 2), it is qubit 2 that belongs to the pair.
 BOOST_AUTO_TEST_CASE(LogicalSwapsCarrySiteRanks)
