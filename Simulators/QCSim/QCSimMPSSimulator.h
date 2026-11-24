@@ -28,6 +28,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
+        ClearSavedRoutingState();
         ResetLiveSiteRanks();
         if (nrQubits != 0)
         {
@@ -84,12 +85,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void SetInitialQubitsMap(const std::vector<long long int> &initialMap) override
     {
         if (mpsSimulator)
-        {
-            mpsSimulator->SetInitialQubitsMap(initialMap);
-            EnsureDummySimulator(initialMap.size());
-            dummySim->SetInitialQubitsMap(initialMap);
-            ResetLiveSiteRanks();
-        }
+            RelabelQubitsMap(*mpsSimulator, initialMap);
     }
 
     void SetUseOptimalMeetingPosition(bool enable) override
@@ -223,29 +219,20 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        DontNotify();
-        {
-            for (size_t qubit : qubits)
-                if (mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
-                    mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubit));
-        }
-        RecordDisentangledQubits(qubits);
-        Notify();
-        NotifyObservers(qubits);
+        ApplyResetToTargets(qubits, {});
     }
 
     void ApplyResetToTargets(const Types::qubits_vector &qubits, const std::vector<bool> &resetTargets) override
     {
         DontNotify();
         {
-            for (size_t qi = 0; qi < qubits.size(); ++qi)
-            {
-                const size_t qubit = qubits[qi];
-                const bool wantOne = qi < resetTargets.size() && resetTargets[qi];
-                const bool measuredOne = mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit));
-                if (measuredOne != wantOne)
+            for (size_t qubit : qubits)
+                if (mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
                     mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubit));
-            }
+            // Reset every occurrence before the requested flips, including when targets repeat.
+            for (size_t qi = 0; qi < std::min(qubits.size(), resetTargets.size()); ++qi)
+                if (resetTargets[qi])
+                    mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubits[qi]));
         }
         RecordDisentangledQubits(qubits);
         Notify();
@@ -356,19 +343,28 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                         QuantumChannel::KrausOperators local;
                         size_t position = 0;
                         if (QuantumChannel::LocalOperators(factor.operators, position, local))
+                        {
                             // Operators that are the identity on one of the two sites: applied on the other alone,
                             // with the same draw. Bringing the sites together for them could truncate the chain
                             // under a bond limit, and changed qubits the operators do not act on.
                             mpsSimulator->ApplyKrausOperator(local, random, static_cast<Eigen::Index>(position == 0 ? first : second));
+                            InvalidateDummyHistory();
+                        }
                         else
                         {
-                            // Two sites: the chain brings them together first, as for a gate.
+                            // A selected Kraus operator can project both sites. Its bond growth
+                            // cannot be inferred from the unitary gate model.
+                            InvalidateDummyHistory();
                             mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first), static_cast<Eigen::Index>(second));
-                            RecordExecutedTwoQubitGate(first, second, false, 4.);
+                            NoteTwoQubitNonUnitaryTouch(first, second);
+                            InvalidateDummyHistory();
                         }
                     }
                     else if (factor.kind != QuantumChannel::FactorKind::kThermal || !QuantumChannel::MixtureOf(factor.thermal, mixture))
+                    {
                         mpsSimulator->ApplyKrausOperator(factor.operators, random, static_cast<Eigen::Index>(first));
+                        InvalidateDummyHistory();
+                    }
                     else if (random >= mixture.identity + mixture.phaseFlip)
                     {
                         // Only the reset reads the state: its outcome takes what is left of the draw.
@@ -384,6 +380,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         }
         catch (...)
         {
+            InvalidateDummyHistory();
             Notify();
             throw;
         }
@@ -846,6 +843,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             try
             {
                 mpsSimulator->ApplyGate(agate);
+                InvalidateDummyHistory();
             }
             catch (const std::domain_error &)
             {
@@ -1159,14 +1157,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             cloned->Configure(key.c_str(), value.c_str());
         cloned->upcomingHasDisentangle = upcomingHasDisentangle;
         cloned->RefreshRoutingSettings();
-        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-        cloned->dummyHistoryValid = dummyHistoryValid;
-        cloned->savedDummyBondDims = savedDummyBondDims;
-        cloned->liveSiteRank = liveSiteRank;
-        cloned->liveUntouched = liveUntouched;
-        cloned->savedUntouched = savedUntouched;
-        cloned->savedSiteRank = savedSiteRank;
-        cloned->hasSavedSiteRank = hasSavedSiteRank;
+        CopyRoutingHistoryTo(*cloned);
         if (configuration.IsSet("seed"))
             cloned->SetSeed(seed);
         else

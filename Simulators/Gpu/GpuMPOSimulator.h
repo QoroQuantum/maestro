@@ -25,6 +25,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     {
         RefreshRoutingSettings();
         InvalidateDummyHistory();
+        ClearSavedRoutingState();
         if (nrQubits)
         {
             auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
@@ -1144,9 +1145,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             cloned->mpo->SetCallbackContext(static_cast<GpuTensorChainSimulator *>(cloned.get()));
         }
         cloned->RefreshRoutingSettings();
-        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-        cloned->dummyHistoryValid = dummyHistoryValid;
-        cloned->savedDummyBondDims = savedDummyBondDims;
+        CopyRoutingHistoryTo(*cloned);
         cloned->RefreshRoutingCallback();
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));

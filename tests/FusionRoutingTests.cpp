@@ -417,6 +417,23 @@ template <class Backend> struct HistoryProbe : RecordingImmediate<Backend>
         return this->CaptureDummyHistory();
     }
 
+    double SiteRank(size_t qubit) const
+    {
+        return this->liveSiteRank.at(qubit);
+    }
+
+    bool Untouched(size_t qubit) const
+    {
+        return this->liveUntouched.at(qubit) != 0;
+    }
+
+    std::vector<double> DeflatedBonds() const
+    {
+        std::vector<double> bonds(this->nrQubits - 1, 16.);
+        this->DeflateLiveBondDimensions(NativeMap(), bonds.data(), bonds.size());
+        return bonds;
+    }
+
     std::vector<double> NativeBonds() const
     {
         return Backend::CurrentBondDimensions();
@@ -708,6 +725,92 @@ template <class Backend> static void CachedGpuRoutingSettings()
 }
 #endif
 
+template <class Backend> static void AutomaticCheckpointHistory(const char *cap)
+{
+    HistoryProbe<Backend> sim;
+    sim.AllocateQubits(9);
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Initialize();
+    sim.setGrowthFactorGate(1.);
+    sim.SetLookaheadDepth(2);
+    const auto reset = CF::CreateReset({0});
+    const auto cx = CF::CreateGate(Kind::kCXGateType, 1, 2);
+    sim.SetUpcomingGates({reset});
+    GrowVirtualHistory(sim);
+    const auto history = sim.VirtualBonds();
+    Check(history.size() == 8 && history[1] > sim.NativeBonds()[1], "prefix did not acquire virtual bond history");
+    sim.SetUpcomingGates({}); // Both checkpoint entry points detach the prefix window before saving.
+    sim.SaveState();
+    auto worker = sim.Clone();
+    sim.SetUpcomingGates({cx});
+    sim.ApplyCX(1, 2);
+    sim.SetUpcomingGates({reset, cx});
+    Check(sim.VirtualBonds().empty(), "a two-site gate in an inactive window retained the old history");
+    for (ISimulator *s : {static_cast<ISimulator *>(&sim), worker.get()})
+    {
+        s->RestoreState();
+        s->SetUpcomingGates({reset, cx});
+        Check(CloneRoutingInspection<Backend>::VirtualBonds(dynamic_cast<const Backend &>(*s)) == history,
+              "checkpoint restore lost prefix estimates when the suffix reactivated automatic routing");
+    }
+    // The prefix touched q0. Its leading reset is a mid-circuit projection;
+    // still-untouched q8 can be crossed as a product site.
+    Check(sim.SiteRank(8) == 1., "leading reset on a restored entangled qubit was classified as a fresh-register reset");
+    sim.Initialize();
+    sim.ApplyH(0);
+    sim.ApplyCX(0, 1);
+    const double rank = sim.SiteRank(0);
+    sim.RestoreState();
+    Check(sim.SiteRank(0) == rank && sim.VirtualBonds() != history, "reinitialization retained an obsolete routing snapshot");
+
+    sim.Reset();
+    sim.ApplyX(0);
+    sim.ApplyResetToTargets({0, 0, 1}, {true, true, true});
+    Check(std::abs(sim.Probability(2) - 1.) < 1e-10, "repeated reset targets must reset all occurrences before applying the requested flips");
+}
+
+template <class Backend> static void RelabelPreparedRegister(const char *cap)
+{
+    for (bool detach : {false, true})
+    {
+        HistoryProbe<Backend> sim;
+        constexpr size_t n = 9;
+        sim.AllocateQubits(n);
+        sim.Configure("matrix_product_state_max_bond_dimension", cap);
+        sim.Initialize();
+        sim.SetLookaheadDepth(2);
+        sim.setGrowthFactorGate(1.);
+        const auto reset = CF::CreateReset({8});
+        sim.SetUpcomingGates({reset});
+        GrowVirtualHistory(sim);
+        sim.ApplyReset({8});
+        const auto bonds = sim.VirtualBonds(), deflated = sim.DeflatedBonds();
+        Check(!bonds.empty() && sim.SiteRank(8) == 1. && !sim.Untouched(0) && sim.Untouched(8), "layout test requires distinguishable site states");
+        if (detach)
+            sim.SetUpcomingGates({});
+        sim.SaveState();
+        const auto oldMap = sim.NativeMap();
+        auto map = oldMap;
+        std::rotate(map.begin(), map.begin() + 2, map.end());
+        std::vector<double> ranks(n);
+        std::vector<bool> untouched(n);
+        for (size_t q = 0; q < n; ++q)
+        {
+            ranks[q] = sim.SiteRank(q);
+            untouched[q] = sim.Untouched(q);
+        }
+        sim.SetInitialQubitsMap(map);
+        sim.SetUpcomingGates({reset});
+        Check(sim.NativeMap() == map && sim.PredictedMap() == map && sim.VirtualBonds() == bonds && sim.DeflatedBonds() == deflated,
+              "changing labels moved the physical bond estimates");
+        for (size_t q = 0; q < n; ++q)
+            Check(sim.SiteRank(q) == ranks[(q + 2) % n] && sim.Untouched(q) == untouched[(q + 2) % n], "routing state did not follow the physical site");
+        sim.RestoreState();
+        Check(sim.NativeMap() == oldMap && sim.SiteRank(8) == 1. && sim.Untouched(8) && sim.VirtualBonds() == bonds, "relabeling changed a saved snapshot");
+    }
+}
+
 template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
 {
     HistoryProbe<Backend> sim;
@@ -724,7 +827,7 @@ template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
     sim.SetLookaheadDepth(2);
     const Types::qubits_vector all{0, 1, 2, 3, 4, 5, 6, 7, 8};
 
-    for (int boundary = 0; boundary < 10; ++boundary)
+    for (int boundary = 0; boundary < 11; ++boundary)
     {
         sim.Reset();
         GrowVirtualHistory(sim);
@@ -776,8 +879,22 @@ template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
             else
                 continue;
             break;
+        case 10:
+            if constexpr (std::is_base_of_v<Private::QCSimMPSSimulator, Backend>)
+            {
+                // |00><ab| resets both sites. Unlike Z-basis dephasing,
+                // this channel cannot reduce to a sampled Pauli mixture.
+                QuantumChannel::KrausOperators reset(4, Eigen::Matrix4cd::Zero());
+                for (size_t index = 0; index < reset.size(); ++index)
+                    reset[index](0, index) = 1.;
+                sim.ApplyQuantumChannel({0, 3}, QuantumChannel(std::move(reset)));
+            }
+            else
+                continue;
+            break;
         }
-        Check(sim.VirtualBonds().empty(), "state boundary retained stale virtual bonds");
+        if (!sim.VirtualBonds().empty())
+            throw std::runtime_error(std::string(sim.MethodName()) + " retained stale virtual bonds at boundary " + std::to_string(boundary));
         const auto map = sim.NativeMap();
         const auto q0 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 2) - map.begin());
         const auto q1 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 3) - map.begin());
@@ -2089,6 +2206,10 @@ int main(int argc, char **argv)
         NonGateRoutingFallbacks();
         VirtualHistoryBoundaries<Private::QCSimMPSSimulator>("2");
         VirtualHistoryBoundaries<Private::QCSimMPOSimulator>("4");
+        AutomaticCheckpointHistory<Private::QCSimMPSSimulator>("2");
+        AutomaticCheckpointHistory<Private::QCSimMPOSimulator>("4");
+        RelabelPreparedRegister<Private::QCSimMPSSimulator>("2");
+        RelabelPreparedRegister<Private::QCSimMPOSimulator>("4");
         RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
         RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
         DecompositionAndFusionRanks();

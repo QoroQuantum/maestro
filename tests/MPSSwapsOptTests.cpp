@@ -29,6 +29,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
+#include "../Circuit/Operations/QuantumChannelOperation.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Simulators/Core/Factory.h"
 #include "../Simulators/Fusion/FusionGate.h"
@@ -2455,12 +2456,14 @@ BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
                 BOOST_CHECK_CLOSE(bondsAfterMR[i], bondsAfterM[i], 1e-9);
         }
 
-        // 3. Pinched product cut [d, 1, d] grows on swap instead of misidentifying as isolated pair.
+        // Two Bell pairs have cuts [d,1,d]. A four-site linear graph state has
+        // [d,d,d]. Crossing the middle sites raises the central cut to d*d in both.
+        for (const double middle : {1., d})
         {
             Simulators::MPSDummySimulator sim(4, isMPO);
             sim.SetMaxBondDimension(64);
             sim.setGrowthFactorSwap(1.0);
-            sim.SetCurrentBondDimensions({d, 1.0, d});
+            sim.SetCurrentBondDimensions({d, middle, d});
             sim.SwapQubitsToPosition(0, 2, 0);
             BOOST_CHECK_CLOSE(sim.getCurrentBondDimensions()[1], d * d, 1e-9);
         }
@@ -2525,9 +2528,11 @@ BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
 
             const auto orderedOps = batchedCirc->LayersToCircuit(batchedLayers)->GetOperations();
             layoutPlanner.SetInitialQubitsMap(identity);
+            layoutPlanner.SetCurrentSiteRanks(std::vector<double>(12, 1.));
             layoutPlanner.ApplyGates(orderedOps);
             const double identityCost = layoutPlanner.getTotalSwappingCost();
             layoutPlanner.SetInitialQubitsMap(mapBatched);
+            layoutPlanner.SetCurrentSiteRanks(std::vector<double>(12, 1.));
             layoutPlanner.ApplyGates(orderedOps);
             const double optCost = layoutPlanner.getTotalSwappingCost();
             BOOST_CHECK_LT(2.0 * optCost, identityCost);
@@ -2545,6 +2550,38 @@ BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
             (void)lookaheadSim.SelectMeetingPositionAdaptive(oneOp, 0, 4, 2, 0.0, singleCost);
             BOOST_CHECK_GT(fullCost, singleCost);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(FreshLayoutStartsUnmeasuredWiresAsProducts)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    const auto cx = [](size_t a, size_t b) { return CF::CreateGate(Kind::kCXGateType, a, b); };
+    auto first = std::make_shared<Circuits::Circuit<>>();
+    first->AddOperation(cx(4, 5));
+    first->AddOperation(cx(0, 5));
+    first->AddOperation(cx(5, 1));
+    first->AddOperation(CF::CreateMeasurement({{4, 0}}));
+    auto last = std::make_shared<Circuits::Circuit<>>();
+    last->AddOperation(cx(2, 4));
+    last->AddOperation(cx(1, 4));
+    last->AddOperation(cx(2, 0));
+    last->AddOperation(cx(4, 0));
+    last->AddOperation(cx(1, 0));
+
+    auto explicitProducts = std::make_shared<Circuits::Circuit<>>();
+    explicitProducts->AddOperation(CF::CreateReset({0, 1, 2, 3, 4, 5}));
+    for (const auto &op : first->GetOperations())
+        explicitProducts->AddOperation(op);
+    for (const bool mpo : {false, true})
+    {
+        Simulators::MPSDummySimulator planner(6, mpo);
+        planner.SetMaxBondDimension(32);
+        planner.setMinLayoutGain(1.);
+        const auto actual = planner.ComputeOptimalQubitsMap({first, last});
+        const auto withResets = planner.ComputeOptimalQubitsMap({explicitProducts, last});
+        BOOST_CHECK(actual == withResets);
     }
 }
 
@@ -2577,6 +2614,21 @@ BOOST_AUTO_TEST_CASE(MidCircuitDisentanglingIgnoresResetsOfProductQubits)
     BOOST_CHECK(midCircuit({R({0, 1, 2}), H(0), CX(0, 1), R({2}), R({1}), CX(0, 2), M(0, 0)}));
     // The rest of a circuit: its first measurement acts on a qubit entangled before these operations.
     BOOST_CHECK(midCircuit({M(0, 0), R({0}), CX(0, 1), M(1, 1)}));
+
+    // Move one half of a Bell pair onto wire 2. Resetting the vacated wire
+    // leaves the pair intact, while resetting wire 2 breaks it.
+    const auto swap = CF::CreateGate(Kind::kSwapGateType, 0, 2);
+    BOOST_CHECK(!midCircuit({H(0), CX(0, 1), swap, R({0}), CX(1, 2)}));
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), swap, R({2}), CX(1, 2)}));
+
+    const auto conditional = CF::CreateConditionalGate(CF::CreateGate(Kind::kCXGateType, 1, 2), CF::CreateEqualCondition({0}, {true}));
+    const auto channel =
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1, 2}, Simulators::QuantumChannel::TwoQubitDepolarizing(.1));
+    for (const auto &last : Ops{conditional, channel})
+    {
+        BOOST_CHECK(midCircuit({H(0), CX(0, 1), R({0}), last}));
+        BOOST_CHECK(midCircuit({M(0, 0), last}));
+    }
 }
 
 // A logical SWAP exchanges the states of its qubits, so the site ranks, which describe states, go with them:
@@ -2605,8 +2657,8 @@ BOOST_AUTO_TEST_CASE(LogicalSwapsCarrySiteRanks)
             BOOST_CHECK_CLOSE(after[0], 1.0, 1e-9);       // now the reset qubit
             BOOST_CHECK_CLOSE(after[1], before[1], 1e-9);
 
-            // Swapping back restores the ranks.
-            sim.ApplyGate(CF::CreateGate(Kind::kSwapGateType, 2, 0));
+            // The same SWAP in a fusion window must carry the ranks back.
+            sim.ApplyGate(std::make_shared<Simulators::FusionRoutingOperation>(Types::qubits_vector{2, 0}, 4, true));
             for (size_t q = 0; q < 5; ++q)
                 BOOST_CHECK_CLOSE(sim.getCurrentSiteRanks()[q], before[q], 1e-9);
         }

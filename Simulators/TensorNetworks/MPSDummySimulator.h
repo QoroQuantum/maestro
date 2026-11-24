@@ -824,67 +824,6 @@ class MPSDummySimulator
         if (layers.empty() || nrQubits <= 2)
             return qubitsMap;
 
-        auto evaluateCost = [&, this](const std::vector<IndexType> &candidateMap) -> double {
-            auto saveQubitsMap = qubitsMap;
-            auto saveQubitsMapInv = qubitsMapInv;
-            auto saveCurrentBondDim = currentBondDim;
-            auto saveTotalSwappingCost = totalSwappingCost;
-            auto saveBondCost = bondCost;
-            auto saveSiteRank = siteRank;
-
-            SetInitialQubitsMap(candidateMap);
-
-            for (const auto &layer : layers)
-                ApplyGates(layer->GetOperations());
-            auto cost = getTotalSwappingCost();
-            qubitsMap = std::move(saveQubitsMap);
-            qubitsMapInv = std::move(saveQubitsMapInv);
-            currentBondDim = std::move(saveCurrentBondDim);
-            totalSwappingCost = saveTotalSwappingCost;
-            bondCost = std::move(saveBondCost);
-            siteRank = std::move(saveSiteRank);
-
-            return cost;
-        };
-
-        auto evaluateCostBounded = [&, this](const std::vector<IndexType> &candidateMap, double bound) -> double {
-            auto saveQubitsMap = qubitsMap;
-            auto saveQubitsMapInv = qubitsMapInv;
-            auto saveCurrentBondDim = currentBondDim;
-            auto saveTotalSwappingCost = totalSwappingCost;
-            auto saveBondCost = bondCost;
-            auto saveSiteRank = siteRank;
-
-            SetInitialQubitsMap(candidateMap);
-
-            for (const auto &layer : layers)
-            {
-                ApplyGates(layer->GetOperations());
-                auto cost = getTotalSwappingCost();
-                if (cost >= bound)
-                {
-                    // restore state
-                    qubitsMap = std::move(saveQubitsMap);
-                    qubitsMapInv = std::move(saveQubitsMapInv);
-                    currentBondDim = std::move(saveCurrentBondDim);
-                    totalSwappingCost = saveTotalSwappingCost;
-                    bondCost = std::move(saveBondCost);
-                    siteRank = std::move(saveSiteRank);
-                    return cost;
-                }
-            }
-            auto cost = getTotalSwappingCost();
-            // restore state
-            qubitsMap = std::move(saveQubitsMap);
-            qubitsMapInv = std::move(saveQubitsMapInv);
-            currentBondDim = std::move(saveCurrentBondDim);
-            totalSwappingCost = saveTotalSwappingCost;
-            bondCost = std::move(saveBondCost);
-            siteRank = std::move(saveSiteRank);
-
-            return cost;
-        };
-
         // Collect 2-qubit gate pairs from each layer, preserving layer boundaries.
         // Multi-qubit measurements and resets act qubit-by-qubit and must never
         // inject spurious 2-qubit entangling edges into the interaction graph.
@@ -1533,6 +1472,30 @@ class MPSDummySimulator
             return result;
         };
 
+        bool midCircuit = false;
+        if (hasDisentangle)
+        {
+            std::vector<std::shared_ptr<Circuits::IOperation<>>> ordered;
+            for (const auto &layer : layers)
+                ordered.insert(ordered.end(), layer->GetOperations().begin(), layer->GetOperations().end());
+            midCircuit = RoutingConfig::ContainsMidCircuitDisentangling(ordered);
+        }
+        // Score each candidate from the same fresh register as runtime routing.
+        // Keep the caller's map, ranks and accumulated cost intact throughout the search.
+        auto forecast = Clone();
+        auto evaluateCost = [&](const std::vector<IndexType> &candidateMap, double bound = std::numeric_limits<double>::infinity()) {
+            forecast->SetInitialQubitsMap(candidateMap);
+            if (midCircuit)
+                std::fill(forecast->siteRank.begin(), forecast->siteRank.end(), 1.);
+            for (const auto &layer : layers)
+            {
+                forecast->ApplyGates(layer->GetOperations());
+                if (forecast->getTotalSwappingCost() >= bound)
+                    break;
+            }
+            return forecast->getTotalSwappingCost();
+        };
+
         // The cost model is a rough proxy: for some circuits (QFT, for one) it
         // rates scrambled layouts a few times cheaper than the identity, while
         // they can run far slower. Leave the identity only for a large predicted
@@ -1570,7 +1533,7 @@ class MPSDummySimulator
             {
                 if (cand == identityMap || cand == optMap)
                     continue;
-                const double cost = evaluateCostBounded(cand, optCost);
+                const double cost = evaluateCost(cand, optCost);
                 if (cost < optCost)
                 {
                     optCost = cost;
@@ -1581,15 +1544,10 @@ class MPSDummySimulator
 
         // An MPS circuit that measures or resets before its end needs a larger predicted gain than one whose
         // measurements are all final (kMidCircuitLayoutGain).
-        bool midCircuit = false;
-        if (hasDisentangle && !minLayoutGainExplicit && !IsOperatorChain())
-        {
-            std::vector<std::shared_ptr<Circuits::IOperation<>>> ordered;
-            for (const auto &layer : layers)
-                ordered.insert(ordered.end(), layer->GetOperations().begin(), layer->GetOperations().end());
-            midCircuit = RoutingConfig::ContainsMidCircuitDisentangling(ordered);
-        }
-        const double effectiveMinGain = minLayoutGainExplicit ? minLayoutGain : midCircuit ? kMidCircuitLayoutGain : hasDisentangle ? 1.35 : minLayoutGain;
+        const double effectiveMinGain = minLayoutGainExplicit              ? minLayoutGain
+                                        : midCircuit && !IsOperatorChain() ? kMidCircuitLayoutGain
+                                        : hasDisentangle                   ? 1.35
+                                                                           : minLayoutGain;
         if (layers.size() <= 2)
             return optMap != identityMap && identityCost < effectiveMinGain * optCost ? identityMap : optMap;
 
@@ -1602,7 +1560,7 @@ class MPSDummySimulator
             for (int i = 0; i < nrShuffles; ++i)
             {
                 std::shuffle(trialMap.begin(), trialMap.end(), rng);
-                const double tryCost = evaluateCostBounded(trialMap, optCost);
+                const double tryCost = evaluateCost(trialMap, optCost);
                 if (tryCost < optCost)
                 {
                     optCost = tryCost;
@@ -1630,7 +1588,7 @@ class MPSDummySimulator
                     std::swap(tryMap[a], tryMap[b]);
                 }
 
-                const auto cost = evaluateCostBounded(tryMap, optCost);
+                const auto cost = evaluateCost(tryMap, optCost);
                 if (cost < optCost)
                 {
                     optMap = tryMap;
@@ -1657,7 +1615,7 @@ class MPSDummySimulator
                     for (IndexType j = i + 1; j < nrQubits; ++j)
                     {
                         std::swap(candidate[i], candidate[j]);
-                        const auto cost = evaluateCostBounded(candidate, optCost);
+                        const auto cost = evaluateCost(candidate, optCost);
                         if (cost < optCost)
                         {
                             optMap = candidate;
@@ -1803,9 +1761,7 @@ class MPSDummySimulator
             if (rightProd)
                 return std::clamp(leftDim, 1.0, maxBondDim[bond]);
 
-            double newMaxDim = (leftDim == rightNeighborDim && (betweenDim > 1.0 + 1e-9 || leftDim <= 1.0 + 1e-9))
-                                   ? betweenDim
-                                   : std::min(eRightSite * leftDim, eLeftSite * rightNeighborDim);
+            double newMaxDim = leftDim == 1. && rightNeighborDim == 1. ? betweenDim : std::min(eRightSite * leftDim, eLeftSite * rightNeighborDim);
             newMaxDim = std::min(newMaxDim, betweenDim * eLeftSite * eRightSite);
             return std::max(std::min(newMaxDim * growthFactorSwap, maxBondDim[bond]), 1.0);
         }
@@ -2119,10 +2075,7 @@ class MPSDummySimulator
             qubit2 = qubitsMap[controllingQubit1];
         }
 
-        const IndexType bond = std::min(qubit1, qubit2);
-        totalSwappingCost += bondCost[bond];
-        growBondDimension(bond, isSwap, schmidtRank);
-        totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+        RecordAdjacentTwoQubitGate(std::min(qubit1, qubit2), isSwap, schmidtRank);
     }
 
     void ApplyFastGate(const FastGateOp &g)

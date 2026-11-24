@@ -1,6 +1,9 @@
 #pragma once
-#include "../../Circuit/Operations/Operations.h"
+#include "../../Circuit/Operations/QuantumGates.h"
+#include "RoutingGateInfo.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -85,14 +88,12 @@ template <class OpPtr> bool ContainsDisentanglingOperations(const std::vector<Op
     return false;
 }
 
-// Whether the operations hold a measurement or reset that two-qubit gates still follow and that can change
-// the entanglement of the chain: a measurement before the last two-qubit gate, or such a reset of a qubit that
-// an operation on several qubits acted on since its last reset. Final measurements do not count (nothing is
-// routed after them). Nor do resets of qubits that are still products: the resets a circuit starts with, however
-// often they repeat, and a reset after one-qubit gates only. A measurement counts whatever came before it: the
-// operations can be the rest of a circuit (a checkpoint suffix, a routing window), whose first measurements
-// act on qubits entangled earlier.
-template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<OpPtr> &operations)
+// A projection matters to routing when a multi-site operation follows it. Resets
+// of known product sites leave the cuts alone. A measurement can also be the
+// first operation of a suffix whose prefix entangled the measured qubits.
+template <class OpPtr>
+bool ContainsMidCircuitDisentangling(const std::vector<OpPtr> &operations, const std::vector<uint8_t> &untouched = {},
+                                     const std::vector<double> &siteRanks = {})
 {
     // Most circuits hold none before their end: find the first by type alone, without reading a qubit list.
     size_t first = operations.size();
@@ -106,15 +107,20 @@ template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<Op
         return false;
     size_t lastTwoQubitGate = operations.size();
     for (size_t i = operations.size(); i-- > first;)
-        if (operations[i] && operations[i]->GetType() == Circuits::OperationType::kGate && operations[i]->AffectedQubits().size() >= 2)
+        if (operations[i] && operations[i]->NeedsEntanglementForDistribution())
         {
             lastTwoQubitGate = i;
             break;
         }
     if (lastTwoQubitGate == operations.size())
         return false;
-    // Only a reset asks whether its qubit can be entangled: whether an operation on several qubits acted on it.
-    std::vector<bool> entangled;
+    if (operations[first]->GetType() != Circuits::OperationType::kReset)
+        return true;
+    // A fresh register starts in a product state. A suffix can instead start
+    // with entanglement from its saved prefix, including on its first reset.
+    std::vector<uint8_t> entangled(untouched.size());
+    for (size_t q = 0; q < untouched.size(); ++q)
+        entangled[q] = !untouched[q] && (q >= siteRanks.size() || siteRanks[q] > 1. + 1e-9);
     for (size_t i = 0; i < lastTwoQubitGate; ++i)
     {
         const auto &op = operations[i];
@@ -136,12 +142,21 @@ template <class OpPtr> bool ContainsMidCircuitDisentangling(const std::vector<Op
         }
         if (qubits.size() < 2)
             continue; // a one-qubit operation keeps a product state a product state
-        for (const auto q : qubits)
+        const auto width = static_cast<size_t>(*std::max_element(qubits.begin(), qubits.end())) + 1;
+        if (entangled.size() < width)
+            entangled.resize(width);
+        if (type == Circuits::OperationType::kGate && qubits.size() == 2)
         {
-            if (q >= entangled.size())
-                entangled.resize(static_cast<size_t>(q) + 1, false);
-            entangled[q] = true;
+            const auto *info = dynamic_cast<const RoutingGateInfo *>(op.get());
+            const auto *gate = dynamic_cast<const Circuits::IQuantumGate<> *>(op.get());
+            if (info ? info->isSwap : (gate && gate->GetGateType() == Circuits::QuantumGateType::kSwapGateType))
+            {
+                std::swap(entangled[qubits[0]], entangled[qubits[1]]);
+                continue;
+            }
         }
+        for (const auto q : qubits)
+            entangled[q] = true;
     }
     return false;
 }

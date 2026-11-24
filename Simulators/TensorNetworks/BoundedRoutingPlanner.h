@@ -37,7 +37,7 @@ namespace Private
  * persist across calls. Instances have scratch storage and are not safe for
  * concurrent calls.
  *
- * Unsupported operations (including channels, measurements and decompositions)
+ * Unsupported operations (including channels and decompositions)
  * terminate a forecast. Select returns -1 for such an operation; the caller
  * must retain its native routing fallback and decomposition guard. Logical
  * SWAPs are assumed to relabel qubits, as in the CPU QCSim wrappers.
@@ -59,6 +59,7 @@ class BoundedRoutingPlanner
     {
         Index qubit = 0;
         double probability = 1.;
+        size_t singlesEnd = 0; // Number of accumulated single-qubit entries before this projection.
     };
 
     struct Gate
@@ -123,6 +124,29 @@ class BoundedRoutingPlanner
         prepared->operationToGate.assign(operations.size(), -1);
         std::vector<size_t> singles(n, 0);
         std::vector<Index> touchedSingles;
+        std::vector<std::pair<Index, size_t>> pendingSingles;
+        auto flushSingles = [&] {
+            const auto emitSingle = [&](Index q) {
+                pendingSingles.emplace_back(q, singles[q]);
+                singles[q] = 0;
+            };
+            // Both paths preserve ascending accumulation order. For a dense
+            // prefix, scanning visits fewer than two counters per emitted entry;
+            // sparse prefixes avoid a full-qubit scan.
+            if (touchedSingles.size() > n / 2)
+            {
+                for (size_t q = 0; q < n; ++q)
+                    if (singles[q])
+                        emitSingle(static_cast<Index>(q));
+            }
+            else
+            {
+                std::sort(touchedSingles.begin(), touchedSingles.end());
+                for (const auto q : touchedSingles)
+                    emitSingle(q);
+            }
+            touchedSingles.clear();
+        };
         std::vector<Disentangle> pendingDisentangles;
         for (size_t i = 0; i < operations.size(); ++i)
         {
@@ -138,9 +162,10 @@ class BoundedRoutingPlanner
                     const bool validQubits = std::all_of(qubits.begin(), qubits.end(), [n](auto q) { return q < n; });
                     if (validQubits)
                     {
+                        flushSingles();
                         const double prob = (opType == Circuits::OperationType::kConditionalMeasurement) ? 0.5 : 1.;
                         for (const auto q : qubits)
-                            pendingDisentangles.push_back({static_cast<Index>(q), prob});
+                            pendingDisentangles.push_back({static_cast<Index>(q), prob, pendingSingles.size()});
                         continue;
                     }
                 }
@@ -171,28 +196,9 @@ class BoundedRoutingPlanner
                     }
                 }
             }
-            item.disentanglesBefore = std::move(pendingDisentangles);
-            pendingDisentangles.clear();
-            const auto emitSingle = [&item, &singles](Index q) {
-                item.singlesBefore.emplace_back(q, singles[q]);
-                singles[q] = 0;
-            };
-            // Both paths preserve ascending accumulation order. For a dense
-            // prefix, scanning visits fewer than two counters per emitted entry;
-            // sparse prefixes avoid a full-qubit scan.
-            if (touchedSingles.size() > n / 2)
-            {
-                for (size_t q = 0; q < n; ++q)
-                    if (singles[q])
-                        emitSingle(static_cast<Index>(q));
-            }
-            else
-            {
-                std::sort(touchedSingles.begin(), touchedSingles.end());
-                for (const auto q : touchedSingles)
-                    emitSingle(q);
-            }
-            touchedSingles.clear();
+            flushSingles();
+            item.disentanglesBefore.swap(pendingDisentangles);
+            item.singlesBefore.swap(pendingSingles);
             prepared->gates.push_back(std::move(item));
         }
         return prepared;
@@ -431,8 +437,8 @@ class BoundedRoutingPlanner
             const auto &gate = gates_[static_cast<size_t>(entry) + step];
             if (!gate.valid)
                 break;
-            // Count physical two-site updates, logical SWAPs and aggregated
-            // single-qubit updates. All candidates receive the same prefix.
+            // Every candidate sees the same prefix. Each projection may tighten
+            // all n - 1 bonds during its outward sweeps.
             size_t updates = gate.swap ? 1 : n_ - 1;
             if (step == 0 && !gate.swap)
                 updates = static_cast<size_t>(std::abs(initial_.map[gate.a] - initial_.map[gate.b]));
@@ -440,6 +446,13 @@ class BoundedRoutingPlanner
             if (updates > perCandidateBudget - upperBound || singles > perCandidateBudget - upperBound - updates)
                 break;
             upperBound += updates + singles;
+            const size_t collapses = step ? gate.disentanglesBefore.size() : 0;
+            if (collapses)
+            {
+                if (collapses > (perCandidateBudget - upperBound) / (n_ - 1))
+                    break;
+                upperBound += collapses * (n_ - 1);
+            }
             ++steps;
         }
         return steps;
@@ -575,15 +588,23 @@ class BoundedRoutingPlanner
                 break;
             if (step)
             {
+                size_t nextSingle = 0;
+                const auto chargeSingles = [&](size_t end) {
+                    for (; nextSingle < end; ++nextSingle)
+                    {
+                        const auto &[qubit, count] = gate.singlesBefore[nextSingle];
+                        const Index position = scratch_.map[qubit];
+                        const double left = position ? scratch_.bonds[position - 1] : 1.;
+                        const double right = position < static_cast<Index>(n_ - 1) ? scratch_.bonds[position] : 1.;
+                        work += static_cast<double>(count) * d * d * left * right;
+                    }
+                };
                 for (const auto &dis : gate.disentanglesBefore)
-                    ApplyScratchDisentangle(dis.qubit, dis.probability);
-                for (const auto &single : gate.singlesBefore)
                 {
-                    const Index position = scratch_.map[single.first];
-                    const double left = position ? scratch_.bonds[position - 1] : 1.;
-                    const double right = position < static_cast<Index>(n_ - 1) ? scratch_.bonds[position] : 1.;
-                    work += static_cast<double>(single.second) * d * d * left * right;
+                    chargeSingles(dis.singlesEnd);
+                    ApplyScratchDisentangle(dis.qubit, dis.probability);
                 }
+                chargeSingles(gate.singlesBefore.size());
             }
             if (gate.swap)
             {

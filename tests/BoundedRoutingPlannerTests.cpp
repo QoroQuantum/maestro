@@ -404,6 +404,16 @@ void AnalyticTiesAndHorizons()
             }
             Check(planner.Select(Identity(n), std::vector<double>(n - 1, 1.), 0) >= 0, "Large-span heap meeting path rejected valid input");
         }
+    // The second interaction needs 99 routing updates and has ten pending
+    // projections, each of which can tighten all 99 bonds. For five candidates,
+    // the first interaction fits the per-candidate budget and the second does not.
+    std::vector<Op> manyResets{Gate(0, 99)};
+    for (size_t q = 0; q < 10; ++q)
+        manyResets.push_back(Factory::CreateReset({q}));
+    manyResets.push_back(Gate(0, 99));
+    Planner collapseBudget(100, false, 16, manyResets, Planner::Policy::Work24);
+    Check(Access::Horizon(collapseBudget, Identity(100), 5) == 1, "Projection sweeps exceeded the Work24 budget");
+
     Planner huge(5000, false, 8, std::vector<Op>{Gate(0, 4999)}, Planner::Policy::Work24);
     Check(Access::Horizon(huge, Identity(5000), 1) == 0 && huge.Select(Identity(5000), std::vector<double>(4999, 1.), 0) == 0,
           "Zero-horizon query did not retain the native proposal");
@@ -536,6 +546,20 @@ void DisentangleAndSiteRankForecast()
                 ++idx4;
             Check(idx4 < scoresMR.positions.size() && scoresMR.full[idx4] < scoresNone.full[idx4],
                   "Forecast did not credit boundary bond collapse after Measure/Reset");
+
+            // At meeting 4, qubit 5 stays on the right boundary. Before the
+            // measurement it has a nonunit adjacent bond; afterward its bond is 1.
+            const auto h = Factory::CreateGate(Kind::kHadamardGateType, 5);
+            const auto measure = Factory::CreateMeasurement({{5, 0}});
+            Planner before(6, mpo, 16, std::vector<Op>{Gate(0, 5), h, measure, Gate(5, 1)}, policy);
+            Planner after(6, mpo, 16, std::vector<Op>{Gate(0, 5), measure, h, Gate(5, 1)}, policy);
+            Planner neither(6, mpo, 16, std::vector<Op>{Gate(0, 5), measure, Gate(5, 1)}, policy);
+            const double beforeScore = Access::Inspect(before, map, bonds, 0).full.at(idx4);
+            const double afterScore = Access::Inspect(after, map, bonds, 0).full.at(idx4);
+            const double neitherScore = Access::Inspect(neither, map, bonds, 0).full.at(idx4);
+            const double singleProductWork = mpo ? 16. : 4.;
+            Check(std::abs(afterScore - neitherScore - singleProductWork) < 1e-9 && beforeScore > afterScore,
+                  "Single-qubit work must use the ranks at that point in the circuit");
 
             // Interior ancilla 3 reset inside symmetric bystander entanglement [2,4,8,8,8,8,8,4,2]:
             // without siteRanks, symmetry tie-breaking selects low (m = 3);

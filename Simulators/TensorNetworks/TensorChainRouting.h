@@ -1,6 +1,8 @@
 #pragma once
 #include "MPSDummySimulator.h"
 #include "RoutingConfig.h"
+#include <optional>
+#include <utility>
 
 namespace Simulators::Private
 {
@@ -91,15 +93,19 @@ template <class Backend> class TensorChainRouting : public Backend
     void SetUpcomingGates(const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override
     {
         upcomingHasDisentangle = RoutingConfig::ContainsDisentanglingOperations(gates);
-        RefreshRoutingSettings();
+        midCircuitProjection.reset();
+        RefreshRoutingSettings(true);
         // A qubit no entangling operation has acted on is a product state, so crossing it costs no bond: the idle
         // sites of a sparse register, and ancillas before their first gate. Taken into account for circuits that
         // measure or reset before their end, where it was measured (rotated memories sampled from a checkpoint ran
         // 12% to 43% faster at half the peak bond); on unitary circuits it only reshuffled the routing. Only the
         // lookahead reads the ranks: with routing off the circuit is not even scanned.
-        if (TracksDisentangling() && upcomingHasDisentangle && useOptimalMeetingPosition && (lookaheadDepth != 0 || IsRoutingLookaheadEnabled()) &&
-            RoutingConfig::ContainsMidCircuitDisentangling(gates))
-            StartUntouchedAsProducts();
+        if (TracksDisentangling() && upcomingHasDisentangle && useOptimalMeetingPosition && (lookaheadDepth != 0 || IsRoutingLookaheadEnabled()))
+        {
+            midCircuitProjection = RoutingConfig::ContainsMidCircuitDisentangling(gates, liveUntouched, liveSiteRank);
+            if (*midCircuitProjection)
+                StartUntouchedAsProducts();
+        }
         Backend::SetUpcomingGates(gates);
     }
 
@@ -128,7 +134,7 @@ template <class Backend> class TensorChainRouting : public Backend
     // Called when configuration, register size or lookahead changes, never on
     // the gate hot path. Invalidation retains memoized plans: their keys include
     // the full map, bond estimates and upcoming gate window.
-    void RefreshRoutingSettings()
+    void RefreshRoutingSettings(bool windowChanged = false)
     {
         const auto cap = configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey());
         const bool explicitEnabled = RoutingConfig::VirtualBondsEnabled(configuration);
@@ -138,7 +144,18 @@ template <class Backend> class TensorChainRouting : public Backend
                               cap > 0 && MPSDummySimulator::EffectiveLookaheadMaxBondDimension(nrQubits, operatorChain, cap) > cap;
         if (cap != physicalBondCap || explicitEnabled != explicitVirtualBondsEnabled || enabled != virtualBondsEnabled || tracking != trackVirtualBonds ||
             weight != truncationWeight)
-            InvalidateDummyHistory();
+        {
+            // Detaching the gate window does not change the tensors. Keep
+            // their uncapped estimates until another compatible window is
+            // installed, or an operation changes the state in between.
+            if (windowChanged && trackVirtualBonds && !tracking && dummyHistoryValid)
+            {
+                inactiveBondDims = dummySim->getCurrentBondDimensions();
+                dummyHistoryValid = false;
+            }
+            else if (!windowChanged)
+                InvalidateDummyHistory();
+        }
         physicalBondCap = cap;
         explicitVirtualBondsEnabled = explicitEnabled;
         virtualBondsEnabled = enabled;
@@ -146,6 +163,8 @@ template <class Backend> class TensorChainRouting : public Backend
         trackVirtualBonds = tracking;
         if (dummySim)
             ConfigureDummy();
+        if (tracking && !inactiveBondDims.empty())
+            RestoreDummyHistory(std::exchange(inactiveBondDims, {}));
     }
 
     bool ShouldTrackVirtualBonds() const
@@ -156,6 +175,7 @@ template <class Backend> class TensorChainRouting : public Backend
     void InvalidateDummyHistory() noexcept
     {
         dummyHistoryValid = false;
+        inactiveBondDims.clear();
     }
 
     void ValidateDummyHistoryMap() noexcept
@@ -282,7 +302,7 @@ template <class Backend> class TensorChainRouting : public Backend
         dummyHistoryValid = true;
     }
 
-    template <class Bond> long long PlanMeetingPosition(const Bond *bonds, size_t count)
+    template <class Bond> long long PlanMeetingPosition(const Bond *bonds, size_t count, bool automaticDepth = false)
     {
         if (!useOptimalMeetingPosition || lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max() || decompositionDepth || !bonds ||
             nrQubits <= 1 || count + 1 != nrQubits || upcomingGateIndex < 0 || static_cast<size_t>(upcomingGateIndex) >= upcomingGates.size())
@@ -314,8 +334,24 @@ template <class Backend> class TensorChainRouting : public Backend
         dummySim->setTotalSwappingCost(0.);
         dummyHistoryValid = trackVirtualBonds;
         double bestCost = std::numeric_limits<double>::infinity();
-        const auto position =
-            dummySim->SelectMeetingPositionAdaptive(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0., bestCost);
+        int depth = lookaheadDepth, heuristicDepth = lookaheadDepthWithHeuristic;
+        // Projected ranks are forecasts of a sampled branch. On MPS memory
+        // circuits, a 12-gate horizon retained accuracy and avoided costly
+        // routes chosen by longer rollouts. Keep the exact branching prefix.
+        constexpr int projectedMpsHorizon = 12;
+        if (automaticDepth && !operatorChain && upcomingHasDisentangle && depth > projectedMpsHorizon)
+        {
+            // A network may install the gate window before enabling lookahead.
+            if (!midCircuitProjection)
+                midCircuitProjection = RoutingConfig::ContainsMidCircuitDisentangling(upcomingGates, liveUntouched, liveSiteRank);
+            if (*midCircuitProjection)
+            {
+                const int exactSteps = depth - std::clamp(heuristicDepth, 0, depth);
+                depth = projectedMpsHorizon;
+                heuristicDepth = std::max(0, depth - exactSteps);
+            }
+        }
+        const auto position = dummySim->SelectMeetingPositionAdaptive(upcomingGates, upcomingGateIndex, depth, heuristicDepth, 0., bestCost);
         if (position < std::min(map[qubits[0]], map[qubits[1]]) || position >= std::max(map[qubits[0]], map[qubits[1]]))
             return -1;
         if (trackVirtualBonds)
@@ -333,6 +369,7 @@ template <class Backend> class TensorChainRouting : public Backend
     // SWAP or a generic gate, near 1 for a small-angle controlled rotation).
     void RecordExecutedTwoQubitGate(Types::qubit_t q0, Types::qubit_t q1, bool isSwap, double schmidtRank) noexcept
     {
+        inactiveBondDims.clear();
         try
         {
             if (isSwap)
@@ -458,14 +495,19 @@ template <class Backend> class TensorChainRouting : public Backend
 
     std::vector<double> CaptureDummyHistory() const
     {
-        return trackVirtualBonds && dummyHistoryValid && dummySim ? dummySim->getCurrentBondDimensions() : std::vector<double>{};
+        return trackVirtualBonds && dummyHistoryValid && dummySim ? dummySim->getCurrentBondDimensions() : inactiveBondDims;
     }
 
     void RestoreDummyHistory(const std::vector<double> &bonds)
     {
         InvalidateDummyHistory();
-        if (!trackVirtualBonds || bonds.empty() || bonds.size() + 1 != nrQubits)
+        if (bonds.empty() || bonds.size() + 1 != nrQubits)
             return;
+        if (!trackVirtualBonds)
+        {
+            inactiveBondDims = bonds;
+            return;
+        }
         EnsureDummySimulator(nrQubits);
         const auto map = CurrentRoutingMap();
         if (map.size() != nrQubits)
@@ -487,11 +529,10 @@ template <class Backend> class TensorChainRouting : public Backend
 
     void RestoreDummyState()
     {
-        if (hasSavedSiteRank)
-        {
-            liveSiteRank = savedSiteRank;
-            liveUntouched = savedUntouched;
-        }
+        if (!hasSavedSiteRank)
+            return;
+        liveSiteRank = savedSiteRank;
+        liveUntouched = savedUntouched;
         RestoreDummyHistory(savedDummyBondDims);
     }
 
@@ -510,16 +551,36 @@ template <class Backend> class TensorChainRouting : public Backend
         dummyHistoryValid = true;
     }
 
-    void ClearDummySimulator()
+    void CopyRoutingHistoryTo(TensorChainRouting &copy) const
     {
-        dummySim.reset();
+        copy.dummySim = dummySim ? dummySim->Clone() : nullptr;
+        copy.dummyHistoryValid = dummyHistoryValid;
+        copy.inactiveBondDims = inactiveBondDims;
+        copy.savedDummyBondDims = savedDummyBondDims;
+        copy.liveSiteRank = liveSiteRank;
+        copy.liveUntouched = liveUntouched;
+        copy.savedSiteRank = savedSiteRank;
+        copy.savedUntouched = savedUntouched;
+        copy.hasSavedSiteRank = hasSavedSiteRank;
+        copy.midCircuitProjection = midCircuitProjection;
+    }
+
+    void ClearSavedRoutingState()
+    {
         savedDummyBondDims.clear();
-        liveSiteRank.clear();
-        liveUntouched.clear();
         savedUntouched.clear();
         savedSiteRank.clear();
         hasSavedSiteRank = false;
+    }
+
+    void ClearDummySimulator()
+    {
+        dummySim.reset();
+        ClearSavedRoutingState();
+        liveSiteRank.clear();
+        liveUntouched.clear();
         upcomingHasDisentangle = false;
+        midCircuitProjection.reset();
         InvalidateDummyHistory();
     }
 
@@ -553,6 +614,7 @@ template <class Backend> class TensorChainRouting : public Backend
     bool useOptimalMeetingPosition = true;
     double growthFactorSwap = 1., growthFactorGate = 0.7;
     std::unique_ptr<MPSDummySimulator> dummySim;
+    std::vector<double> inactiveBondDims;
     std::vector<double> savedDummyBondDims;
     std::vector<double> liveSiteRank;
     std::vector<double> savedSiteRank;
@@ -560,6 +622,7 @@ template <class Backend> class TensorChainRouting : public Backend
     std::vector<uint8_t> savedUntouched;
     bool hasSavedSiteRank = false;
     bool upcomingHasDisentangle = false;
+    std::optional<bool> midCircuitProjection;
     bool dummyHistoryValid = false;
     size_t curMaxBondDim = 0;
     MPSDummySimulator::IndexType physicalBondCap = 0;

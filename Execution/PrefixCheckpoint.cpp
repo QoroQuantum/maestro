@@ -263,8 +263,8 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     // The lookahead of a suffix follows its two-qubit gates, which every noise realization shares. Resolve it
     // once, before the workers copy this simulator and its settings: planning each realization cost 25% to 60%
     // of a call that runs one realization per shot.
-    network_->PrepareCheckpointRouting(simulator_, suffix, false);
     const auto start = std::chrono::steady_clock::now();
+    network_->PrepareCheckpointRouting(simulator_, suffix, false);
     size_t terminal_calls = 0, trajectory_calls = 0;
     bool extended = false;
 

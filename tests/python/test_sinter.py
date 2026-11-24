@@ -1415,9 +1415,9 @@ def test_routing_crosses_untouched_qubits_as_product_states():
     product states they are, and the chain stays below the bond dimension it reaches without routing."""
     circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=2)
 
-    def peak_bond(disable):
+    def peak_bond(disable=False, depth=-1):
         config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
-                                         max_bond_dimension=256, disable_optimized_swapping=disable)
+                                         max_bond_dimension=256, disable_optimized_swapping=disable, lookahead_depth=depth)
         sampler = MaestroCompiledSampler(circuit, config=config, seed=5, enable_checkpoint=False)
         width = max(sampler.qc.num_qubits, circuit.num_qubits)
         # An empty prefix keeps index order: only the swap lookahead differs between the two runs.
@@ -1429,7 +1429,12 @@ def test_routing_crosses_untouched_qubits_as_product_states():
         assert not events.any()  # a noiseless memory flips no detector and no observable
         return result["max_bond_dim_reached"]
 
-    assert peak_bond(False) < peak_bond(True)
+    automatic = peak_bond()
+    assert automatic < peak_bond(disable=True)
+    # The shorter forecast applies to automatic routing. A caller can still
+    # request the longer lookahead, which takes a different route here.
+    assert peak_bond(depth=12) == automatic
+    assert peak_bond(depth=15) > automatic
 
 
 def test_a_memory_run_whole_keeps_index_order_at_a_small_predicted_layout_gain():
