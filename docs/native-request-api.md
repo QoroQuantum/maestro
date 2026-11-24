@@ -1311,8 +1311,9 @@ at the measured and reset qubits. `mps_routing_virtual_bonds=false` or
 `mps_routing_legacy_cap=true` turns this off. When the circuit measures or
 resets before its end, qubits that no entangling operation has acted on yet
 (idle sites of a sparse register, ancillas before their first gate) are routed
-as the product states they are. GPU routing does not model measurements and
-resets.
+as the product states they are, and a searched MPS layout replaces index order
+only at a predicted gain of 2 or more. GPU routing does not model measurements
+and resets.
 
 For an estimated dimension `d` and physical cap `c`, the routing score is
 `min(d,c)^3 * (1 + weight * max(0,d/c - 1))`. The first term models capped

@@ -1432,6 +1432,25 @@ def test_routing_crosses_untouched_qubits_as_product_states():
     assert peak_bond(False) < peak_bond(True)
 
 
+def test_a_memory_run_whole_keeps_index_order_at_a_small_predicted_layout_gain():
+    """The layout search predicted a gain of 1.54 for this memory, took the layout, and the run truncated at the
+    bond limit: wrong shots, and about 200 times slower. A circuit that measures before its end now needs a
+    predicted gain of 2, which no rotated memory showed, so the chain stays within the bonds of index order."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=3)
+
+    def run(disable):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                         max_bond_dimension=256, disable_optimized_swapping=disable)
+        sampler = MaestroCompiledSampler(circuit, config=config, seed=5, enable_checkpoint=False)
+        result = sampler.qc.execute(sampler.config, shots=1, return_samples=True)
+        measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+        events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
+        assert not events.any()  # a noiseless memory flips no detector and no observable
+        return result["max_bond_dim_reached"]
+
+    assert run(False) <= run(True)
+
+
 def test_sinter_public_api_is_the_documented_entry_points():
     import maestro.sinter as module
     assert set(module.__all__) == {"MaestroCompiledSampler", "MaestroSinterSampler", "translate_stim_to_maestro"}

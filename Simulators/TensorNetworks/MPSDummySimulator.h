@@ -257,6 +257,14 @@ class MPSDummySimulator
     // relative to their interactions predicted 2400 and more and really ran 180 to 270 times faster.
     static constexpr double kCheckpointPrefixLayoutGain = 100.;
 
+    // The predicted gain a searched MPS layout needs when the circuit measures or resets before its end. At 1.35, the
+    // value for circuits whose measurements are all final, rotated surface-code memories took layouts that ran far
+    // slower and truncated: d=5 with 3 rounds at a bond limit of 256 predicted 1.54 and took 88 s with wrong shots
+    // instead of 0.55 s. Over d=3, 5 and 7 and 2 to 25 rounds the predictions for these memories were 1.20 to 1.94.
+    // At 2 they keep index order; 105 other circuits with mid-circuit resets ran 5% slower in total (November 2026),
+    // against 10% at 4 and 18% at 100.
+    static constexpr double kMidCircuitLayoutGain = 2.;
+
     void SetMaxBondDimension(IndexType val)
     {
         if (nrQubits == 0)
@@ -1571,7 +1579,17 @@ class MPSDummySimulator
             }
         }
 
-        const double effectiveMinGain = (hasDisentangle && !minLayoutGainExplicit) ? 1.35 : minLayoutGain;
+        // An MPS circuit that measures or resets before its end needs a larger predicted gain than one whose
+        // measurements are all final (kMidCircuitLayoutGain).
+        bool midCircuit = false;
+        if (hasDisentangle && !minLayoutGainExplicit && !IsOperatorChain())
+        {
+            std::vector<std::shared_ptr<Circuits::IOperation<>>> ordered;
+            for (const auto &layer : layers)
+                ordered.insert(ordered.end(), layer->GetOperations().begin(), layer->GetOperations().end());
+            midCircuit = RoutingConfig::ContainsMidCircuitDisentangling(ordered);
+        }
+        const double effectiveMinGain = minLayoutGainExplicit ? minLayoutGain : midCircuit ? kMidCircuitLayoutGain : hasDisentangle ? 1.35 : minLayoutGain;
         if (layers.size() <= 2)
             return optMap != identityMap && identityCost < effectiveMinGain * optCost ? identityMap : optMap;
 
