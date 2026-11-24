@@ -587,7 +587,9 @@ class BoundedRoutingPlanner
             }
             if (gate.swap)
             {
+                // A logical SWAP: each label now names the other state, and the site ranks describe states.
                 Relabel(gate.a, gate.b);
+                std::swap(scratch_.siteRanks[gate.a], scratch_.siteRanks[gate.b]);
                 continue;
             }
             const Index low = std::min(scratch_.map[gate.a], scratch_.map[gate.b]);

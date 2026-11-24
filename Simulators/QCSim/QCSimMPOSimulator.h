@@ -1224,6 +1224,14 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         }
     }
 
+    void ExchangeTrackedStates(Types::qubit_t q0, Types::qubit_t q1) noexcept override
+    {
+        if (pendingDeflate.size() != nrQubits || pendingDeflateRank.size() != nrQubits || q0 >= nrQubits || q1 >= nrQubits)
+            return;
+        std::swap(pendingDeflate[q0], pendingDeflate[q1]);
+        std::swap(pendingDeflateRank[q0], pendingDeflateRank[q1]);
+    }
+
     void ClearSpanPendingDeflate(const std::vector<long long> &mapBefore, Types::qubit_t q0, Types::qubit_t q1) noexcept
     {
         if (mapBefore.size() != nrQubits || pendingDeflate.size() != nrQubits || q0 >= nrQubits || q1 >= nrQubits)

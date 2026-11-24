@@ -113,6 +113,9 @@ class MPSDummySimulator
         std::swap(qubitsMap[q1], qubitsMap[q2]);
         qubitsMapInv[qubitsMap[q1]] = q1;
         qubitsMapInv[qubitsMap[q2]] = q2;
+        // Each label now names the other state: the site ranks describe states.
+        if (siteRank.size() == nrQubits)
+            std::swap(siteRank[q1], siteRank[q2]);
     }
 
     double getGrowthFactorSwap() const
@@ -560,6 +563,10 @@ class MPSDummySimulator
         totalSwappingCost += bondCost[bond];
         growBondDimension(bond, isSwapGate, schmidtRank);
         totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+        // A SWAP gate applied to the tensors leaves the labels on their sites and exchanges the states under them.
+        // (Routing swaps move a label with its state and do not come through here.)
+        if (isSwapGate && siteRank.size() == nrQubits && bond + 1 < static_cast<IndexType>(nrQubits))
+            std::swap(siteRank[qubitsMapInv[bond]], siteRank[qubitsMapInv[bond + 1]]);
     }
 
     void ApplyGates(const std::vector<QC::Gates::AppliedGate<MatrixClass>> &gates)

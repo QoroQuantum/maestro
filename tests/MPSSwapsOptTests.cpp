@@ -2548,6 +2548,39 @@ BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
     }
 }
 
+// A logical SWAP exchanges the states of its qubits, so the site ranks, which describe states, go with them:
+// after a Bell pair on (0, 1), a reset of 2 and SWAP(0, 2), it is qubit 2 that belongs to the pair.
+BOOST_AUTO_TEST_CASE(LogicalSwapsCarrySiteRanks)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    for (const bool isMPO : {false, true})
+        for (const bool relabel : {true, false})
+        {
+            Simulators::MPSDummySimulator sim(5, isMPO);
+            sim.SetSwapGatesRelabelQubits(relabel);
+            sim.SetMaxBondDimension(64);
+            sim.ApplyGate(CF::CreateGate(Kind::kHadamardGateType, 0));
+            sim.ApplyGate(CF::CreateGate(Kind::kCXGateType, 0, 1));
+            sim.ApplyGate(CF::CreateReset({2}));
+            const auto before = sim.getCurrentSiteRanks();
+            BOOST_REQUIRE_GT(before[0], 1.0);
+            BOOST_REQUIRE_CLOSE(before[2], 1.0, 1e-9);
+
+            sim.ApplyGate(CF::CreateGate(Kind::kSwapGateType, 0, 2));
+            const auto &after = sim.getCurrentSiteRanks();
+            BOOST_CHECK_CLOSE(after[2], before[0], 1e-9); // now half of the pair
+            BOOST_CHECK_CLOSE(after[0], 1.0, 1e-9);       // now the reset qubit
+            BOOST_CHECK_CLOSE(after[1], before[1], 1e-9);
+
+            // Swapping back restores the ranks.
+            sim.ApplyGate(CF::CreateGate(Kind::kSwapGateType, 2, 0));
+            for (size_t q = 0; q < 5; ++q)
+                BOOST_CHECK_CLOSE(sim.getCurrentSiteRanks()[q], before[q], 1e-9);
+        }
+}
+
 BOOST_AUTO_TEST_CASE(LiveResetRoutingFusionAndSyndromeAccuracy)
 {
     using CF = Circuits::CircuitFactory<>;

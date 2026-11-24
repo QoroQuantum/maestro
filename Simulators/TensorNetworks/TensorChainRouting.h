@@ -207,6 +207,12 @@ template <class Backend> class TensorChainRouting : public Backend
     {
     }
 
+    // A logical SWAP exchanged the states of two qubits: a backend that keeps more per-qubit routing state than
+    // the site ranks exchanges it here.
+    virtual void ExchangeTrackedStates(Types::qubit_t /*q0*/, Types::qubit_t /*q1*/) noexcept
+    {
+    }
+
     // Whether the backend reports the qubits its measurements and resets collapse (RecordDisentangledQubits), so
     // that the site ranks follow the state. Only then do measurements and resets enter the routing model and
     // switch its overflow pricing on; a backend that does not (the GPU chains) keeps the gate-only model.
@@ -329,9 +335,24 @@ template <class Backend> class TensorChainRouting : public Backend
     {
         try
         {
-            // A SWAP exchanges the states of its qubits: neither is known to be untouched afterwards.
-            MarkTouched(q0);
-            MarkTouched(q1);
+            if (isSwap)
+            {
+                // A SWAP exchanges the states of its qubits, whether the chain relabels them or moves its tensors:
+                // what describes those states goes with them.
+                if (q0 < nrQubits && q1 < nrQubits && q0 != q1)
+                {
+                    EnsureLiveSiteRanks();
+                    std::swap(liveSiteRank[q0], liveSiteRank[q1]);
+                    if (liveUntouched.size() == nrQubits)
+                        std::swap(liveUntouched[q0], liveUntouched[q1]);
+                    ExchangeTrackedStates(q0, q1);
+                }
+            }
+            else
+            {
+                MarkTouched(q0);
+                MarkTouched(q1);
+            }
             if (q0 < nrQubits && q1 < nrQubits && q0 != q1 && !isSwap && schmidtRank > 1. + 1e-9)
             {
                 EnsureLiveSiteRanks();
