@@ -16,10 +16,7 @@
 #define _CIRCQASM_H_
 
 #include "../Circuit/Circuit.h"
-#include <iomanip>
-#include <limits>
-#include <locale>
-#include <sstream>
+#include <charconv>
 
 namespace qasm
 {
@@ -204,16 +201,18 @@ template <typename Time = Types::time_type> class CircToQasm
         case Circuits::OperationType::kDelay: {
             auto delayOp = std::static_pointer_cast<Circuits::Delay<Time>>(operation);
             auto qbit = delayOp->GetQubit();
-            std::ostringstream duration;
-            duration.imbue(std::locale::classic());
-            duration << std::setprecision(std::numeric_limits<Time>::max_digits10) << delayOp->GetDuration();
+            char buffer[64];
+            const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), delayOp->GetDuration());
+            if (converted.ec != std::errc{})
+                throw std::runtime_error("Cannot format delay duration for OpenQASM.");
+            const std::string duration(buffer, converted.ptr);
             if (version == QasmVersion::V3)
             {
-                qasm += "delay[" + duration.str() + "s] q[" + std::to_string(qbit) + "];\n";
+                qasm += "delay[" + duration + "s] q[" + std::to_string(qbit) + "];\n";
             }
             else
             {
-                qasm += "delay(" + duration.str() + ") q[" + std::to_string(qbit) + "];\n";
+                qasm += "delay(" + duration + ") q[" + std::to_string(qbit) + "];\n";
             }
         }
         break;

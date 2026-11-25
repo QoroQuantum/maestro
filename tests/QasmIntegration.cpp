@@ -291,14 +291,22 @@ BOOST_AUTO_TEST_CASE(ExportPreservesResetTargetsAndSubMicrosecondDelays)
     auto circuit = std::make_shared<Circuits::Circuit<>>();
     circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0, 1}, 0, std::vector<bool>{true, false}));
     circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(1, 1e-9));
+    constexpr double secondDuration = 2.345678912345678e-8;
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(0, secondDuration));
     for (const auto version : {Exporter::QasmVersion::V2, Exporter::QasmVersion::V3})
     {
         qasm::QasmToCirc<> parser;
         const auto roundTrip = parser.ParseAndTranslate(Exporter::Generate(circuit, version));
         BOOST_REQUIRE_MESSAGE(roundTrip, parser.GetErrorMessage());
-        const auto &last = roundTrip->GetOperations().back();
-        BOOST_REQUIRE(last->GetType() == Circuits::OperationType::kDelay);
-        BOOST_CHECK_EQUAL(std::static_pointer_cast<Circuits::Delay<>>(last)->GetDuration(), 1e-9);
+        const auto &ops = roundTrip->GetOperations();
+        BOOST_REQUIRE_GE(ops.size(), 2u);
+        const auto duration = [&](size_t index) {
+            const auto &op = ops[index];
+            BOOST_REQUIRE(op->GetType() == Circuits::OperationType::kDelay);
+            return std::static_pointer_cast<Circuits::Delay<>>(op)->GetDuration();
+        };
+        BOOST_CHECK_EQUAL(duration(ops.size() - 2), 1e-9);
+        BOOST_CHECK_CLOSE_FRACTION(duration(ops.size() - 1), secondDuration, 4e-16);
         auto simulator = MakeInitializedSimulator(2);
         Circuits::OperationState state(2);
         roundTrip->Execute(simulator, state);
