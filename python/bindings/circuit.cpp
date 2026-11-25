@@ -404,7 +404,7 @@ void bind_circuit(nb::module_ &m)
             "computation (small circuits only). Pass observables (a Pauli "
             "string, ';'-separated string or list) to instead return the "
             "expectation of each observable on the mirror circuit: a float "
-            "for a single string, otherwise a list.")
+            "for a single string, otherwise a list. " MAESTRO_UNITARY_PREPARATION_DOC)
         .def(
             "inner_product",
             [](std::shared_ptr<Circuits::Circuit<double>> self, std::shared_ptr<Circuits::Circuit<double>> other, const SimulatorConfig &config) {
@@ -413,11 +413,11 @@ void bind_circuit(nb::module_ &m)
             "other"_a, "config"_a = SimulatorConfig{},
             "Compute the inner product ``<psi_self|psi_other> = <0|U_self^dag "
             "U_other|0>`` between this circuit's state and another circuit's "
-            "state, using ProjectOnZero.")
+            "state, using ProjectOnZero. " MAESTRO_UNITARY_PREPARATION_DOC)
         .def(
             "prob", &state_probability_core, "target_state"_a,
             "Compute the probability of a specific output state using the "
-            "Pauli path integral simulator. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
+            "Pauli path integral simulator. " MAESTRO_UNITARY_PREPARATION_DOC "\n\n"
             "Example: qc.prob('111') returns the probability of ``|111>``.\n\n"
             "Args:\n"
             "    target_state: Bitstring like '10001001' (qubit 0 leftmost).\n\n"
@@ -516,7 +516,7 @@ void bind_circuit(nb::module_ &m)
                 return result;
             },
             "target_state"_a, "noise_model"_a,
-            "Compute readout-corrected probability using path integral. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
+            "Compute readout-corrected probability using path integral. " MAESTRO_UNITARY_PREPARATION_DOC "\n\n"
             "When the noise model has readout error, uses first-order expansion:\n"
             "P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕eᵢ)\n"
             "where a_i = P(read ¬b_i | prepared b_i) and "

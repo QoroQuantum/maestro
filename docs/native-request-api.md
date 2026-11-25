@@ -252,10 +252,18 @@ takes expectations of the executed mirror state, observable mode also accepts
 `density_matrix` and `matrix_product_operator`; plain mirror fidelity, a
 pure-state overlap, does not.
 
-State queries remove terminal measurements; mid-circuit measurements are rejected
-for these queries. Overlap/fidelity require unitary circuits. Incremental evolution
-accepts explicit Kraus instructions in the step circuit for exact noisy evolution;
-a top-level stochastic noise model is rejected for this operation. State queries
+Both circuits in `inner_product` and the preparation in `mirror_fidelity` must
+be unitary. These requests ignore delays, no-ops, and unconditional measurements
+after the last gate on each measured qubit. Gates may still follow on other
+qubits. Mid-circuit measurements, resets, classical control, channels, nested
+circuits, and gates without an implemented inverse are rejected. This also
+applies when requesting mirror observables. Explicit measurement `readout_error`
+is rejected because neither request returns classical measurement records.
+
+Other state queries remove terminal measurements and reject mid-circuit
+measurements. Incremental evolution accepts explicit Kraus instructions in
+the step circuit for exact noisy evolution and rejects a top-level stochastic
+noise model. State queries
 with top-level noise require a single exact realization. No statevector or
 pure-state overlap is advertised for density matrices/MPOs; their counterparts
 are the two mixed-state queries below. Individual methods may have narrower

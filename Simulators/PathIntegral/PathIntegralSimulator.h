@@ -17,10 +17,9 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <unordered_set>
 #include <utility>
 
-#include "../../Circuit/Circuit.h"
+#include "../../Circuit/UnitaryPreparation.h"
 #include "PathIntegral.h"
 
 namespace Simulators
@@ -202,65 +201,16 @@ class PathIntegralSimulator
 
     std::vector<QC::Gates::AppliedGate<>> ConvertCircuit(const std::shared_ptr<Circuits::Circuit<>> &circuit)
     {
-        if (!circuit)
-            throw std::invalid_argument("Path-integral amplitude query received a null circuit.");
-
-        const auto &operations = circuit->GetOperations();
         std::vector<QC::Gates::AppliedGate<>> result;
-        result.reserve(operations.size());
-        std::unordered_set<Types::qubit_t> measured;
-        using Circuits::OperationType;
-
-        for (const auto &op : operations)
-        {
-            if (!op)
-                throw std::invalid_argument("Path-integral amplitude query encountered a null operation.");
-
-            switch (op->GetType())
-            {
-            case OperationType::kGate: {
-                const auto gate = std::static_pointer_cast<Circuits::IQuantumGate<>>(op);
-                if (!measured.empty())
-                    for (unsigned int i = 0; i < gate->GetNumQubits(); ++i)
-                        if (measured.count(gate->GetQubit(i)))
-                            throw DynamicOperationError("mid-circuit measurement on qubit " + std::to_string(gate->GetQubit(i)));
-
-                auto applied = ConvertGate(gate);
-                if (!applied)
-                    throw std::invalid_argument("Unsupported gate type " + std::to_string(static_cast<int>(gate->GetGateType())) +
-                                                " in path-integral amplitude query.");
-                result.emplace_back(std::move(*applied));
-                break;
-            }
-            case OperationType::kMeasurement: {
-                // Readout is terminal on each measured qubit until another gate uses it.
-                const auto &qubits = std::static_pointer_cast<Circuits::MeasurementOperation<>>(op)->GetQubits();
-                measured.insert(qubits.begin(), qubits.end());
-                break;
-            }
-            case OperationType::kDelay:
-            case OperationType::kNoOp:
-                break;
-            case OperationType::kReset:
-                throw DynamicOperationError("reset");
-            case OperationType::kConditionalGate:
-                throw DynamicOperationError("conditional gate");
-            case OperationType::kConditionalMeasurement:
-                throw DynamicOperationError("conditional measurement");
-            case OperationType::kConditionalRandomGen:
-                throw DynamicOperationError("conditional random bit generation");
-            case OperationType::kRandomGen:
-                throw DynamicOperationError("random bit generation");
-            case OperationType::kComposite:
-                throw std::invalid_argument("Path-integral amplitude queries do not support composite operations. Pass the constituent operations directly.");
-            case OperationType::kQuantumChannel:
-                throw std::invalid_argument("Path-integral amplitude queries do not support quantum channels. Use execute() or estimate() with "
-                                            "SimulationType.DensityMatrix.");
-            default:
-                throw std::invalid_argument("Unknown operation type in path-integral amplitude query.");
-            }
-        }
-
+        if (circuit)
+            result.reserve(circuit->GetOperations().size());
+        Circuits::ForEachUnitaryGate(circuit, "Path-integral amplitude query", [&](const auto &gate) {
+            auto applied = ConvertGate(gate);
+            if (!applied)
+                throw std::invalid_argument("Unsupported gate type " + std::to_string(static_cast<int>(gate->GetGateType())) +
+                                            " in path-integral amplitude query.");
+            result.emplace_back(std::move(*applied));
+        });
         return result;
     }
 
@@ -437,12 +387,6 @@ class PathIntegralSimulator
     }
 
   private:
-    static std::invalid_argument DynamicOperationError(const std::string &operation)
-    {
-        return std::invalid_argument("Path-integral amplitude queries do not support " + operation +
-                                     ". Use execute() or estimate() with SimulationType.PathIntegral.");
-    }
-
     QC::PathIntegral::PathIntegralSimulator simulator;
 
     // These gates are never modified, and their matrix accessors return const

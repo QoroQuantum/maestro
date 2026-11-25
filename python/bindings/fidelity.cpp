@@ -1,122 +1,25 @@
+#include "Execution/CircuitHelpers.h"
 #include "core.h"
 #include "runtime.h"
 
 namespace maestro_bindings
 {
 
-// Helper: Create the adjoint (inverse) of a single quantum gate operation.
-// Non-gate operations (measurements, resets, etc.) return nullptr and are
-// skipped when building the mirror circuit.
-using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
-
-OperationPtr adjoint_gate(const OperationPtr &op)
+// Apply the ket's preparation first, then the inverse of the bra's preparation.
+static CircuitPtr build_overlap_circuit(const CircuitPtr &bra, const CircuitPtr &ket)
 {
-    if (op->GetType() != Circuits::OperationType::kGate)
-        return nullptr;
-
-    auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(op);
-    if (!gate)
-        return nullptr;
-
-    const auto gt = gate->GetGateType();
-    const auto params = gate->GetParams();
-
-    switch (gt)
-    {
-    // ---- Self-inverse (Hermitian) gates ----
-    case Circuits::QuantumGateType::kXGateType:
-    case Circuits::QuantumGateType::kYGateType:
-    case Circuits::QuantumGateType::kZGateType:
-    case Circuits::QuantumGateType::kHadamardGateType:
-    case Circuits::QuantumGateType::kKGateType:
-    case Circuits::QuantumGateType::kCXGateType:
-    case Circuits::QuantumGateType::kCYGateType:
-    case Circuits::QuantumGateType::kCZGateType:
-    case Circuits::QuantumGateType::kCHGateType:
-    case Circuits::QuantumGateType::kSwapGateType:
-    case Circuits::QuantumGateType::kCCXGateType:
-    case Circuits::QuantumGateType::kCSwapGateType:
-        return op->Clone();
-
-    // ---- Paired gates ----
-    case Circuits::QuantumGateType::kSGateType:
-        return std::make_shared<Circuits::SdgGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSdgGateType:
-        return std::make_shared<Circuits::SGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kTGateType:
-        return std::make_shared<Circuits::TdgGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kTdgGateType:
-        return std::make_shared<Circuits::TGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSxGateType:
-        return std::make_shared<Circuits::SxDagGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSxDagGateType:
-        return std::make_shared<Circuits::SxGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kCSxGateType:
-        return std::make_shared<Circuits::CSxDagGate<>>(gate->GetQubit(0), gate->GetQubit(1));
-    case Circuits::QuantumGateType::kCSxDagGateType:
-        return std::make_shared<Circuits::CSxGate<>>(gate->GetQubit(0), gate->GetQubit(1));
-
-    // ---- Parametric single-qubit: negate angle ----
-    case Circuits::QuantumGateType::kPhaseGateType:
-        return std::make_shared<Circuits::PhaseGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRxGateType:
-        return std::make_shared<Circuits::RxGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRyGateType:
-        return std::make_shared<Circuits::RyGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRzGateType:
-        return std::make_shared<Circuits::RzGate<>>(gate->GetQubit(), -params[0]);
-
-    // ---- U gate: U†(θ,φ,λ,γ) = U(-θ, -λ, -φ, -γ) ----
-    case Circuits::QuantumGateType::kUGateType:
-        return std::make_shared<Circuits::UGate<>>(gate->GetQubit(), -params[0], -params[2], -params[1], -params[3]);
-
-    // ---- Controlled parametric: negate angle ----
-    case Circuits::QuantumGateType::kCPGateType:
-        return std::make_shared<Circuits::CPGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRxGateType:
-        return std::make_shared<Circuits::CRxGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRyGateType:
-        return std::make_shared<Circuits::CRyGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRzGateType:
-        return std::make_shared<Circuits::CRzGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-
-    // ---- CU gate: CU†(θ,φ,λ,γ) = CU(-θ, -λ, -φ, -γ) ----
-    case Circuits::QuantumGateType::kCUGateType:
-        return std::make_shared<Circuits::CUGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0], -params[2], -params[1], -params[3]);
-
-    default:
-        return op->Clone(); // Fallback: clone as-is
-    }
-}
-
-// Builds the mirror circuit: forward gates + adjoint gates in reverse.
-// Measurements and other non-gate ops are skipped — they have no adjoint.
-static std::shared_ptr<Circuits::Circuit<double>> build_mirror_circuit(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
-{
-    auto mirror = std::make_shared<Circuits::Circuit<double>>();
-    const auto &ops = circuit->GetOperations();
-    for (const auto &op : ops)
-    {
-        if (op->GetType() == Circuits::OperationType::kGate)
-            mirror->AddOperation(op->Clone());
-    }
+    auto combined = std::static_pointer_cast<Circuits::Circuit<double>>(ket->Clone());
+    const auto &ops = bra->GetOperations();
     for (auto it = ops.rbegin(); it != ops.rend(); ++it)
-    {
-        auto adj = adjoint_gate(*it);
-        if (adj)
-            mirror->AddOperation(adj);
-    }
-    return mirror;
+        combined->AddOperation(MaestroExecution::adjoint_gate(*it));
+    return combined;
 }
 
 // P(|0...0>) of the mirror circuit. By default uses shot-based sampling. Set
 // full_amplitude=true for exact statevector computation (only feasible for
 // small qubit counts).
-static double mirror_fidelity_projection(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const SimulatorConfig &config, int shots,
-                                         bool full_amplitude)
+static double mirror_fidelity_projection(const CircuitPtr &mirror, const SimulatorConfig &config, int shots, bool full_amplitude)
 {
-    auto mirror = build_mirror_circuit(circuit);
-
     // Helper lambda for the shot-based path
     auto run_shot_based = [&]() -> double {
         // Need a fresh mirror circuit since measurements mutate it
@@ -238,15 +141,16 @@ nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circu
 {
     if (!circuit)
         throw nb::value_error("Circuit is null.");
+    const auto preparation = MaestroExecution::UnitaryPreparation(circuit, "mirror_fidelity");
+    const auto mirror = build_overlap_circuit(preparation, preparation);
     if (!observables || observables->is_none())
-        return nb::float_(mirror_fidelity_projection(circuit, config, shots, full_amplitude));
+        return nb::float_(mirror_fidelity_projection(mirror, config, shots, full_amplitude));
 
     const auto paulis = ParseObservables(*observables);
     if (paulis.empty())
         throw nb::value_error("observables must contain at least one Pauli string.");
     const bool single = nb::isinstance<nb::str>(*observables) && paulis.size() == 1 && nb::cast<std::string>(*observables).find(';') == std::string::npos;
 
-    auto mirror = build_mirror_circuit(circuit);
     // Preserve the gate sequence: even exact estimator reductions can hide
     // truncation error by changing which operations the backend executes.
     SimulatorConfig mirror_config = config;
@@ -273,30 +177,9 @@ std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<
     if (!circuit_2)
         throw nb::value_error("circuit_2 is null.");
 
-    // Build combined circuit for <0| U1† U2 |0>.
-    // Circuit gates are applied left-to-right, so we place U2's gates first
-    // (they act on |0> first), then U1†'s gates (applied last = leftmost in
-    // the matrix product).
-    auto combined = std::make_shared<Circuits::Circuit<double>>();
-    const auto &ops1 = circuit_1->GetOperations();
-    const auto &ops2 = circuit_2->GetOperations();
-
-    // Forward pass of circuit_2: gate operations only
-    for (const auto &op : ops2)
-    {
-        if (op->GetType() == Circuits::OperationType::kGate)
-        {
-            combined->AddOperation(op->Clone());
-        }
-    }
-
-    // Adjoint of circuit_1: reverse order, each gate adjointed
-    for (auto it = ops1.rbegin(); it != ops1.rend(); ++it)
-    {
-        auto adj = adjoint_gate(*it);
-        if (adj)
-            combined->AddOperation(adj);
-    }
+    const auto bra = MaestroExecution::UnitaryPreparation(circuit_1, "inner_product circuit_1");
+    const auto ket = MaestroExecution::UnitaryPreparation(circuit_2, "inner_product circuit_2");
+    const auto combined = build_overlap_circuit(bra, ket);
 
     const int num_qubits = HandleQubits(*combined);
     ScopedSimulator sim(num_qubits);

@@ -273,6 +273,46 @@ void TestObservableMirrorFidelity()
     }
 }
 
+void TestUnitaryPreparationValidation()
+{
+    auto measured = Request("inner_product", 2, "h q[0]; measure q[0] -> c[0]; x q[1];");
+    measured["other_circuit"] = Request("inner_product", 2, "x q[1];").at("circuit");
+    Near(Real(Call(measured).at("inner_product").at(0)), 1.0 / std::sqrt(2.0));
+    std::swap(measured.at("circuit"), measured.at("other_circuit"));
+    Near(Real(Call(measured).at("inner_product").at(0)), 1.0 / std::sqrt(2.0));
+
+    auto mirror = Request("mirror_fidelity", 2, "h q[0]; measure q[0] -> c[0]; x q[1];");
+    Near(Real(Call(mirror).at("fidelity")), 1.0);
+    mirror["observables"] = j::array{"ZZ"};
+    Near(Real(Call(mirror).at("expectation_values").at(0)), 1.0);
+
+    auto channel = Gate("pauli_channel", {0});
+    channel["probabilities"] = j::array{0, 1, 0, 0};
+    const auto invalidChannel = Instructions("mirror_fidelity", 2, {Gate("x", {0}), channel}).at("circuit");
+    const auto invalidMeasurement = Request("mirror_fidelity", 2, "h q[0]; measure q[0] -> c[0]; cx q[0],q[1];").at("circuit");
+    const auto invalidReset = Request("inner_product", 2, "x q[0]; reset q[0];").at("circuit");
+    const auto rejected = [](const j::object &request, const char *name) {
+        for (bool validate : {true, false})
+        {
+            const auto response = Call(request, false, validate);
+            Check(ErrorCode(response) == "unsupported_capability", "Non-unitary preparation returned the wrong error code");
+            Check(response.at("error").at("message").as_string().find(name) != j::string::npos, "Error did not identify the unsupported operation");
+        }
+    };
+    mirror["circuit"] = invalidMeasurement;
+    rejected(mirror, "measurement");
+    mirror.erase("observables");
+    mirror["circuit"] = Request("mirror_fidelity", 2, "h q[0]; measure q[0] -> c[0]; if(c==1) measure q[1] -> c[1];").at("circuit");
+    rejected(mirror, "conditional measurement");
+    mirror["circuit"] = invalidChannel;
+    rejected(mirror, "channel");
+    auto overlap = Request("inner_product", 2, "x q[0];");
+    overlap["other_circuit"] = invalidReset;
+    rejected(overlap, "reset");
+    std::swap(overlap.at("circuit"), overlap.at("other_circuit"));
+    rejected(overlap, "reset");
+}
+
 double Expectation(const std::string &body, const char *observable)
 {
     auto request = Request("estimate", 2, body);
@@ -503,6 +543,7 @@ void TestNativeExtensions(const j::object &capabilities)
     TestInstructionNoiseFields();
     TestPauliChannelInstructions();
     TestObservableMirrorFidelity();
+    TestUnitaryPreparationValidation();
     TestAdjointDifferentiation();
     TestResultEnvelopeLimit(capabilities.at("max_result_bytes").to_number<uint64_t>());
 }

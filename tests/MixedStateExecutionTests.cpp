@@ -1,5 +1,6 @@
 // Count actual evolution work, independently of sampling metadata or timing.
 #include "../Circuit/Factory.h"
+#include "../Execution/CircuitHelpers.h"
 #include "../Execution/NoisyEstimation.h"
 #include "../Execution/PrefixCheckpoint.h"
 #include "../Execution/TerminalExpectation.h"
@@ -19,6 +20,55 @@ using CF = Circuits::CircuitFactory<>;
 using Gate = Circuits::QuantumGateType;
 using Method = Simulators::SimulationType;
 using MaestroExecution::RecordCircuitPtr;
+
+void CheckUnitaryPreparation()
+{
+    struct UnsupportedGate : Circuits::XGate<>
+    {
+        Gate GetGateType() const override
+        {
+            return Gate::kNone;
+        }
+    };
+
+    const auto x = CF::CreateGate(Gate::kXGateType, 0);
+    const auto h = CF::CreateGate(Gate::kHadamardGateType, 1);
+    const auto rejects = [&](const MaestroExecution::OperationPtr &op, const char *kind) {
+        try
+        {
+            MaestroExecution::UnitaryPreparation(CF::CreateCircuit({x, op, h}), "inner_product");
+        }
+        catch (const std::invalid_argument &error)
+        {
+            const std::string message = error.what();
+            Check(message.find("inner_product") != std::string::npos && message.find(kind) != std::string::npos,
+                  "Preparation error did not identify the query and offending operation");
+            return;
+        }
+        Check(false, "Unitary preparation accepted an unsupported operation between valid gates");
+    };
+    rejects(nullptr, "null operation");
+    rejects(std::make_shared<UnsupportedGate>(), "gate");
+    rejects(CF::CreateCircuit({x}), "composite");
+
+    const auto circuit = CF::CreateCircuit({x, CF::CreateMeasurement({{0, 4}}), CF::CreateDelay(0, 1.0), CF::CreateNoOp(), h});
+    const auto prepared = MaestroExecution::UnitaryPreparation(circuit, "mirror_fidelity");
+    Check(Circuits::ComparableCircuit<>(*prepared) == *CF::CreateCircuit({x, h}),
+          "Preparation changed gates around a terminal measurement and idle operations");
+}
+
+void CheckPreparationGateAdjoints()
+{
+    for (int i = 0; i < static_cast<int>(Gate::kNone); ++i)
+    {
+        const auto gate = CF::CreateGate(static_cast<Gate>(i), 2, 0, 1, 0.4, -0.7, 0.9, 0.3);
+        const auto prepared = MaestroExecution::UnitaryPreparation(CF::CreateCircuit({gate}), "inner_product");
+        Check(prepared->size() == 1, "Preparation dropped a reversible gate");
+        const auto inverse = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(MaestroExecution::adjoint_gate((*prepared)[0]));
+        Check(inverse && inverse->AffectedQubits() == gate->AffectedQubits(), "Adjoint changed the gate targets");
+        Check(inverse->GetMatrix().isApprox(gate->GetMatrix().adjoint(), 1e-12), "Adjoint gate matrix differs from the conjugate transpose");
+    }
+}
 
 // The entries of a count list come in no particular order: workers merge
 // theirs as they finish, so two runs with equal counts can list them differently.
@@ -983,6 +1033,8 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 
 void TestMixedStateExecution()
 {
+    CheckUnitaryPreparation();
+    CheckPreparationGateAdjoints();
     CheckpointMultinomialCounts();
     CheckpointTensorRouting(Method::kMatrixProductState, {1, 9, 8, 5, 10, 2, 3, 7, 4, 0, 11, 6});
     CheckpointTensorRouting(Method::kMatrixProductOperator, {4, 2, 1, 0, 5, 3});

@@ -420,7 +420,7 @@ ParsedCircuit ParseCircuit(const json::object &object)
     return {std::move(circuit), qubits, clbits};
 }
 
-CircuitPtr Unmeasured(const CircuitPtr &circuit, bool unitary = false, const std::string &context = "Overlap/fidelity")
+CircuitPtr Unmeasured(const CircuitPtr &circuit)
 {
     auto result = std::make_shared<Circuit>();
     bool measured = false;
@@ -433,11 +433,21 @@ CircuitPtr Unmeasured(const CircuitPtr &circuit, bool unitary = false, const std
             continue;
         }
         Supported(!measured, "This query requires terminal measurements only");
-        if (unitary)
-            Supported(type == Circuits::OperationType::kGate || type == Circuits::OperationType::kDelay, context + " requires a unitary circuit");
         result->AddOperation(op->Clone());
     }
     return result;
+}
+
+CircuitPtr UnitaryRequestCircuit(const CircuitPtr &circuit, const std::string &operation)
+{
+    try
+    {
+        return UnitaryPreparation(circuit, operation);
+    }
+    catch (const std::invalid_argument &error)
+    {
+        throw Error("unsupported_capability", error.what());
+    }
 }
 
 // The circuit noisy_fidelity evolves, without its terminal measurements. As
@@ -1163,7 +1173,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // controls measurement/readout randomness, as in Python's noisy execution.
     if (!execution.contains("seed") && !Sub(Sub(request, "simulator"), "options").contains("seed") && Sub(request, "noise").contains("seed"))
         config.seed = UInt(Field(Sub(request, "noise"), "seed"));
-    const auto input = ParseCircuit(Object(Field(request, "circuit")));
+    auto input = ParseCircuit(Object(Field(request, "circuit")));
     Supported(!Simulators::IsDistributedGpuSimulator(config.simulator_type) || input.qubits < 63, "Distributed GPU requires fewer than 63 qubits");
     Supported(config.fixed_backend || operation == "execute" || operation == "estimate" || operation == "validate",
               "State/query workflows require fixed selection");
@@ -1191,6 +1201,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                   "Measurement readout_error applies to measurement counts only");
     };
     rejectReadout(input.circuit);
+    const bool unitaryPreparation = operation == "inner_product" || operation == "mirror_fidelity";
+    if (unitaryPreparation)
+        input.circuit = UnitaryRequestCircuit(input.circuit, operation);
     if (AdjointOperation(operation))
     {
         RefineThermalApproximation(noise, {input.circuit.get()});
@@ -1218,10 +1231,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
               "Readout noise applies to measurement counts only");
     if (noise.enabled)
         ValidateNoisyCircuit(input.circuit);
-    auto circuit = operation == "execute" || operation == "checkpoint_batch" ? input.circuit
-                   : operation == "estimate"                                 ? input.circuit->RemoveEndMeasurements()
-                   : operation == "noisy_fidelity"                           ? NoisyFidelityCircuit(input.circuit)
-                                                   : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity");
+    auto circuit = unitaryPreparation || operation == "execute" || operation == "checkpoint_batch" ? input.circuit
+                   : operation == "estimate"                                                       ? input.circuit->RemoveEndMeasurements()
+                   : operation == "noisy_fidelity"                                                 ? NoisyFidelityCircuit(input.circuit)
+                                                                                                   : Unmeasured(input.circuit);
     // Noise injection samples the circuit's Pauli channels into gates before anything runs, and on a backend that
     // samples no channels its one-qubit mixtures of unitaries too.
     const bool stochastic_estimation =
@@ -1255,7 +1268,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         rejectReadout(additional.back().circuit);
         // A mixed-state overlap prepares each state on its own, so channels and
         // resets are allowed; the pure-state inner product needs U(first)^dagger.
-        additional.back().circuit = Unmeasured(additional.back().circuit, operation == "inner_product");
+        additional.back().circuit = operation == "inner_product" ? UnitaryRequestCircuit(additional.back().circuit, "inner_product other_circuit")
+                                                                 : Unmeasured(additional.back().circuit);
         if (operation == "density_matrix_overlap" && noise.enabled)
             ValidateNoisyCircuit(additional.back().circuit);
     }

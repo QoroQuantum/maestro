@@ -2439,6 +2439,29 @@ class TestSparseStatevector:
         assert qc.num_qubits == high + 1
 
 
+@pytest.fixture(params=["measurement", "reset", "conditional", "channel"])
+def nonunitary_overlap_circuit(request):
+    operation = request.param
+    if operation == "conditional":
+        circuit = maestro.QasmToCirc().parse_and_translate(
+            'OPENQASM 2.0; include "qelib1.inc"; qreg q[2]; creg c[1]; '
+            'h q[0]; measure q[0] -> c[0]; if(c==1) x q[1];'
+        )
+    else:
+        circuit = maestro.circuits.QuantumCircuit()
+        if operation == "measurement":
+            circuit.h(0)
+            circuit.measure([(0, 0)])
+            circuit.h(0)
+        elif operation == "reset":
+            circuit.x(0)
+            circuit.reset(0)
+        elif operation == "channel":
+            circuit.x(0)
+            circuit.pauli_channel([0], [0.5, 0.5, 0.0, 0.0])
+    return circuit, operation
+
+
 class TestMirrorFidelity:
     """Test the mirror_fidelity function and circuit method.
 
@@ -2506,16 +2529,35 @@ class TestMirrorFidelity:
         fid = qc.mirror_fidelity()
         assert fid == pytest.approx(1.0, abs=0.05)
 
-    def test_measurements_are_skipped(self):
-        """Measurements in the original circuit should be skipped in mirroring."""
-        from maestro.circuits import QuantumCircuit
-        qc = QuantumCircuit()
-        qc.h(0)
-        qc.cx(0, 1)
-        qc.measure_all()
+    @pytest.mark.parametrize("options", [{"shots": 8}, {"full_amplitude": True}, {"observables": "ZZ"}],
+                             ids=["shots", "full-amplitude", "observable"])
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    def test_rejects_nonunitary_operations(self, nonunitary_overlap_circuit, options, use_method, recwarn):
+        qc, operation = nonunitary_overlap_circuit
+        with pytest.raises(ValueError, match=f"(?i){operation}"):
+            if use_method:
+                qc.mirror_fidelity(**options)
+            else:
+                maestro.mirror_fidelity(qc, **options)
+        assert not recwarn.list
 
-        fid = maestro.mirror_fidelity(qc)
-        assert fid == pytest.approx(1.0, abs=0.05)
+    @pytest.mark.parametrize("measurement_only", [False, True])
+    @pytest.mark.parametrize("options, expected", [
+        ({"shots": 8}, 1.0),
+        ({"full_amplitude": True}, 1.0),
+        ({"observables": ["ZZ", "IX"]}, [1.0, 0.0]),
+    ], ids=["shots", "full-amplitude", "observables"])
+    @pytest.mark.filterwarnings("error::RuntimeWarning")
+    def test_terminal_readout(self, measurement_only, options, expected):
+        qc = maestro.circuits.QuantumCircuit()
+        if not measurement_only:
+            qc.h(0)
+            qc.cx(0, 1)
+        qc.measure([(0, 0)])
+        if not measurement_only:
+            qc.x(1)
+        qc.measure([(1, 1)])
+        assert maestro.mirror_fidelity(qc, **options) == pytest.approx(expected)
 
     def test_custom_shots(self):
         """Mirror fidelity with explicit high shot count for tighter estimate."""
@@ -2717,6 +2759,34 @@ class TestInnerProduct:
     inner_product(circ_1, circ_2) computes <psi_1|psi_2> = <0|U1† U2|0>
     via ProjectOnZero.
     """
+
+    @pytest.mark.parametrize("invalid_first", [True, False], ids=["bra", "ket"])
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    def test_rejects_nonunitary_operand(self, nonunitary_overlap_circuit, invalid_first, use_method):
+        invalid, operation = nonunitary_overlap_circuit
+        other = maestro.circuits.QuantumCircuit()
+        other.x(0)
+        # Dropping the reset from X; reset incorrectly makes its overlap with X equal to 1.
+        bra, ket = (invalid, other) if invalid_first else (other, invalid)
+        with pytest.raises(ValueError, match=f"(?i){operation}"):
+            if use_method:
+                bra.inner_product(ket)
+            else:
+                maestro.inner_product(bra, ket)
+
+    def test_terminal_readout(self):
+        readout_only = maestro.circuits.QuantumCircuit()
+        readout_only.measure([(0, 0), (1, 1)])
+        assert readout_only.inner_product(readout_only) == pytest.approx(1)
+
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(0)
+        qc.measure([(0, 0)])
+        qc.x(1)
+        qc.measure([(1, 1)])
+        # The later X on qubit 1 makes the overlap with |00> zero.
+        assert readout_only.inner_product(qc) == pytest.approx(0)
+        assert qc.inner_product(readout_only) == pytest.approx(0)
 
     def test_identical_circuits(self):
         """Inner product of identical circuits should be 1.0."""
