@@ -79,6 +79,9 @@ class MPSDummySimulator
         clone->growthFactorSwap = growthFactorSwap;
         clone->growthFactorGate = growthFactorGate;
         clone->minLayoutGain = minLayoutGain;
+        clone->minLayoutGainExplicit = minLayoutGainExplicit;
+        clone->modelDisentangling = modelDisentangling;
+        clone->siteRank = siteRank;
 
         return clone;
     }
@@ -110,6 +113,9 @@ class MPSDummySimulator
         std::swap(qubitsMap[q1], qubitsMap[q2]);
         qubitsMapInv[qubitsMap[q1]] = q1;
         qubitsMapInv[qubitsMap[q2]] = q2;
+        // Each label now names the other state: the site ranks describe states.
+        if (siteRank.size() == nrQubits)
+            std::swap(siteRank[q1], siteRank[q2]);
     }
 
     double getGrowthFactorSwap() const
@@ -209,6 +215,7 @@ class MPSDummySimulator
         if (!(gain >= 1.))
             throw std::invalid_argument("Minimum layout gain must be at least 1");
         minLayoutGain = gain;
+        minLayoutGainExplicit = true;
     }
 
     void Clear()
@@ -223,11 +230,40 @@ class MPSDummySimulator
         {
             currentBondDim.clear();
             bondCost.clear();
+            siteRank.clear();
             return;
         }
         currentBondDim.assign(nrQubits - 1, 1.0);
         bondCost.assign(nrQubits - 1, 1.0);
+        siteRank.assign(nrQubits, static_cast<double>(physExtent));
     }
+
+    // Whether measurements and resets lower the bond estimates and lookahead windows continue across them.
+    // Off for a backend that does not report the qubits it collapses (the GPU chains): its site ranks cannot
+    // follow the state, and it keeps the gate-only model.
+    void SetModelDisentangling(bool enabled)
+    {
+        if (modelDisentangling == enabled)
+            return;
+        modelDisentangling = enabled;
+        InvalidateMemoCache();
+    }
+
+    // The predicted gain a layout searched from a checkpoint prefix needs to replace index order. A prefix
+    // shows only part of the work, and the layout it fixes serves every suffix. Measured end to end
+    // (November 2026, MPS, layouts from the first 30% of the gates): predictions below a few hundred carried no
+    // information (3.4 for a real gain of 45, 5.8 for a rotated d=5 memory that ran 100 times slower and
+    // truncated, 19 and 1186 for real losses of 25% and 10%), while circuits whose labels are scrambled
+    // relative to their interactions predicted 2400 and more and really ran 180 to 270 times faster.
+    static constexpr double kCheckpointPrefixLayoutGain = 100.;
+
+    // The predicted gain a searched MPS layout needs when the circuit measures or resets before its end. At 1.35, the
+    // value for circuits whose measurements are all final, rotated surface-code memories took layouts that ran far
+    // slower and truncated: d=5 with 3 rounds at a bond limit of 256 predicted 1.54 and took 88 s with wrong shots
+    // instead of 0.55 s. Over d=3, 5 and 7 and 2 to 25 rounds the predictions for these memories were 1.20 to 1.94.
+    // At 2 they keep index order; 105 other circuits with mid-circuit resets ran 5% slower in total (November 2026),
+    // against 10% at 4 and 18% at 100.
+    static constexpr double kMidCircuitLayoutGain = 2.;
 
     void SetMaxBondDimension(IndexType val)
     {
@@ -262,6 +298,11 @@ class MPSDummySimulator
         {
             currentBondDim.assign(nrQubits - 1, 1.0);
             bondCost.assign(nrQubits - 1, 1.0);
+            siteRank.assign(nrQubits, static_cast<double>(physExtent));
+        }
+        else if (siteRank.size() != nrQubits)
+        {
+            siteRank.assign(nrQubits, static_cast<double>(physExtent));
         }
 
         // the checks here are overkill, but better safe than sorry
@@ -310,9 +351,111 @@ class MPSDummySimulator
         ApplyGate(gate, gate.getQubit1(), gate.getQubit2());
     }
 
+    static constexpr double kDisentangleDropExponent = 0.75;
+
+    // Model entanglement reduction when logical qubit q is measured or reset:
+    // - End sites collapse their single incident bond to 1.
+    // - Interior sites preserve bystander entanglement min(chi_L, chi_R) while
+    //   dropping the symmetric rank mediated by q once (idempotent on MR(q)).
+    // - Propagates exact submultiplicativity chi[b] <= d * chi[b +- 1] outward.
+    void ApplyDisentangleQubit(IndexType q, double probability = 1.0)
+    {
+        if (q < 0 || q >= static_cast<IndexType>(nrQubits) || nrQubits < 2 || probability <= 0.0)
+            return;
+        probability = std::clamp(probability, 0.0, 1.0);
+        if (siteRank.size() != nrQubits)
+            siteRank.assign(nrQubits, static_cast<double>(physExtent));
+
+        const IndexType p = qubitsMap[q];
+        const double d = static_cast<double>(physExtent);
+        const IndexType nBonds = static_cast<IndexType>(currentBondDim.size());
+        auto blend = [probability](double collapsed, double current) {
+            return probability >= 1.0 ? collapsed : (current + probability * (collapsed - current));
+        };
+
+        IndexType sweepLeft = p - 1;
+        IndexType sweepRight = p;
+        if (p == 0)
+        {
+            currentBondDim[0] = std::clamp(blend(1.0, currentBondDim[0]), 1.0, maxBondDim[0]);
+            bondCost[0] = BondCost(currentBondDim[0]);
+            sweepLeft = -1;
+            sweepRight = 1;
+        }
+        else if (p == static_cast<IndexType>(nrQubits) - 1)
+        {
+            currentBondDim[nBonds - 1] = std::clamp(blend(1.0, currentBondDim[nBonds - 1]), 1.0, maxBondDim[nBonds - 1]);
+            bondCost[nBonds - 1] = BondCost(currentBondDim[nBonds - 1]);
+            sweepLeft = nBonds - 2;
+            sweepRight = nBonds;
+        }
+        else
+        {
+            const double chiL = currentBondDim[p - 1];
+            const double chiR = currentBondDim[p];
+            const double chiMin = std::min(chiL, chiR);
+            const double chiMax = std::max(chiL, chiR);
+            double collapsedBond = chiMin;
+            if (siteRank[q] > 1.0 + 1e-9)
+            {
+                const double asymRatio = chiMax / std::max(1.0, chiMin);
+                const double eSym = std::max(1.0, siteRank[q] / asymRatio);
+                collapsedBond = std::max(1.0, chiMin / std::pow(eSym, kDisentangleDropExponent));
+            }
+            currentBondDim[p - 1] = std::clamp(blend(collapsedBond, chiL), 1.0, maxBondDim[p - 1]);
+            currentBondDim[p] = std::clamp(blend(collapsedBond, chiR), 1.0, maxBondDim[p]);
+            bondCost[p - 1] = BondCost(currentBondDim[p - 1]);
+            bondCost[p] = BondCost(currentBondDim[p]);
+            sweepLeft = p - 2;
+            sweepRight = p + 1;
+        }
+
+        siteRank[q] = std::max(1.0, blend(1.0, siteRank[q]));
+
+        for (IndexType b = std::max<IndexType>(1, sweepRight); b < nBonds; ++b)
+        {
+            const double limit = d * currentBondDim[b - 1];
+            if (currentBondDim[b] > limit)
+            {
+                currentBondDim[b] = std::clamp(limit, 1.0, maxBondDim[b]);
+                bondCost[b] = BondCost(currentBondDim[b]);
+            }
+            else
+            {
+                break;
+            }
+        }
+        for (IndexType b = std::min<IndexType>(nBonds - 2, sweepLeft); b >= 0; --b)
+        {
+            const double limit = d * currentBondDim[b + 1];
+            if (currentBondDim[b] > limit)
+            {
+                currentBondDim[b] = std::clamp(limit, 1.0, maxBondDim[b]);
+                bondCost[b] = BondCost(currentBondDim[b]);
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
     void ApplyGate(const std::shared_ptr<Circuits::IOperation<>> &gate)
     {
-        if (gate->GetType() != Circuits::OperationType::kGate)
+        if (!gate)
+            return;
+        const auto type = gate->GetType();
+        if (type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement ||
+            type == Circuits::OperationType::kReset)
+        {
+            if (!modelDisentangling)
+                return;
+            const double prob = (type == Circuits::OperationType::kConditionalMeasurement) ? 0.5 : 1.0;
+            for (const auto q : gate->AffectedQubits())
+                ApplyDisentangleQubit(static_cast<IndexType>(q), prob);
+            return;
+        }
+        if (type != Circuits::OperationType::kGate)
             return;
         const auto qbits = gate->AffectedQubits();
 
@@ -428,6 +571,10 @@ class MPSDummySimulator
         totalSwappingCost += bondCost[bond];
         growBondDimension(bond, isSwapGate, schmidtRank);
         totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+        // A SWAP gate applied to the tensors leaves the labels on their sites and exchanges the states under them.
+        // (Routing swaps move a label with its state and do not come through here.)
+        if (isSwapGate && siteRank.size() == nrQubits && bond + 1 < static_cast<IndexType>(nrQubits))
+            std::swap(siteRank[qubitsMapInv[bond]], siteRank[qubitsMapInv[bond + 1]]);
     }
 
     void ApplyGates(const std::vector<QC::Gates::AppliedGate<MatrixClass>> &gates)
@@ -465,6 +612,28 @@ class MPSDummySimulator
         // update bondCost as well, since it depends on the current bond dimensions
         for (size_t i = 0; i < currentBondDim.size(); ++i)
             bondCost[i] = BondCost(currentBondDim[i]);
+
+        // Default site ranks to full local dimension unless explicitly lowered
+        // by disentangling operations or SetCurrentSiteRanks.
+        siteRank.assign(nrQubits, static_cast<double>(physExtent));
+    }
+
+    void SetCurrentSiteRanks(const std::vector<double> &ranks)
+    {
+        if (nrQubits == 0)
+            return;
+        const double d = static_cast<double>(physExtent);
+        siteRank.resize(nrQubits, d);
+        for (size_t q = 0; q < nrQubits; ++q)
+        {
+            const double given = (q < ranks.size() && std::isfinite(ranks[q])) ? ranks[q] : d;
+            siteRank[q] = std::clamp(given, 1.0, d);
+        }
+    }
+
+    const std::vector<double> &getCurrentSiteRanks() const
+    {
+        return siteRank;
     }
 
     const std::vector<double> &getCurrentBondDimensions() const
@@ -526,7 +695,8 @@ class MPSDummySimulator
             heapWindow.resize(maxNeeded);
             windowPtr = heapWindow.data();
         }
-        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        DisentangleBuffer disentangleBuf;
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr, disentangleBuf);
         if (windowSize == 0)
         {
             if (currentCost < bestCost)
@@ -562,7 +732,8 @@ class MPSDummySimulator
             heapWindow.resize(maxNeeded);
             windowPtr = heapWindow.data();
         }
-        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        DisentangleBuffer disentangleBuf;
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr, disentangleBuf);
         if (windowSize == 0)
         {
             if (currentCost < bestCost)
@@ -571,43 +742,10 @@ class MPSDummySimulator
         }
 
         uint64_t stateHash = 14695981039346656037ULL;
-        auto mixHash = [&](uint64_t v) {
-            stateHash ^= v;
+        VisitRoutingInputs(windowPtr, windowSize, lookaheadDepth, lookaheadDepthWithHeuristic, [&](uint64_t word) {
+            stateHash ^= word;
             stateHash *= 1099511628211ULL;
-        };
-        auto mixDouble = [&](double d) {
-            uint64_t bits = 0;
-            std::memcpy(&bits, &d, sizeof(double));
-            mixHash(bits);
-        };
-
-        mixHash(static_cast<uint64_t>(windowSize));
-        mixHash(static_cast<uint64_t>(lookaheadDepth));
-        mixHash(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
-        mixHash(static_cast<uint64_t>(physExtent));
-        mixHash(static_cast<uint64_t>(maxVirtualExtent));
-        mixHash(static_cast<uint64_t>(swapGatesRelabelQubits));
-        mixDouble(growthFactorSwap);
-        mixDouble(growthFactorGate);
-        for (IndexType q : qubitsMap)
-            mixHash(static_cast<uint64_t>(q));
-        for (double d : currentBondDim)
-            mixDouble(d);
-        for (double c : bondCost)
-            mixDouble(c);
-        for (double m : maxBondDim)
-            mixDouble(m);
-        for (size_t w = 0; w < windowSize; ++w)
-        {
-            const FastGateOp &fg = windowPtr[w];
-            mixHash(static_cast<uint64_t>(fg.q1));
-            mixHash(static_cast<uint64_t>(fg.q2));
-            mixHash(static_cast<uint64_t>(fg.q3));
-            mixHash(static_cast<uint64_t>(fg.numQubits));
-            mixHash(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
-            mixDouble(fg.schmidtRank);
-        }
-
+        });
         MemoEntry &slot = memoCache[(static_cast<size_t>(currentGateIndex) ^ static_cast<size_t>(stateHash)) & (kMemoCacheSize - 1)];
         if (slot.valid && slot.hash == stateHash)
         {
@@ -639,63 +777,9 @@ class MPSDummySimulator
         if (layers.empty() || nrQubits <= 2)
             return qubitsMap;
 
-        auto evaluateCost = [&, this](const std::vector<IndexType> &candidateMap) -> double {
-            auto saveQubitsMap = qubitsMap;
-            auto saveQubitsMapInv = qubitsMapInv;
-            auto saveCurrentBondDim = currentBondDim;
-            auto saveTotalSwappingCost = totalSwappingCost;
-            auto saveBondCost = bondCost;
-
-            SetInitialQubitsMap(candidateMap);
-
-            for (const auto &layer : layers)
-                ApplyGates(layer->GetOperations());
-            auto cost = getTotalSwappingCost();
-            qubitsMap = std::move(saveQubitsMap);
-            qubitsMapInv = std::move(saveQubitsMapInv);
-            currentBondDim = std::move(saveCurrentBondDim);
-            totalSwappingCost = saveTotalSwappingCost;
-            bondCost = std::move(saveBondCost);
-
-            return cost;
-        };
-
-        auto evaluateCostBounded = [&, this](const std::vector<IndexType> &candidateMap, double bound) -> double {
-            auto saveQubitsMap = qubitsMap;
-            auto saveQubitsMapInv = qubitsMapInv;
-            auto saveCurrentBondDim = currentBondDim;
-            auto saveTotalSwappingCost = totalSwappingCost;
-            auto saveBondCost = bondCost;
-
-            SetInitialQubitsMap(candidateMap);
-
-            for (const auto &layer : layers)
-            {
-                ApplyGates(layer->GetOperations());
-                auto cost = getTotalSwappingCost();
-                if (cost >= bound)
-                {
-                    // restore state
-                    qubitsMap = std::move(saveQubitsMap);
-                    qubitsMapInv = std::move(saveQubitsMapInv);
-                    currentBondDim = std::move(saveCurrentBondDim);
-                    totalSwappingCost = saveTotalSwappingCost;
-                    bondCost = std::move(saveBondCost);
-                    return cost;
-                }
-            }
-            auto cost = getTotalSwappingCost();
-            // restore state
-            qubitsMap = std::move(saveQubitsMap);
-            qubitsMapInv = std::move(saveQubitsMapInv);
-            currentBondDim = std::move(saveCurrentBondDim);
-            totalSwappingCost = saveTotalSwappingCost;
-            bondCost = std::move(saveBondCost);
-
-            return cost;
-        };
-
-        // Collect 2-qubit pairs from each layer, preserving layer boundaries
+        // Collect 2-qubit gate pairs from each layer, preserving layer boundaries.
+        // Multi-qubit measurements and resets act qubit-by-qubit and must never
+        // inject spurious 2-qubit entangling edges into the interaction graph.
         struct QubitPair
         {
             IndexType q1, q2;
@@ -704,6 +788,7 @@ class MPSDummySimulator
         std::vector<std::vector<QubitPair>> layerPairs;
         std::vector<IndexType> initialLabels(nrQubits);
         std::iota(initialLabels.begin(), initialLabels.end(), 0);
+        bool hasDisentangle = false;
 
         for (size_t li = 0; li < layers.size(); ++li)
         {
@@ -711,6 +796,17 @@ class MPSDummySimulator
             std::vector<QubitPair> lp;
             for (const auto &op : layer->GetOperations())
             {
+                if (!op)
+                    continue;
+                const auto opType = op->GetType();
+                if (opType == Circuits::OperationType::kMeasurement || opType == Circuits::OperationType::kConditionalMeasurement ||
+                    opType == Circuits::OperationType::kReset)
+                {
+                    hasDisentangle = modelDisentangling;
+                    continue;
+                }
+                if (opType != Circuits::OperationType::kGate)
+                    continue;
                 auto qbits = op->AffectedQubits();
                 if (qbits.size() >= 2)
                 {
@@ -906,7 +1002,8 @@ class MPSDummySimulator
             listU.push_back({v, w});
         };
 
-        const double decay = std::exp(-2.5 / static_cast<double>(std::max<size_t>(1, layerPairs.size())));
+        const double decayExp = hasDisentangle ? 1.0 : 2.5;
+        const double decay = std::exp(-decayExp / static_cast<double>(std::max<size_t>(1, layerPairs.size())));
         double layerWeight = 1.0;
         for (const auto &lp : layerPairs)
         {
@@ -1328,6 +1425,30 @@ class MPSDummySimulator
             return result;
         };
 
+        bool midCircuit = false;
+        if (hasDisentangle)
+        {
+            std::vector<std::shared_ptr<Circuits::IOperation<>>> ordered;
+            for (const auto &layer : layers)
+                ordered.insert(ordered.end(), layer->GetOperations().begin(), layer->GetOperations().end());
+            midCircuit = RoutingConfig::ContainsMidCircuitDisentangling(ordered);
+        }
+        // Score each candidate from the same fresh register as runtime routing.
+        // Keep the caller's map, ranks and accumulated cost intact throughout the search.
+        auto forecast = Clone();
+        auto evaluateCost = [&](const std::vector<IndexType> &candidateMap, double bound = std::numeric_limits<double>::infinity()) {
+            forecast->SetInitialQubitsMap(candidateMap);
+            if (midCircuit)
+                std::fill(forecast->siteRank.begin(), forecast->siteRank.end(), 1.);
+            for (const auto &layer : layers)
+            {
+                forecast->ApplyGates(layer->GetOperations());
+                if (forecast->getTotalSwappingCost() >= bound)
+                    break;
+            }
+            return forecast->getTotalSwappingCost();
+        };
+
         // The cost model is a rough proxy: for some circuits (QFT, for one) it
         // rates scrambled layouts a few times cheaper than the identity, while
         // they can run far slower. Leave the identity only for a large predicted
@@ -1365,7 +1486,7 @@ class MPSDummySimulator
             {
                 if (cand == identityMap || cand == optMap)
                     continue;
-                const double cost = evaluateCostBounded(cand, optCost);
+                const double cost = evaluateCost(cand, optCost);
                 if (cost < optCost)
                 {
                     optCost = cost;
@@ -1374,8 +1495,14 @@ class MPSDummySimulator
             }
         }
 
+        // An MPS circuit that measures or resets before its end needs a larger predicted gain than one whose
+        // measurements are all final (kMidCircuitLayoutGain).
+        const double effectiveMinGain = minLayoutGainExplicit              ? minLayoutGain
+                                        : midCircuit && !IsOperatorChain() ? kMidCircuitLayoutGain
+                                        : hasDisentangle                   ? 1.35
+                                                                           : minLayoutGain;
         if (layers.size() <= 2)
-            return optMap != identityMap && identityCost < minLayoutGain * optCost ? identityMap : optMap;
+            return optMap != identityMap && identityCost < effectiveMinGain * optCost ? identityMap : optMap;
 
         // nrShuffles full random shuffles, then a perturbation search (1-3 random
         // swaps per try) that always runs: MPO layouts depend on it, and gating it
@@ -1386,7 +1513,7 @@ class MPSDummySimulator
             for (int i = 0; i < nrShuffles; ++i)
             {
                 std::shuffle(trialMap.begin(), trialMap.end(), rng);
-                const double tryCost = evaluateCostBounded(trialMap, optCost);
+                const double tryCost = evaluateCost(trialMap, optCost);
                 if (tryCost < optCost)
                 {
                     optCost = tryCost;
@@ -1414,7 +1541,7 @@ class MPSDummySimulator
                     std::swap(tryMap[a], tryMap[b]);
                 }
 
-                const auto cost = evaluateCostBounded(tryMap, optCost);
+                const auto cost = evaluateCost(tryMap, optCost);
                 if (cost < optCost)
                 {
                     optMap = tryMap;
@@ -1441,7 +1568,7 @@ class MPSDummySimulator
                     for (IndexType j = i + 1; j < nrQubits; ++j)
                     {
                         std::swap(candidate[i], candidate[j]);
-                        const auto cost = evaluateCostBounded(candidate, optCost);
+                        const auto cost = evaluateCost(candidate, optCost);
                         if (cost < optCost)
                         {
                             optMap = candidate;
@@ -1457,7 +1584,7 @@ class MPSDummySimulator
             }
         }
 
-        if (optMap != identityMap && identityCost < minLayoutGain * optCost)
+        if (optMap != identityMap && identityCost < effectiveMinGain * optCost)
             return identityMap;
         return optMap;
     }
@@ -1467,6 +1594,7 @@ class MPSDummySimulator
     {
         qubitsMap.resize(getNrQubits());
         qubitsMapInv.resize(getNrQubits());
+        siteRank.assign(getNrQubits(), static_cast<double>(physExtent));
 
         for (IndexType i = 0; i < static_cast<IndexType>(getNrQubits()); ++i)
             qubitsMapInv[i] = qubitsMap[i] = i;
@@ -1514,6 +1642,40 @@ class MPSDummySimulator
     {
         assert(realq1 < realq2);
 
+        if (siteRank.size() == nrQubits)
+        {
+            const IndexType q1 = qubitsMapInv[realq1];
+            const IndexType q2 = qubitsMapInv[realq2];
+            const bool p1 = siteRank[q1] <= 1.0 + 1e-9;
+            const bool p2 = siteRank[q2] <= 1.0 + 1e-9;
+            if (p1 != p2)
+            {
+                // When one endpoint is in a decoupled product state (e_q == 1),
+                // break equal-minimum-cost ties toward anchoring the entangled endpoint.
+                IndexType bestPos = p1 ? (realq2 - 1) : realq1;
+                double bestCost = bondCost[bestPos];
+                if (p1)
+                {
+                    for (IndexType m = realq2 - 2; m >= realq1; --m)
+                        if (bondCost[m] < bestCost - 1e-12)
+                        {
+                            bestCost = bondCost[m];
+                            bestPos = m;
+                        }
+                }
+                else
+                {
+                    for (IndexType m = realq1 + 1; m < realq2; ++m)
+                        if (bondCost[m] < bestCost - 1e-12)
+                        {
+                            bestCost = bondCost[m];
+                            bestPos = m;
+                        }
+                }
+                return bestPos;
+            }
+        }
+
         IndexType bestPos = realq1;
         double bestCost = bondCost[realq1];
 
@@ -1535,31 +1697,69 @@ class MPSDummySimulator
     // Below rank 2 (small-angle gates) the result is interpolated linearly
     // between rank 1, which leaves the bond unchanged, and rank 2, so the
     // calibrated growth factors still apply unchanged to integer ranks.
-    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, double schmidtRank) const
+    // For swaps, product-state sites (e == 1) conserve exact outer cut rank
+    // without SVD inflation; equal outer bonds leave the middle bond unchanged
+    // only when both outer bonds are 1 (isolated two-qubit subsystem).
+    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, double schmidtRank,
+                                      double eLeftSite, double eRightSite) const
     {
+        if (swap)
+        {
+            const bool leftProd = (eLeftSite <= 1.0 + 1e-9);
+            const bool rightProd = (eRightSite <= 1.0 + 1e-9);
+            if (leftProd && rightProd)
+                return std::clamp(betweenDim, 1.0, maxBondDim[bond]);
+            if (leftProd)
+                return std::clamp(rightNeighborDim, 1.0, maxBondDim[bond]);
+            if (rightProd)
+                return std::clamp(leftDim, 1.0, maxBondDim[bond]);
+
+            double newMaxDim = leftDim == 1. && rightNeighborDim == 1. ? betweenDim : std::min(eRightSite * leftDim, eLeftSite * rightNeighborDim);
+            newMaxDim = std::min(newMaxDim, betweenDim * eLeftSite * eRightSite);
+            return std::max(std::min(newMaxDim * growthFactorSwap, maxBondDim[bond]), 1.0);
+        }
+
         const double rank = IsOperatorChain() ? schmidtRank * schmidtRank : schmidtRank;
         auto grownAt = [&](double r) {
-            double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
+            double newMaxDim = static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
             newMaxDim = std::min(newMaxDim, betweenDim * r);
-            const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
-            return std::max(std::min(newMaxDim * growthFactor, maxBondDim[bond]), 1.);
+            return std::max(std::min(newMaxDim * growthFactorGate, maxBondDim[bond]), 1.);
         };
         if (rank >= 2.)
             return grownAt(rank);
         return betweenDim + (std::max(rank, 1.) - 1.) * (grownAt(2.) - betweenDim);
     }
 
+    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, double schmidtRank) const
+    {
+        const double d = static_cast<double>(physExtent);
+        return EstimateGrownBondDimension(bond, leftDim, betweenDim, rightNeighborDim, swap, schmidtRank, d, d);
+    }
+
     // Anchor the qubit surrounded by higher bond cost so the less-entangled
     // qubit travels across the cheaper region instead of dragging a heavy
-    // entangled cluster across the chain.
+    // entangled cluster across the chain. A product-state endpoint (e == 1)
+    // carries zero cluster weight of its own even across interior bystander bonds.
     IndexType ComputeAnchorHeavierMeetPosition(IndexType realq1, IndexType realq2) const
     {
         assert(realq1 < realq2);
 
         const double leftOuter = (realq1 > 0) ? bondCost[realq1 - 1] : 0.0;
         const double rightOuter = (realq2 < static_cast<IndexType>(bondCost.size())) ? bondCost[realq2] : 0.0;
-        const double c1 = std::max(leftOuter, bondCost[realq1]);
-        const double c2 = std::max(rightOuter, bondCost[realq2 - 1]);
+        double c1 = std::max(leftOuter, bondCost[realq1]);
+        double c2 = std::max(rightOuter, bondCost[realq2 - 1]);
+        if (siteRank.size() == nrQubits && physExtent > 1)
+        {
+            const double e1 = siteRank[qubitsMapInv[realq1]];
+            const double e2 = siteRank[qubitsMapInv[realq2]];
+            const bool p1 = e1 <= 1.0 + 1e-9;
+            const bool p2 = e2 <= 1.0 + 1e-9;
+            if (p1 != p2)
+            {
+                c1 *= std::max(0.0, (e1 - 1.0) / static_cast<double>(physExtent - 1));
+                c2 *= std::max(0.0, (e2 - 1.0) / static_cast<double>(physExtent - 1));
+            }
+        }
 
         if (c1 > c2)
             return realq1;
@@ -1569,6 +1769,39 @@ class MPSDummySimulator
         return (realq1 <= static_cast<IndexType>(nrQubits) - 1 - realq2) ? realq1 : (realq2 - 1);
     }
 
+    struct DisentangleEvent
+    {
+        IndexType qubit = 0;
+        double probability = 1.0;
+    };
+
+    struct DisentangleBuffer
+    {
+        std::array<DisentangleEvent, 128> stackEvents{};
+        std::vector<DisentangleEvent> heapEvents;
+        size_t size = 0;
+
+        const DisentangleEvent *Data() const noexcept
+        {
+            return heapEvents.empty() ? stackEvents.data() : heapEvents.data();
+        }
+
+        uint32_t Push(IndexType qubit, double probability)
+        {
+            if (heapEvents.empty())
+            {
+                if (size < stackEvents.size())
+                {
+                    stackEvents[size] = {qubit, probability};
+                    return static_cast<uint32_t>(size++);
+                }
+                heapEvents.assign(stackEvents.begin(), stackEvents.end());
+            }
+            heapEvents.push_back({qubit, probability});
+            return static_cast<uint32_t>(size++);
+        }
+    };
+
     struct FastGateOp
     {
         IndexType q1 = 0;
@@ -1577,7 +1810,67 @@ class MPSDummySimulator
         uint8_t numQubits = 2;
         bool isSwap = false;
         double schmidtRank = 4;
+        uint32_t preStart = 0;
+        uint32_t preCount = 0;
+        uint32_t postStart = 0;
+        uint32_t postCount = 0;
+        const DisentangleEvent *events = nullptr;
     };
+
+    // Describe the effective operation window by value. The same source gate can
+    // be edited between runs, and fusion can replace it with a different matrix.
+    template <class Word>
+    void VisitRoutingInputs(const FastGateOp *window, size_t windowSize, int lookaheadDepth, int lookaheadDepthWithHeuristic, Word word) const
+    {
+        auto mixDouble = [&](double d) {
+            uint64_t bits = 0;
+            std::memcpy(&bits, &d, sizeof(double));
+            word(bits);
+        };
+
+        word(static_cast<uint64_t>(windowSize));
+        word(static_cast<uint64_t>(lookaheadDepth));
+        word(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
+        word(static_cast<uint64_t>(physExtent));
+        word(static_cast<uint64_t>(maxVirtualExtent));
+        word(static_cast<uint64_t>(swapGatesRelabelQubits));
+        word(static_cast<uint64_t>(runtimeBondCap));
+        mixDouble(truncationWeight);
+        mixDouble(growthFactorSwap);
+        mixDouble(growthFactorGate);
+        for (IndexType q : qubitsMap)
+            word(static_cast<uint64_t>(q));
+        for (double d : currentBondDim)
+            mixDouble(d);
+        for (double c : bondCost)
+            mixDouble(c);
+        for (double m : maxBondDim)
+            mixDouble(m);
+        for (double sr : siteRank)
+            mixDouble(sr);
+        for (size_t w = 0; w < windowSize; ++w)
+        {
+            const FastGateOp &fg = window[w];
+            word(static_cast<uint64_t>(fg.q1));
+            word(static_cast<uint64_t>(fg.q2));
+            word(static_cast<uint64_t>(fg.q3));
+            word(static_cast<uint64_t>(fg.numQubits));
+            word(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
+            mixDouble(fg.schmidtRank);
+            word(static_cast<uint64_t>(fg.preCount));
+            for (uint32_t ei = 0; ei < fg.preCount; ++ei)
+            {
+                word(static_cast<uint64_t>(fg.events[fg.preStart + ei].qubit));
+                mixDouble(fg.events[fg.preStart + ei].probability);
+            }
+            word(static_cast<uint64_t>(fg.postCount));
+            for (uint32_t ei = 0; ei < fg.postCount; ++ei)
+            {
+                word(static_cast<uint64_t>(fg.events[fg.postStart + ei].qubit));
+                mixDouble(fg.events[fg.postStart + ei].probability);
+            }
+        }
+    }
 
     static constexpr size_t kMaxStackQubits = 64;
 
@@ -1587,6 +1880,7 @@ class MPSDummySimulator
         std::array<IndexType, kMaxStackQubits> qMapInv;
         std::array<double, kMaxStackQubits> curBondDim;
         std::array<double, kMaxStackQubits> bCost;
+        std::array<double, kMaxStackQubits> sRank;
         std::vector<IndexType> heapMap;
         std::vector<double> heapBonds;
         double totalCost = 0.0;
@@ -1600,6 +1894,8 @@ class MPSDummySimulator
             {
                 std::memcpy(qMap.data(), sim.qubitsMap.data(), n * sizeof(IndexType));
                 std::memcpy(qMapInv.data(), sim.qubitsMapInv.data(), n * sizeof(IndexType));
+                if (sim.siteRank.size() == n && n > 0)
+                    std::memcpy(sRank.data(), sim.siteRank.data(), n * sizeof(double));
                 if (nb > 0)
                 {
                     std::memcpy(curBondDim.data(), sim.currentBondDim.data(), nb * sizeof(double));
@@ -1611,12 +1907,14 @@ class MPSDummySimulator
                 heapMap.resize(2 * n);
                 std::memcpy(heapMap.data(), sim.qubitsMap.data(), n * sizeof(IndexType));
                 std::memcpy(heapMap.data() + n, sim.qubitsMapInv.data(), n * sizeof(IndexType));
-                heapBonds.resize(2 * nb);
+                heapBonds.resize(2 * nb + n);
                 if (nb > 0)
                 {
                     std::memcpy(heapBonds.data(), sim.currentBondDim.data(), nb * sizeof(double));
                     std::memcpy(heapBonds.data() + nb, sim.bondCost.data(), nb * sizeof(double));
                 }
+                if (sim.siteRank.size() == n && n > 0)
+                    std::memcpy(heapBonds.data() + 2 * nb, sim.siteRank.data(), n * sizeof(double));
             }
         }
 
@@ -1629,6 +1927,8 @@ class MPSDummySimulator
             {
                 std::memcpy(sim.qubitsMap.data(), qMap.data(), n * sizeof(IndexType));
                 std::memcpy(sim.qubitsMapInv.data(), qMapInv.data(), n * sizeof(IndexType));
+                if (sim.siteRank.size() == n && n > 0)
+                    std::memcpy(sim.siteRank.data(), sRank.data(), n * sizeof(double));
                 if (nb > 0)
                 {
                     std::memcpy(sim.currentBondDim.data(), curBondDim.data(), nb * sizeof(double));
@@ -1644,21 +1944,78 @@ class MPSDummySimulator
                     std::memcpy(sim.currentBondDim.data(), heapBonds.data(), nb * sizeof(double));
                     std::memcpy(sim.bondCost.data(), heapBonds.data() + nb, nb * sizeof(double));
                 }
+                if (sim.siteRank.size() == n && n > 0)
+                    std::memcpy(sim.siteRank.data(), heapBonds.data() + 2 * nb, n * sizeof(double));
             }
         }
     };
 
+    void ApplyFastGatePreDisentangles(const FastGateOp &fg)
+    {
+        if (!fg.events || fg.preCount == 0)
+            return;
+        for (uint32_t i = 0; i < fg.preCount; ++i)
+            ApplyDisentangleQubit(fg.events[fg.preStart + i].qubit, fg.events[fg.preStart + i].probability);
+    }
+
+    void ApplyFastGatePostDisentangles(const FastGateOp &fg)
+    {
+        if (!fg.events || fg.postCount == 0)
+            return;
+        for (uint32_t i = 0; i < fg.postCount; ++i)
+            ApplyDisentangleQubit(fg.events[fg.postStart + i].qubit, fg.events[fg.postStart + i].probability);
+    }
+
     size_t ExtractFastGateWindow(const std::vector<std::shared_ptr<Circuits::IOperation<>>> &upcomingGates, long long int startGateIndex, size_t maxCount,
-                                 FastGateOp *outOps) const
+                                 FastGateOp *outOps, DisentangleBuffer &disentangleBuf) const
     {
         size_t count = 0;
         if (startGateIndex < 0)
             return 0;
 
+        uint32_t pendingStart = 0;
+        uint32_t pendingCount = 0;
         for (long long int idx = startGateIndex; idx < static_cast<long long int>(upcomingGates.size()) && count < maxCount; ++idx)
         {
             const auto &op = upcomingGates[idx];
-            if (!op || op->GetType() != Circuits::OperationType::kGate)
+            if (!op)
+                break;
+            const auto type = op->GetType();
+            if (!modelDisentangling && type != Circuits::OperationType::kGate)
+                break;
+            if (type == Circuits::OperationType::kDelay || type == Circuits::OperationType::kNoOp)
+                continue;
+            if (type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement ||
+                type == Circuits::OperationType::kReset)
+            {
+                const double prob = (type == Circuits::OperationType::kConditionalMeasurement) ? 0.5 : 1.0;
+                for (const auto q : op->AffectedQubits())
+                {
+                    const uint32_t slot = disentangleBuf.Push(static_cast<IndexType>(q), prob);
+                    if (count > 0)
+                    {
+                        if (outOps[count - 1].postCount == 0)
+                            outOps[count - 1].postStart = slot;
+                        ++outOps[count - 1].postCount;
+                    }
+                    else
+                    {
+                        if (pendingCount == 0)
+                            pendingStart = slot;
+                        ++pendingCount;
+                    }
+                }
+                continue;
+            }
+            if (type == Circuits::OperationType::kConditionalGate || type == Circuits::OperationType::kQuantumChannel)
+            {
+                // Single-qubit conditionals and channels never route or permute qubits;
+                // multi-qubit dynamic operations remain lookahead boundaries.
+                if (op->AffectedQubits().size() <= 1)
+                    continue;
+                break;
+            }
+            if (type != Circuits::OperationType::kGate)
                 break;
             const auto qbits = op->AffectedQubits();
             if (qbits.size() < 2)
@@ -1670,6 +2027,10 @@ class MPSDummySimulator
             fg.numQubits = static_cast<uint8_t>(qbits.size());
             fg.isSwap = false;
             fg.schmidtRank = 4;
+            fg.preStart = pendingStart;
+            fg.preCount = pendingCount;
+            pendingStart = 0;
+            pendingCount = 0;
 
             if (qbits.size() == 2)
             {
@@ -1701,6 +2062,10 @@ class MPSDummySimulator
             outOps[count++] = fg;
         }
 
+        const DisentangleEvent *data = disentangleBuf.Data();
+        for (size_t i = 0; i < count; ++i)
+            outOps[i].events = data;
+
         return count;
     }
 
@@ -1718,10 +2083,7 @@ class MPSDummySimulator
             qubit2 = qubitsMap[controllingQubit1];
         }
 
-        const IndexType bond = std::min(qubit1, qubit2);
-        totalSwappingCost += bondCost[bond];
-        growBondDimension(bond, isSwap, schmidtRank);
-        totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+        RecordAdjacentTwoQubitGate(std::min(qubit1, qubit2), isSwap, schmidtRank);
     }
 
     void ApplyFastGate(const FastGateOp &g)
@@ -1751,6 +2113,7 @@ class MPSDummySimulator
                 ApplyTwoQubitFastGate(g.q2, g.q3, false, 2);
             }
         }
+        ApplyFastGatePostDisentangles(g);
     }
 
     bool IsRelabelingSwap(const FastGateOp &gate) const
@@ -1897,6 +2260,10 @@ class MPSDummySimulator
             suffixPostCost = leftSweepDim + span;
         }
 
+        const double d = static_cast<double>(physExtent);
+        const double eL0 = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[realq1]] : d;
+        const double eR0 = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[realq2]] : d;
+
         prefixPostCost[0] = 0.0;
         for (IndexType i = 0; i < span - 1; ++i)
         {
@@ -1904,7 +2271,8 @@ class MPSDummySimulator
             const double leftD = (i == 0) ? ((realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0) : rightSweepDim[i - 1];
             const double betweenD = currentBondDim[bond];
             const double rightD = currentBondDim[bond + 1];
-            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
+            const double eOther = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[bond + 1]] : d;
+            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4, eL0, eOther);
             rightSweepDim[i] = newD;
             prefixPostCost[i + 1] = prefixPostCost[i] + BondCost(newD);
         }
@@ -1917,7 +2285,8 @@ class MPSDummySimulator
             const double betweenD = currentBondDim[bond];
             const double rightD =
                 (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
-            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
+            const double eOther = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[bond]] : d;
+            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4, eOther, eR0);
             leftSweepDim[i] = newD;
             suffixPostCost[i - 1] = suffixPostCost[i] + BondCost(newD);
         }
@@ -1937,7 +2306,7 @@ class MPSDummySimulator
             const double leftD = (i == 0) ? ((realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0) : rightSweepDim[i - 1];
             const double rightD =
                 (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
-            const double gateD = EstimateGrownBondDimension(m, leftD, currentBondDim[m], rightD, isSwap, schmidtRank);
+            const double gateD = EstimateGrownBondDimension(m, leftD, currentBondDim[m], rightD, isSwap, schmidtRank, eL0, eR0);
             const double gateCost = BondCost(gateD);
             // Share the exact post-growth cost coefficients (kPostSwapCostWeight * S +
             // kPostGateCostWeight * G) with SwapQubitsToPosition and ApplyGate so the
@@ -2055,6 +2424,7 @@ class MPSDummySimulator
             for (size_t s = stepIdx; s < endStep; ++s)
             {
                 const FastGateOp &fg = window[s];
+                ApplyFastGatePreDisentangles(fg);
                 const IndexType q1 = fg.q1;
                 const IndexType q2 = fg.q2;
                 IndexType rq1 = qubitsMap[q1];
@@ -2109,6 +2479,7 @@ class MPSDummySimulator
 
         const double ccost = getTotalSwappingCost();
         const FastGateOp &fg = window[stepIdx];
+        ApplyFastGatePreDisentangles(fg);
         IndexType realq1 = qubitsMap[fg.q1];
         IndexType realq2 = qubitsMap[fg.q2];
         if (realq1 > realq2)
@@ -2205,11 +2576,21 @@ class MPSDummySimulator
 
         if (stepIdx == 0)
             addCandidate(bestPosition);
-        addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, true));
-        addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, false));
-        addCandidate(ComputeHeuristicMeetPosition(realq1, realq2));
-        addCandidate(ComputeAnchorHeavierMeetPosition(realq1, realq2));
-        addCandidate(ComputeNextPartnerGravityMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx));
+        {
+            FastStateSnapshot candSnap;
+            if (fg.preCount > 0)
+            {
+                candSnap.SaveFrom(*this);
+                ApplyFastGatePreDisentangles(fg);
+            }
+            addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, true));
+            addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, false));
+            addCandidate(ComputeHeuristicMeetPosition(realq1, realq2));
+            addCandidate(ComputeAnchorHeavierMeetPosition(realq1, realq2));
+            addCandidate(ComputeNextPartnerGravityMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx));
+            if (fg.preCount > 0)
+                candSnap.RestoreTo(*this);
+        }
         addCandidate(realq1);
         addCandidate(realq2 - 1);
         const IndexType centerPos = std::clamp(std::max<IndexType>(0, (static_cast<IndexType>(nrQubits) - 2) / 2), realq1, realq2 - 1);
@@ -2273,18 +2654,20 @@ class MPSDummySimulator
             bonds[i + 1] = currentBondDim[realq1 + i];
         bonds[span + 1] = (realq2 < nBonds) ? currentBondDim[realq2] : 1.0;
 
-        const double E1 = std::max(bonds[0], bonds[1]);
-        const double E2 = std::max(bonds[span], bonds[span + 1]);
         const double d = static_cast<double>(physExtent);
+        const double e1 = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[realq1]] : d;
+        const double e2 = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[realq2]] : d;
+        const double E1 = (e1 <= 1.0 + 1e-9) ? 1.0 : std::max(bonds[0], bonds[1]);
+        const double E2 = (e2 <= 1.0 + 1e-9) ? 1.0 : std::max(bonds[span], bonds[span + 1]);
 
         prefixCut[0] = 0.0;
         for (IndexType i = 0; i < span - 1; ++i)
         {
             const double bDim = bonds[i + 1];
             double dmg = 0.0;
-            if (E1 > bDim)
+            if (e1 > 1.0 + 1e-9 && E1 > bDim)
             {
-                const double inflated = std::min(E1, d * bDim);
+                const double inflated = std::min(E1, e1 * bDim);
                 dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
             }
             prefixCut[i + 1] = prefixCut[i] + dmg;
@@ -2295,9 +2678,9 @@ class MPSDummySimulator
         {
             const double bDim = bonds[i + 1];
             double dmg = 0.0;
-            if (E2 > bDim)
+            if (e2 > 1.0 + 1e-9 && E2 > bDim)
             {
-                const double inflated = std::min(E2, d * bDim);
+                const double inflated = std::min(E2, e2 * bDim);
                 dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
             }
             suffixCut[i - 1] = suffixCut[i] + dmg;
@@ -2410,8 +2793,8 @@ class MPSDummySimulator
             }
         }
 
-        const double c1 = bonds[0] * bonds[1];
-        const double c2 = bonds[span] * bonds[span + 1];
+        const double c1 = (e1 <= 1.0 + 1e-9 ? 0.0 : 1.0) * bonds[0] * bonds[1];
+        const double c2 = (e2 <= 1.0 + 1e-9 ? 0.0 : 1.0) * bonds[span] * bonds[span + 1];
         const double effCap = (runtimeBondCap > 0) ? static_cast<double>(runtimeBondCap) : std::numeric_limits<double>::infinity();
 
         IndexType bestPos = realq1;
@@ -2477,7 +2860,8 @@ class MPSDummySimulator
             heapWindow.resize(maxNeeded);
             windowPtr = heapWindow.data();
         }
-        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        DisentangleBuffer disentangleBuf;
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr, disentangleBuf);
         if (windowSize == 0)
         {
             if (currentCost < bestCost)
@@ -2496,6 +2880,47 @@ class MPSDummySimulator
             return -1;
         }
 
+        // When no future two-qubit interactions remain after a disentangling event,
+        // preserve QCSim's cut-preserving P0 meeting choice (with product-state awareness)
+        // instead of overriding it with a myopic one-step post-growth heuristic.
+        const double dLocal = static_cast<double>(physExtent);
+        const bool hasDisentangledEndpoint =
+            fg0.preCount > 0 || (siteRank.size() == nrQubits && (siteRank[fg0.q1] < dLocal - 1e-9 || siteRank[fg0.q2] < dLocal - 1e-9));
+        if (endStep == 1 && hasDisentangledEndpoint)
+        {
+            FastStateSnapshot singleState;
+            singleState.SaveFrom(*this);
+            ApplyFastGatePreDisentangles(fg0);
+            IndexType rq1 = qubitsMap[fg0.q1];
+            IndexType rq2 = qubitsMap[fg0.q2];
+            if (rq1 > rq2)
+                std::swap(rq1, rq2);
+            const IndexType posP0 = (rq2 - rq1 <= 1) ? rq1 : SelectMeetingPositionP0Fast(rq1, rq2, fg0.q1, fg0.q2, windowPtr, windowSize, 0, false);
+            singleState.RestoreTo(*this);
+            EvaluateMeetingPositionCostFast(posP0, windowPtr, windowSize, 0, 0, 0, currentCost, bestCost, false);
+            return posP0;
+        }
+
+        // Independent shots often reach exactly the same routing problem even
+        // when measurement bits differ. Reuse only an unbounded root search and
+        // compare every model input, including virtual bonds and projections.
+        // Most gates never need a meeting choice. Index by gate for repeated
+        // shots and allocate keys only for visited slots (about 2 MiB maximum).
+        AdaptiveChoice *replay = nullptr;
+        if (currentCost == 0. && bestCost == std::numeric_limits<double>::infinity() && nrQubits <= 64 && windowSize <= 64 && disentangleBuf.size <= 96)
+        {
+            if (adaptiveChoices.empty())
+                adaptiveChoices.resize(256);
+            replay = &adaptiveChoices[static_cast<size_t>(currentGateIndex) % adaptiveChoices.size()];
+            adaptiveKey.clear();
+            VisitRoutingInputs(windowPtr, windowSize, lookaheadDepth, lookaheadDepthWithHeuristic, [&](uint64_t value) { adaptiveKey.push_back(value); });
+            if (replay->key == adaptiveKey)
+            {
+                bestCost = replay->cost;
+                return replay->position;
+            }
+        }
+
         auto searchAdaptive = [&](auto &self, size_t stepIdx, double stepStartCost, double &boundCost) -> IndexType {
             if (stepIdx >= endStep)
             {
@@ -2505,6 +2930,18 @@ class MPSDummySimulator
             }
 
             const FastGateOp &fg = windowPtr[stepIdx];
+            FastStateSnapshot preStepState;
+            const bool hasPreDisentangle = fg.preCount > 0;
+            if (hasPreDisentangle)
+            {
+                preStepState.SaveFrom(*this);
+                ApplyFastGatePreDisentangles(fg);
+            }
+            auto restorePreStep = [&]() {
+                if (hasPreDisentangle)
+                    preStepState.RestoreTo(*this);
+            };
+
             IndexType rq1 = -1;
             IndexType rq2 = -1;
             if (!IsRelabelingSwap(fg))
@@ -2518,13 +2955,11 @@ class MPSDummySimulator
             FastStateSnapshot stepState;
             stepState.SaveFrom(*this);
 
-            // Always evaluate the full heuristic rollout portfolio from stepIdx over
-            // [stepIdx, endStep) first. This serves as the leaf evaluation when
-            // stepIdx >= exactSteps and preserves the heuristic portfolio's best result
-            // as a tight upper-bound baseline before any branching at stepIdx < exactSteps.
-            // The full portfolio matters: positional policies (swap left/right, closer
-            // to an end or the center) win different decisions than the cost-based
-            // ones, and a three-policy subset lost exactness on large QFTs.
+            // Note: preDisentangles for windowPtr[stepIdx] have already been applied to *this,
+            // so EvaluateHeuristicRolloutsFast must not apply them a second time on s == stepIdx.
+            FastGateOp savedStepOp = windowPtr[stepIdx];
+            windowPtr[stepIdx].preCount = 0;
+
             IndexType bestPos = IsRelabelingSwap(fg) ? -1
                                 : (rq2 - rq1 <= 1)   ? rq1
                                                      : SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, stepIdx, true);
@@ -2535,9 +2970,13 @@ class MPSDummySimulator
             if (boundCost < boundBefore)
                 bestPos = rolloutPos;
 
+            windowPtr[stepIdx] = savedStepOp;
             stepState.RestoreTo(*this);
             if (stepIdx >= static_cast<size_t>(exactSteps))
+            {
+                restorePreStep();
                 return bestPos;
+            }
 
             if (IsRelabelingSwap(fg))
             {
@@ -2550,6 +2989,7 @@ class MPSDummySimulator
                         (void)self(self, stepIdx + 1, stepStartCost, boundCost);
                 }
                 stepState.RestoreTo(*this);
+                restorePreStep();
                 return -1;
             }
 
@@ -2566,6 +3006,7 @@ class MPSDummySimulator
                         (void)self(self, stepIdx + 1, nextCost, boundCost);
                 }
                 stepState.RestoreTo(*this);
+                restorePreStep();
                 return rq1;
             }
 
@@ -2577,8 +3018,12 @@ class MPSDummySimulator
             for (IndexType b = rq1 + 1; b < rq2; ++b)
                 minBondInSpan = std::min(minBondInSpan, currentBondDim[b]);
 
-            const double E1 = std::max((rq1 > 0) ? currentBondDim[rq1 - 1] : 1.0, currentBondDim[rq1]);
-            const double E2 = std::max(currentBondDim[rq2 - 1], (rq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[rq2] : 1.0);
+            const double eLeftEnd = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[rq1]] : static_cast<double>(physExtent);
+            const double eRightEnd = (siteRank.size() == nrQubits) ? siteRank[qubitsMapInv[rq2]] : static_cast<double>(physExtent);
+            const double E1 = (eLeftEnd <= 1.0 + 1e-9) ? 1.0 : std::max((rq1 > 0) ? currentBondDim[rq1 - 1] : 1.0, currentBondDim[rq1]);
+            const double E2 = (eRightEnd <= 1.0 + 1e-9)
+                                  ? 1.0
+                                  : std::max(currentBondDim[rq2 - 1], (rq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[rq2] : 1.0);
             const bool hasLowEntanglementCut = (minBondInSpan < 16.0) && (runtimeBondCap <= 0 || minBondInSpan < static_cast<double>(runtimeBondCap)) &&
                                                (minBondInSpan <= 0.5 * std::min(E1, E2));
 
@@ -2648,6 +3093,7 @@ class MPSDummySimulator
             }
 
             stepState.RestoreTo(*this);
+            restorePreStep();
             return bestPos;
         };
 
@@ -2655,6 +3101,12 @@ class MPSDummySimulator
         const IndexType chosenPos = searchAdaptive(searchAdaptive, 0, currentCost, bestRolloutCost);
         if (bestRolloutCost < bestCost)
             bestCost = bestRolloutCost;
+        if (replay)
+        {
+            replay->key = adaptiveKey;
+            replay->position = chosenPos;
+            replay->cost = bestCost;
+        }
         return chosenPos;
     }
 
@@ -2686,15 +3138,18 @@ class MPSDummySimulator
                 const IndexType toReal = movingReal + 1;
                 const IndexType toInv = qubitsMapInv[toReal];
 
+                // Update bond dimension BEFORE relabeling qubitsMapInv so growBondDimension
+                // sees pre-swap left qubit at movingReal and pre-swap right qubit at toReal.
+                totalSwappingCost += bondCost[movingReal];
+                growBondDimension(movingReal, true);
+                totalSwappingCost += kPostSwapCostWeight * bondCost[movingReal];
+
                 qubitsMap[toInv] = movingReal;
                 qubitsMapInv[movingReal] = toInv;
 
                 qubitsMap[qubit1] = toReal;
                 qubitsMapInv[toReal] = qubit1;
 
-                totalSwappingCost += bondCost[movingReal];
-                growBondDimension(movingReal, true);
-                totalSwappingCost += kPostSwapCostWeight * bondCost[movingReal];
                 movingReal = toReal;
             }
         }
@@ -2707,15 +3162,16 @@ class MPSDummySimulator
                 const IndexType toReal = movingReal - 1;
                 const IndexType toInv = qubitsMapInv[toReal];
 
+                totalSwappingCost += bondCost[toReal];
+                growBondDimension(toReal, true);
+                totalSwappingCost += kPostSwapCostWeight * bondCost[toReal];
+
                 qubitsMap[toInv] = movingReal;
                 qubitsMapInv[movingReal] = toInv;
 
                 qubitsMap[qubit2] = toReal;
                 qubitsMapInv[toReal] = qubit2;
 
-                totalSwappingCost += bondCost[toReal];
-                growBondDimension(toReal, true);
-                totalSwappingCost += kPostSwapCostWeight * bondCost[toReal];
                 movingReal = toReal;
             }
         }
@@ -2724,6 +3180,16 @@ class MPSDummySimulator
     }
 
   private:
+    struct AdaptiveChoice
+    {
+        std::vector<uint64_t> key;
+        IndexType position = -1;
+        double cost = 0.;
+    };
+
+    std::vector<AdaptiveChoice> adaptiveChoices;
+    std::vector<uint64_t> adaptiveKey;
+
     struct MemoEntry
     {
         uint64_t hash = 0;
@@ -2746,43 +3212,20 @@ class MPSDummySimulator
     IndexType runtimeBondCap = 0;
     double truncationWeight = 0.;
     bool swapGatesRelabelQubits = false;
+    bool modelDisentangling = true;
     std::vector<double> maxBondDim;
     std::vector<double> currentBondDim;
+    std::vector<double> siteRank;
 
     double totalSwappingCost = 0;
 
     double growthFactorSwap = 1.;
     double growthFactorGate = 0.7;
     double minLayoutGain = 4.; // set per chain type by the constructor
+    bool minLayoutGainExplicit = false;
 
     void growBondDimension(IndexType bond, bool swap = true, double schmidtRank = 4)
     {
-        // the left and right bond dimensions are relevant because:
-        // the initial configuration before applying the swap or other gate is:
-
-        // - O - O -
-        //   |   |
-
-        // The two physical legs have dimension 2
-        // this is contracted into:
-
-        //    ---
-        //  -|   |-
-        //    ---
-        //    | |
-
-        // the left and right dimensions stay the same and also the physical legs have dimension d (2 for an MPS, 4 for an MPO)
-
-        // then the swap or the other gate is applied, getting a result that looks graphically as above, but of course with different values inside the tensor
-        // swap is special, just swaps the values for (0, 1) and (1, 0) in
-        // the physical legs, while other gates can change all values in the tensor
-
-        // then the tensor is reshaped into a matrix, having dimensions d * leftDim x d * rightNeighborDim on this matrix SVD is applied, to separate out the
-        // qubits tensors again, and the bond dimension is the number of singular
-        // values kept after truncation (if done), or the number of non-zero
-        // singular values if no truncation is done. The bond dimension can be at
-        // most min(d * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the minimum is obviously 1
-
         const IndexType leftBond = bond - 1;
         const IndexType rightNeigborBond = bond + 1;
         const double betweenDim = currentBondDim[bond];
@@ -2790,9 +3233,24 @@ class MPSDummySimulator
         const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
         const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
 
-        currentBondDim[bond] = EstimateGrownBondDimension(bond, leftDim, betweenDim, rightNeighborDim, swap, schmidtRank);
+        const double d = static_cast<double>(physExtent);
+        const bool hasSiteRanks = (siteRank.size() == nrQubits && bond >= 0 && bond + 1 < static_cast<IndexType>(nrQubits));
+        const IndexType qL = hasSiteRanks ? qubitsMapInv[bond] : 0;
+        const IndexType qR = hasSiteRanks ? qubitsMapInv[bond + 1] : 0;
+        const double eL = hasSiteRanks ? siteRank[qL] : d;
+        const double eR = hasSiteRanks ? siteRank[qR] : d;
+
+        currentBondDim[bond] = EstimateGrownBondDimension(bond, leftDim, betweenDim, rightNeighborDim, swap, schmidtRank, eL, eR);
 
         bondCost[bond] = BondCost(currentBondDim[bond]);
+
+        if (!swap && hasSiteRanks && schmidtRank > 1.0 + 1e-9)
+        {
+            const double fullRank = IsOperatorChain() ? schmidtRank * schmidtRank : schmidtRank;
+            const double siteFactor = 1.0 + growthFactorGate * (std::min(d, fullRank) - 1.0);
+            siteRank[qL] = std::clamp(siteRank[qL] * siteFactor, 1.0, d);
+            siteRank[qR] = std::clamp(siteRank[qR] * siteFactor, 1.0, d);
+        }
     }
 };
 

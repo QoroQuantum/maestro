@@ -34,6 +34,86 @@ def _suffix():
     return circuit
 
 
+@pytest.fixture(params=[
+    (maestro.SimulationType.MatrixProductState, (1, 9, 8, 5, 10, 2, 3, 7, 4, 0, 11, 6)),
+    (maestro.SimulationType.MatrixProductOperator, (4, 2, 1, 0, 5, 3)),
+], ids=["MPS", "MPO"])
+def checkpoint_graph(request):
+    method, path = request.param
+    edges = [(path[i], path[i + 1]) for parity in (0, 1) for i in range(parity, len(path) - 1, 2)]
+    prefix = QuantumCircuit()
+    prefix.x(path[0])  # Mark one end so reversing the path changes the decoded bits.
+    for q in range(len(path)):
+        prefix.h(q)
+    for a, b in edges:
+        prefix.cz(a, b)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_bond_dimension=64,
+                                     singular_value_threshold=0.0, seed=123)
+    return prefix, path, edges, config
+
+
+def test_checkpoint_honors_disable_optimized_swapping(checkpoint_graph):
+    prefix, path, _, config = checkpoint_graph
+    optimized = maestro.PrefixCheckpointedSimulator(prefix, len(path), config).max_bond_dim
+    config.disable_optimized_swapping = True
+    disabled = maestro.PrefixCheckpointedSimulator(prefix, len(path), config).max_bond_dim
+    # Putting the path in chain order cuts a single graph edge at every bond.
+    # The pure state has Schmidt rank two, and its density operator has rank four across the cut.
+    assert optimized == (2 if config.simulation_type == maestro.SimulationType.MatrixProductState else 4)
+    assert disabled > optimized
+
+
+@pytest.mark.parametrize("method,width", [
+    (maestro.SimulationType.MatrixProductState, 12),
+    (maestro.SimulationType.MatrixProductOperator, 6),
+])
+def test_checkpoint_suffix_honors_swap_lookahead(method, width):
+    prefix = QuantumCircuit()
+    prefix.x(0)  # A one-gate prefix has zero automatic lookahead.
+    suffix = QuantumCircuit()
+    for q in range(6):
+        suffix.h(q)
+    for a, b in [(3, 5), (3, 0), (3, 0), (0, 1), (2, 0), (5, 2), (0, 1),
+                 (5, 1), (2, 1), (2, 4), (5, 0), (0, 4), (5, 1)]:
+        suffix.cz(a, b)
+    suffix.measure([(0, 0)])
+
+    def peak(depth, disable=False):
+        config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_bond_dimension=64,
+                                         singular_value_threshold=1e-12, gate_fusion=False, seed=3,
+                                         lookahead_depth=depth, disable_optimized_swapping=disable)
+        checkpoint = maestro.PrefixCheckpointedSimulator(prefix, width, config)
+        return checkpoint.execute_suffix(suffix, shots=1)["max_bond_dim_reached"]
+
+    no_lookahead = peak(0)
+    assert peak(2) < no_lookahead
+    assert peak(-1) < no_lookahead
+    assert peak(2, disable=True) == no_lookahead
+
+
+def test_checkpoint_restores_routed_layout_for_different_suffixes(checkpoint_graph):
+    prefix, path, edges, config = checkpoint_graph
+    spare = len(path)  # Allocated in the checkpoint but first used by a suffix.
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, spare + 1, config)
+    assert checkpoint.max_bond_dim == (2 if config.simulation_type == maestro.SimulationType.MatrixProductState else 4)
+    for marked, copy_to_spare in [(path[1], False), (path[2], True), (path[1], False)]:
+        suffix = QuantumCircuit()
+        suffix.z(marked)
+        # Undo the graph preparation. The phase flip becomes a bit flip on `marked`.
+        for a, b in reversed(edges):
+            suffix.cz(a, b)
+        for q in range(len(path)):
+            suffix.h(q)
+        if copy_to_spare:
+            suffix.cx(path[0], spare)
+        suffix.measure([(q, q) for q in range(spare + 1)])
+        ones = {path[0], marked}
+        if copy_to_spare:
+            ones.add(spare)
+        expected = "".join("1" if q in ones else "0" for q in range(spare + 1))
+        assert checkpoint.execute_suffix(suffix, shots=3)["counts"] == {expected: 3}
+
+
 @pytest.mark.parametrize("policy", ["auto", "trajectories"])
 def test_checkpoint_terminal_damping_keeps_the_saved_bell_state(policy):
     prefix = QuantumCircuit()

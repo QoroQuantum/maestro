@@ -1387,6 +1387,75 @@ def test_noisy_fidelity_with_circuit_channel_on_statevector():
     assert result["fidelity"] == pytest.approx(0.75, abs=0.05)
 
 
+def test_a_memory_checkpoint_keeps_the_bonds_of_index_order():
+    """The checkpoint of a memory experiment is its first round. A layout searched from that round alone ran
+    the following rounds with larger bonds (a d=5 memory truncated at a bond dimension index order never
+    reaches): it is taken only at a large predicted gain, which a memory circuit does not show."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=2)
+
+    def compiled(disable):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                         max_bond_dimension=64, disable_optimized_swapping=disable)
+        sampler = MaestroCompiledSampler(circuit, config=config, seed=5)
+        assert sampler.checkpoint_sim is not None  # a fixed MPS backend samples from the checkpoint
+        return sampler
+
+    routed, unrouted = compiled(False), compiled(True)
+    assert routed.checkpoint_sim.max_bond_dim == unrouted.checkpoint_sim.max_bond_dim
+    result = routed.checkpoint_sim.execute_suffix(routed.suffix_qc, shots=2, noise_seed=17,
+                                                  num_measurements=routed.num_measurements, return_samples=True)
+    measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+    events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
+    assert not events.any()  # a noiseless memory flips no detector and no observable
+
+
+def test_routing_crosses_untouched_qubits_as_product_states():
+    """stim numbers the qubits of a rotated code by their coordinates, so its register has idle sites, and
+    every ancilla starts untouched. In a circuit that measures before its end, routing takes both for the
+    product states they are, and the chain stays below the bond dimension it reaches without routing."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=2)
+
+    def peak_bond(disable=False, depth=-1):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                         max_bond_dimension=256, disable_optimized_swapping=disable, lookahead_depth=depth)
+        sampler = MaestroCompiledSampler(circuit, config=config, seed=5, enable_checkpoint=False)
+        width = max(sampler.qc.num_qubits, circuit.num_qubits)
+        # An empty prefix keeps index order: only the swap lookahead differs between the two runs.
+        checkpoint = maestro.PrefixCheckpointedSimulator(maestro.circuits.QuantumCircuit(), width, config)
+        result = checkpoint.execute_suffix(sampler.qc, shots=2, noise_seed=17, num_measurements=circuit.num_measurements,
+                                           return_samples=True)
+        measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+        events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
+        assert not events.any()  # a noiseless memory flips no detector and no observable
+        return result["max_bond_dim_reached"]
+
+    automatic = peak_bond()
+    assert automatic < peak_bond(disable=True)
+    # The shorter forecast applies to automatic routing. A caller can still
+    # request the longer lookahead, which takes a different route here.
+    assert peak_bond(depth=12) == automatic
+    assert peak_bond(depth=15) > automatic
+
+
+def test_a_memory_run_whole_keeps_index_order_at_a_small_predicted_layout_gain():
+    """The layout search predicted a gain of 1.54 for this memory, took the layout, and the run truncated at the
+    bond limit: wrong shots, and about 200 times slower. A circuit that measures before its end now needs a
+    predicted gain of 2, which no rotated memory showed, so the chain stays within the bonds of index order."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=3)
+
+    def run(disable):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                         max_bond_dimension=256, disable_optimized_swapping=disable)
+        sampler = MaestroCompiledSampler(circuit, config=config, seed=5, enable_checkpoint=False)
+        result = sampler.qc.execute(sampler.config, shots=1, return_samples=True)
+        measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+        events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
+        assert not events.any()  # a noiseless memory flips no detector and no observable
+        return result["max_bond_dim_reached"]
+
+    assert run(False) <= run(True)
+
+
 def test_sinter_public_api_is_the_documented_entry_points():
     import maestro.sinter as module
     assert set(module.__all__) == {"MaestroCompiledSampler", "MaestroSinterSampler", "translate_stim_to_maestro"}

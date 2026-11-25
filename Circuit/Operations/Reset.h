@@ -59,27 +59,11 @@ template <typename Time = Types::time_type> class Reset : public IOperation<Time
      */
     void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state) const override
     {
-        // Use the simulator's native ApplyReset which correctly handles
-        // per-backend measurement+flip (critical for MPS re-canonicalization).
-        sim->ApplyReset(qubits);
-
-        // If any reset targets specify |1⟩ instead of the default |0⟩,
-        // apply X to flip those qubits.
-        for (size_t qi = 0; qi < resetTargets.size() && qi < qubits.size(); ++qi)
-        {
-            if (resetTargets[qi])
-            {
-                // Jobs can share this instruction; only mutate their own simulator.
-                sim->ApplyX(qubits[qi]);
-
-                if (sim->SupportsMPSSwapOptimization())
-                {
-                    const auto counter = sim->GetGatesCounter();
-                    if (counter > 0)
-                        sim->SetGatesCounter(counter - 1);
-                }
-            }
-        }
+        (void)state;
+        if (resetTargets.empty())
+            sim->ApplyReset(qubits);
+        else
+            sim->ApplyResetToTargets(qubits, resetTargets);
     }
 
     /**

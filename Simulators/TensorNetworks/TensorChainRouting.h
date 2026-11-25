@@ -1,6 +1,8 @@
 #pragma once
 #include "MPSDummySimulator.h"
 #include "RoutingConfig.h"
+#include <optional>
+#include <utility>
 
 namespace Simulators::Private
 {
@@ -88,6 +90,25 @@ template <class Backend> class TensorChainRouting : public Backend
             dummySim->setGrowthFactorGate(factor);
     }
 
+    void SetUpcomingGates(const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override
+    {
+        upcomingHasDisentangle = RoutingConfig::ContainsDisentanglingOperations(gates);
+        midCircuitProjection.reset();
+        RefreshRoutingSettings(true);
+        // A qubit no entangling operation has acted on is a product state, so crossing it costs no bond: the idle
+        // sites of a sparse register, and ancillas before their first gate. Taken into account for circuits that
+        // measure or reset before their end, where it was measured (rotated memories sampled from a checkpoint ran
+        // 12% to 43% faster at half the peak bond); on unitary circuits it only reshuffled the routing. Only the
+        // lookahead reads the ranks: with routing off the circuit is not even scanned.
+        if (TracksDisentangling() && upcomingHasDisentangle && useOptimalMeetingPosition && (lookaheadDepth != 0 || IsRoutingLookaheadEnabled()))
+        {
+            midCircuitProjection = RoutingConfig::ContainsMidCircuitDisentangling(gates, liveUntouched, liveSiteRank);
+            if (*midCircuitProjection)
+                StartUntouchedAsProducts();
+        }
+        Backend::SetUpcomingGates(gates);
+    }
+
     size_t GetCurrentMaxBondDimension() const override
     {
         return curMaxBondDim;
@@ -113,21 +134,37 @@ template <class Backend> class TensorChainRouting : public Backend
     // Called when configuration, register size or lookahead changes, never on
     // the gate hot path. Invalidation retains memoized plans: their keys include
     // the full map, bond estimates and upcoming gate window.
-    void RefreshRoutingSettings()
+    void RefreshRoutingSettings(bool windowChanged = false)
     {
         const auto cap = configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey());
-        const bool enabled = RoutingConfig::VirtualBondsEnabled(configuration);
+        const bool explicitEnabled = RoutingConfig::VirtualBondsEnabled(configuration);
+        const bool enabled = explicitEnabled || (TracksDisentangling() && upcomingHasDisentangle && RoutingConfig::VirtualBondsAutoAllowed(configuration));
         const double weight = RoutingConfig::TruncationWeight(configuration);
         const bool tracking = enabled && useOptimalMeetingPosition && lookaheadDepth > 0 && lookaheadDepth != std::numeric_limits<int>::max() && nrQubits > 1 &&
                               cap > 0 && MPSDummySimulator::EffectiveLookaheadMaxBondDimension(nrQubits, operatorChain, cap) > cap;
-        if (cap != physicalBondCap || enabled != virtualBondsEnabled || tracking != trackVirtualBonds || weight != truncationWeight)
-            InvalidateDummyHistory();
+        if (cap != physicalBondCap || explicitEnabled != explicitVirtualBondsEnabled || enabled != virtualBondsEnabled || tracking != trackVirtualBonds ||
+            weight != truncationWeight)
+        {
+            // Detaching the gate window does not change the tensors. Keep
+            // their uncapped estimates until another compatible window is
+            // installed, or an operation changes the state in between.
+            if (windowChanged && trackVirtualBonds && !tracking && dummyHistoryValid)
+            {
+                inactiveBondDims = dummySim->getCurrentBondDimensions();
+                dummyHistoryValid = false;
+            }
+            else if (!windowChanged)
+                InvalidateDummyHistory();
+        }
         physicalBondCap = cap;
+        explicitVirtualBondsEnabled = explicitEnabled;
         virtualBondsEnabled = enabled;
         truncationWeight = weight;
         trackVirtualBonds = tracking;
         if (dummySim)
             ConfigureDummy();
+        if (tracking && !inactiveBondDims.empty())
+            RestoreDummyHistory(std::exchange(inactiveBondDims, {}));
     }
 
     bool ShouldTrackVirtualBonds() const
@@ -138,6 +175,7 @@ template <class Backend> class TensorChainRouting : public Backend
     void InvalidateDummyHistory() noexcept
     {
         dummyHistoryValid = false;
+        inactiveBondDims.clear();
     }
 
     void ValidateDummyHistoryMap() noexcept
@@ -168,6 +206,7 @@ template <class Backend> class TensorChainRouting : public Backend
     void ConfigureDummy()
     {
         dummySim->SetSwapGatesRelabelQubits(swapGatesRelabelQubits);
+        dummySim->SetModelDisentangling(TracksDisentangling());
         dummySim->SetMaxBondDimension(EffectiveLookaheadMaxBondDimension(dummySim->getNrQubits()));
         dummySim->SetRoutingCostModel(virtualBondsEnabled ? physicalBondCap : 0, truncationWeight);
         dummySim->setGrowthFactorGate(growthFactorGate);
@@ -184,6 +223,73 @@ template <class Backend> class TensorChainRouting : public Backend
         }
     }
 
+    virtual void DeflateLiveBondDimensions(const std::vector<long long> & /*map*/, double * /*dims*/, size_t /*count*/,
+                                           bool /*automaticLookahead*/ = false) const
+    {
+    }
+
+    // A logical SWAP exchanged the states of two qubits: a backend that keeps more per-qubit routing state than
+    // the site ranks exchanges it here.
+    virtual void ExchangeTrackedStates(Types::qubit_t /*q0*/, Types::qubit_t /*q1*/) noexcept
+    {
+    }
+
+    // Whether the backend reports the qubits its measurements and resets collapse (RecordDisentangledQubits), so
+    // that the site ranks follow the state. Only then do measurements and resets enter the routing model and
+    // switch its overflow pricing on; a backend that does not (the GPU chains) keeps the gate-only model.
+    virtual bool TracksDisentangling() const
+    {
+        return false;
+    }
+
+    // Ranks of a state nothing is known about: every site may be entangled.
+    void EnsureLiveSiteRanks()
+    {
+        if (nrQubits > 0 && liveSiteRank.size() != nrQubits)
+        {
+            liveSiteRank.assign(nrQubits, operatorChain ? 4. : 2.);
+            liveUntouched.assign(nrQubits, 0);
+        }
+    }
+
+    // Ranks of a fresh register. Its qubits are product states, which liveUntouched records; the ranks stay at
+    // their cautious full value until a circuit asks for the products (StartUntouchedAsProducts).
+    void ResetLiveSiteRanks()
+    {
+        if (nrQubits > 0)
+        {
+            liveSiteRank.assign(nrQubits, operatorChain ? 4. : 2.);
+            liveUntouched.assign(nrQubits, 1);
+        }
+        else
+        {
+            liveSiteRank.clear();
+            liveUntouched.clear();
+        }
+    }
+
+    void StartUntouchedAsProducts()
+    {
+        if (liveSiteRank.size() != nrQubits || liveUntouched.size() != nrQubits)
+            return;
+        for (size_t q = 0; q < nrQubits; ++q)
+            if (liveUntouched[q])
+                liveSiteRank[q] = 1.;
+    }
+
+    // An operation that can entangle the qubit acted on it.
+    void MarkTouched(Types::qubit_t q) noexcept
+    {
+        if (q < liveUntouched.size())
+            liveUntouched[q] = 0;
+    }
+
+    // The register was prepared in a state that is not a product of its qubits.
+    void MarkAllTouched() noexcept
+    {
+        std::fill(liveUntouched.begin(), liveUntouched.end(), uint8_t{0});
+    }
+
     void SeedDummyHistory(const std::vector<long long> &map)
     {
         InvalidateDummyHistory();
@@ -192,10 +298,12 @@ template <class Backend> class TensorChainRouting : public Backend
             return;
         dummySim->SetRoutingMap(map);
         dummySim->SetCurrentBondDimensions(bonds);
+        if (liveSiteRank.size() == nrQubits)
+            dummySim->SetCurrentSiteRanks(liveSiteRank);
         dummyHistoryValid = true;
     }
 
-    template <class Bond> long long PlanMeetingPosition(const Bond *bonds, size_t count)
+    template <class Bond> long long PlanMeetingPosition(const Bond *bonds, size_t count, bool automaticDepth = false)
     {
         if (!useOptimalMeetingPosition || lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max() || decompositionDepth || !bonds ||
             nrQubits <= 1 || count + 1 != nrQubits || upcomingGateIndex < 0 || static_cast<size_t>(upcomingGateIndex) >= upcomingGates.size())
@@ -210,21 +318,41 @@ template <class Backend> class TensorChainRouting : public Backend
         if (map.size() != nrQubits)
             return -1;
         EnsureDummySimulator(nrQubits);
+        EnsureLiveSiteRanks();
         std::vector<double> estimates(bonds, bonds + count);
+        DeflateLiveBondDimensions(map, estimates.data(), estimates.size(), automaticDepth);
         if (trackVirtualBonds && dummyHistoryValid && dummySim->getQubitsMap() == map)
         {
             const auto &previous = dummySim->getCurrentBondDimensions();
             for (size_t i = 0; i < count; ++i)
-                if (bonds[i] >= physicalBondCap)
+                if (estimates[i] >= static_cast<double>(physicalBondCap))
                     estimates[i] = std::max(estimates[i], previous[i]);
         }
         dummySim->SetRoutingMap(map);
         dummySim->SetCurrentBondDimensions(estimates);
+        if (liveSiteRank.size() == nrQubits)
+            dummySim->SetCurrentSiteRanks(liveSiteRank);
         dummySim->setTotalSwappingCost(0.);
         dummyHistoryValid = trackVirtualBonds;
         double bestCost = std::numeric_limits<double>::infinity();
-        const auto position =
-            dummySim->SelectMeetingPositionAdaptive(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0., bestCost);
+        int depth = lookaheadDepth, heuristicDepth = lookaheadDepthWithHeuristic;
+        // Projected ranks are forecasts of a sampled branch. On MPS memory
+        // circuits, a 12-gate horizon retained accuracy and avoided costly
+        // routes chosen by longer rollouts. Keep the exact branching prefix.
+        constexpr int projectedMpsHorizon = 12;
+        if (automaticDepth && !operatorChain && upcomingHasDisentangle && depth > projectedMpsHorizon)
+        {
+            // A network may install the gate window before enabling lookahead.
+            if (!midCircuitProjection)
+                midCircuitProjection = RoutingConfig::ContainsMidCircuitDisentangling(upcomingGates, liveUntouched, liveSiteRank);
+            if (*midCircuitProjection)
+            {
+                const int exactSteps = depth - std::clamp(heuristicDepth, 0, depth);
+                depth = projectedMpsHorizon;
+                heuristicDepth = std::max(0, depth - exactSteps);
+            }
+        }
+        const auto position = dummySim->SelectMeetingPositionAdaptive(upcomingGates, upcomingGateIndex, depth, heuristicDepth, 0., bestCost);
         if (position < std::min(map[qubits[0]], map[qubits[1]]) || position >= std::max(map[qubits[0]], map[qubits[1]]))
             return -1;
         if (trackVirtualBonds)
@@ -242,6 +370,41 @@ template <class Backend> class TensorChainRouting : public Backend
     // SWAP or a generic gate, near 1 for a small-angle controlled rotation).
     void RecordExecutedTwoQubitGate(Types::qubit_t q0, Types::qubit_t q1, bool isSwap, double schmidtRank) noexcept
     {
+        inactiveBondDims.clear();
+        try
+        {
+            if (isSwap)
+            {
+                // A SWAP exchanges the states of its qubits, whether the chain relabels them or moves its tensors:
+                // what describes those states goes with them.
+                if (q0 < nrQubits && q1 < nrQubits && q0 != q1)
+                {
+                    EnsureLiveSiteRanks();
+                    std::swap(liveSiteRank[q0], liveSiteRank[q1]);
+                    if (liveUntouched.size() == nrQubits)
+                        std::swap(liveUntouched[q0], liveUntouched[q1]);
+                    ExchangeTrackedStates(q0, q1);
+                }
+            }
+            else
+            {
+                MarkTouched(q0);
+                MarkTouched(q1);
+            }
+            if (q0 < nrQubits && q1 < nrQubits && q0 != q1 && !isSwap && schmidtRank > 1. + 1e-9)
+            {
+                EnsureLiveSiteRanks();
+                const double d = operatorChain ? 4. : 2.;
+                const double fullRank = operatorChain ? schmidtRank * schmidtRank : schmidtRank;
+                const double factor = 1. + growthFactorGate * (std::min(d, fullRank) - 1.);
+                liveSiteRank[q0] = std::clamp(liveSiteRank[q0] * factor, 1., d);
+                liveSiteRank[q1] = std::clamp(liveSiteRank[q1] * factor, 1., d);
+            }
+        }
+        catch (...)
+        {
+        }
+
         if (!trackVirtualBonds)
             return;
         // Recording is advisory. Never throw after a successful native gate:
@@ -286,37 +449,97 @@ template <class Backend> class TensorChainRouting : public Backend
         }
     }
 
+    void RecordDisentangledQubits(const Types::qubits_vector &qubits, double probability = 1.) noexcept
+    {
+        try
+        {
+            EnsureLiveSiteRanks();
+            for (const Types::qubit_t q : qubits)
+                if (q < liveSiteRank.size())
+                    liveSiteRank[q] = probability >= 1. ? 1. : std::max(1., liveSiteRank[q] + probability * (1. - liveSiteRank[q]));
+
+            if (!trackVirtualBonds || upcomingGates.empty() || !dummyHistoryValid || !dummySim)
+                return InvalidateDummyHistory();
+            const auto map = CurrentRoutingMap();
+            if (map.size() != nrQubits || dummySim->getQubitsMap() != map)
+                return InvalidateDummyHistory();
+            for (const Types::qubit_t q : qubits)
+                if (q < nrQubits)
+                    dummySim->ApplyDisentangleQubit(static_cast<MPSDummySimulator::IndexType>(q), probability);
+            const auto &dims = dummySim->getCurrentBondDimensions();
+            if (std::all_of(dims.begin(), dims.end(), [](double b) { return b <= 1. + 1e-9; }))
+                InvalidateDummyHistory();
+        }
+        catch (...)
+        {
+            InvalidateDummyHistory();
+        }
+    }
+
+    void NoteTwoQubitNonUnitaryTouch(Types::qubit_t q0, Types::qubit_t q1) noexcept
+    {
+        try
+        {
+            EnsureLiveSiteRanks();
+            MarkTouched(q0);
+            MarkTouched(q1);
+            const double d = operatorChain ? 4. : 2.;
+            if (q0 < liveSiteRank.size())
+                liveSiteRank[q0] = d;
+            if (q1 < liveSiteRank.size())
+                liveSiteRank[q1] = d;
+        }
+        catch (...)
+        {
+        }
+    }
+
     std::vector<double> CaptureDummyHistory() const
     {
-        return trackVirtualBonds && dummyHistoryValid && dummySim ? dummySim->getCurrentBondDimensions() : std::vector<double>{};
+        return trackVirtualBonds && dummyHistoryValid && dummySim ? dummySim->getCurrentBondDimensions() : inactiveBondDims;
     }
 
     void RestoreDummyHistory(const std::vector<double> &bonds)
     {
         InvalidateDummyHistory();
-        if (!trackVirtualBonds || bonds.empty() || bonds.size() + 1 != nrQubits)
+        if (bonds.empty() || bonds.size() + 1 != nrQubits)
             return;
+        if (!trackVirtualBonds)
+        {
+            inactiveBondDims = bonds;
+            return;
+        }
         EnsureDummySimulator(nrQubits);
         const auto map = CurrentRoutingMap();
         if (map.size() != nrQubits)
             return;
         dummySim->SetRoutingMap(map);
         dummySim->SetCurrentBondDimensions(bonds);
+        if (liveSiteRank.size() == nrQubits)
+            dummySim->SetCurrentSiteRanks(liveSiteRank);
         dummyHistoryValid = true;
     }
 
     void SaveDummyState()
     {
         savedDummyBondDims = CaptureDummyHistory();
+        savedSiteRank = liveSiteRank;
+        savedUntouched = liveUntouched;
+        hasSavedSiteRank = true;
     }
 
     void RestoreDummyState()
     {
+        if (!hasSavedSiteRank)
+            return;
+        liveSiteRank = savedSiteRank;
+        liveUntouched = savedUntouched;
         RestoreDummyHistory(savedDummyBondDims);
     }
 
     void ResetDummySimulator()
     {
+        ResetLiveSiteRanks();
         InvalidateDummyHistory();
         if (!dummySim || !trackVirtualBonds)
             return;
@@ -329,10 +552,36 @@ template <class Backend> class TensorChainRouting : public Backend
         dummyHistoryValid = true;
     }
 
+    void CopyRoutingHistoryTo(TensorChainRouting &copy) const
+    {
+        copy.dummySim = dummySim ? dummySim->Clone() : nullptr;
+        copy.dummyHistoryValid = dummyHistoryValid;
+        copy.inactiveBondDims = inactiveBondDims;
+        copy.savedDummyBondDims = savedDummyBondDims;
+        copy.liveSiteRank = liveSiteRank;
+        copy.liveUntouched = liveUntouched;
+        copy.savedSiteRank = savedSiteRank;
+        copy.savedUntouched = savedUntouched;
+        copy.hasSavedSiteRank = hasSavedSiteRank;
+        copy.midCircuitProjection = midCircuitProjection;
+    }
+
+    void ClearSavedRoutingState()
+    {
+        savedDummyBondDims.clear();
+        savedUntouched.clear();
+        savedSiteRank.clear();
+        hasSavedSiteRank = false;
+    }
+
     void ClearDummySimulator()
     {
         dummySim.reset();
-        savedDummyBondDims.clear();
+        ClearSavedRoutingState();
+        liveSiteRank.clear();
+        liveUntouched.clear();
+        upcomingHasDisentangle = false;
+        midCircuitProjection.reset();
         InvalidateDummyHistory();
     }
 
@@ -366,10 +615,19 @@ template <class Backend> class TensorChainRouting : public Backend
     bool useOptimalMeetingPosition = true;
     double growthFactorSwap = 1., growthFactorGate = 0.7;
     std::unique_ptr<MPSDummySimulator> dummySim;
+    std::vector<double> inactiveBondDims;
     std::vector<double> savedDummyBondDims;
+    std::vector<double> liveSiteRank;
+    std::vector<double> savedSiteRank;
+    std::vector<uint8_t> liveUntouched; // 1: no entangling operation acted on the qubit since the register was created
+    std::vector<uint8_t> savedUntouched;
+    bool hasSavedSiteRank = false;
+    bool upcomingHasDisentangle = false;
+    std::optional<bool> midCircuitProjection;
     bool dummyHistoryValid = false;
     size_t curMaxBondDim = 0;
     MPSDummySimulator::IndexType physicalBondCap = 0;
+    bool explicitVirtualBondsEnabled = false;
     bool virtualBondsEnabled = false, trackVirtualBonds = false;
     double truncationWeight = 1.;
     unsigned decompositionDepth = 0;

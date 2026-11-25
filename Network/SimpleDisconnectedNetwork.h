@@ -2977,6 +2977,40 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return mpsOptimizeSwaps;
     }
 
+    bool PrepareCheckpointRouting(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+                                  bool freshRegister) const override
+    {
+        const auto method = sim->GetSimulationType();
+        if ((method != Simulators::SimulationType::kMatrixProductState && method != Simulators::SimulationType::kMatrixProductOperator) ||
+            !sim->SupportsMPSSwapOptimization())
+            return false;
+
+        const auto qubits = sim->GetNumberOfQubits();
+        bool prepared = false;
+        if (circuit && !circuit->GetOperations().empty())
+        {
+            if (circuit->GetMaxQubitIndex() >= qubits)
+                throw std::invalid_argument("Checkpoint circuit addresses a qubit outside its register");
+            if ((freshRegister && optimizeInitialQubitsMap) || mpsOptimizeSwaps)
+            {
+                // Initial layout planning can decompose gates and reorder layers.
+                // Keep the prefix's executable instructions, including classical
+                // and noise operations, in their original order.
+                auto plan = freshRegister ? std::make_shared<Circuits::Circuit<Time>>(circuit->GetOperations()) : circuit;
+                // A prefix is part of the work only: a searched layout needs a large predicted gain to be taken.
+                prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister,
+                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0.);
+            }
+        }
+        if (!prepared || !mpsOptimizeSwaps)
+        {
+            // A different suffix may have left lookahead enabled on this simulator.
+            sim->SetLookaheadDepth(0);
+            sim->SetLookaheadDepthWithHeuristic(0);
+        }
+        return prepared;
+    }
+
     void SetMPSOptimizationBondDimensionThreshold(size_t threshold) override
     {
         mpsOptimizationBondDimensionThreshold = threshold;
@@ -3703,16 +3737,20 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return result;
     }
 
-    void OptimizeMPSInitialQubitsMap(std::shared_ptr<Simulators::ISimulator> &sim, std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const
+    // Returns whether the planner prepared a gate window for this circuit.
+    // minLayoutGain: above zero, the predicted gain a searched layout needs to replace index order
+    // (a line placed along the chain needs none: it is exact).
+    bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
+                                     bool freshRegister = true, double minLayoutGain = 0.) const
     {
+        const bool placeQubits = freshRegister && optimizeInitialQubitsMap;
         if ((sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState ||
              sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator) &&
-            (optimizeInitialQubitsMap || mpsOptimizeSwaps) && sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations())
+            (placeQubits || mpsOptimizeSwaps) && sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations())
         {
             // an MPO site carries a two-qubit (operator) physical index, so its
             // bonds grow like those of an MPS twice as long
             const size_t routedQubits = sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator ? 2 * nrQubits : nrQubits;
-            bool planned = false;
             if (mpsOptimizationQubitsNumberThreshold <= routedQubits)
             {
                 const auto maxBondDimValue =
@@ -3723,57 +3761,62 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (maxBondDimValue <= 0 || static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue)
                 {
-                    planned = true;
-                    // need to be sure the circuit is correctly converted
-                    dcirc->ConvertForCutting(); // convert the three qubit gates
+                    if (freshRegister)
+                        dcirc->ConvertForCutting(); // convert the three qubit gates
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
-                    // Finalize source ordering before preparing fusion. Routing layers
-                    // are only a cost model and must never replace executable operations.
-                    auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
-                    // A circuit whose two-qubit operations form lines that do not run in index order
-                    // (a line through a device) gets its qubits placed along them: no swap is then
-                    // needed, so no layout can cost less and none is searched for (Circuits::ChainLine).
-                    const std::vector<long long int> line =
-                        optimizeInitialQubitsMap ? Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits()) : std::vector<long long int>();
-                    // Among the orders that are the same circuit, the one that keeps the chain's work
-                    // local (Circuits::ChainOrdered): QCSim's chains pay for the distance between
-                    // operations once a channel has taken them off their canonical form. The distance
-                    // is the one on the chain, so along the line when the qubits are placed there.
-                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        ordered = Circuits::ChainOrdered(ordered,
-                                                         sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
-                                                             ? Circuits::ChainOrder::kMixedState
-                                                         : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
-                                                                                         : Circuits::ChainOrder::kNone,
-                                                         line.empty() ? nullptr : &line);
-                    dcirc->SetOperations(ordered->GetOperations());
-                    sim->SetUpcomingGates(dcirc->GetOperations());
+                    std::vector<long long int> line;
+                    if (freshRegister)
+                    {
+                        auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                        // Place a path along the chain when this avoids all swaps.
+                        if (placeQubits)
+                            line = Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits());
+                        if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                            ordered = Circuits::ChainOrdered(ordered,
+                                                             sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
+                                                                 ? Circuits::ChainOrder::kMixedState
+                                                             : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
+                                                                                             : Circuits::ChainOrder::kNone,
+                                                             line.empty() ? nullptr : &line);
+                        dcirc->SetOperations(ordered->GetOperations());
+                    }
+                    // A suffix keeps its source order. The sampler installs the
+                    // executed window after restore; only fusion needs a view now.
+                    if (freshRegister || sim->IsGateFusionEnabled())
+                        sim->SetUpcomingGates(dcirc->GetOperations());
+                    // Measurements and resets enter the model of a backend that reports them (the QCSim chains).
+                    const bool tracksDisentangling = sim->GetType() == Simulators::SimulatorType::kQCSim;
+                    const bool circuitHasDisentangle =
+                        tracksDisentangling && Simulators::RoutingConfig::ContainsDisentanglingOperations(dcirc->GetOperations());
                     if (sim->IsGateFusionEnabled())
                     {
                         Circuits::Circuit<Time> routingCircuit;
                         for (const auto &op : sim->GetUpcomingRoutingOperations())
-                            if (op->GetType() == Circuits::OperationType::kGate)
+                            if (op && (op->GetType() == Circuits::OperationType::kGate ||
+                                       (tracksDisentangling && Simulators::RoutingConfig::IsDisentanglingOperationType(op->GetType()))))
                                 routingCircuit.AddOperation(op);
                         layers = routingCircuit.ToMultipleQubitsLayersNoClone();
                     }
 
-                    Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
-                    dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
-                    dummySim.setGrowthFactorGate(growthFactorGate);
-                    dummySim.setGrowthFactorSwap(growthFactorSwap);
-
-                    if (maxBondDimValue > 0)
+                    if (placeQubits)
                     {
-                        const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(configuration);
-                        dummySim.SetMaxBondDimension(
-                            virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
-                                               nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
-                                         : maxBondDimValue);
-                        dummySim.SetRoutingCostModel(virtualBonds ? maxBondDimValue : 0, Simulators::RoutingConfig::TruncationWeight(configuration));
-                    }
-
-                    if (optimizeInitialQubitsMap)
-                    {
+                        Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
+                        dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
+                        dummySim.SetModelDisentangling(tracksDisentangling);
+                        dummySim.setGrowthFactorGate(growthFactorGate);
+                        dummySim.setGrowthFactorSwap(growthFactorSwap);
+                        if (maxBondDimValue > 0)
+                        {
+                            const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(configuration) ||
+                                                      (circuitHasDisentangle && Simulators::RoutingConfig::VirtualBondsAutoAllowed(configuration));
+                            dummySim.SetMaxBondDimension(
+                                virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
+                                                   nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
+                                             : maxBondDimValue);
+                            dummySim.SetRoutingCostModel(virtualBonds ? maxBondDimValue : 0, Simulators::RoutingConfig::TruncationWeight(configuration));
+                        }
+                        if (minLayoutGain > 0.)
+                            dummySim.setMinLayoutGain(minLayoutGain);
                         const auto optimalMap = line.empty() ? dummySim.ComputeOptimalQubitsMap(layers) : line;
                         sim->SetInitialQubitsMap(optimalMap);
                     }
@@ -3781,39 +3824,44 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     if (mpsOptimizeSwaps)
                     {
                         int lookaheadDepthLocal = lookaheadDepth;
+                        size_t effectiveLayerCount = layers.size();
 
                         if (lookaheadDepthLocal == std::numeric_limits<int>::max())
                         {
                             double avgTwoQubitGatesPerLayer = 0.0;
+                            size_t realTwoQubitLayers = 0;
                             for (const auto &layer : layers)
                             {
                                 int twoQubitGates = 0;
                                 for (const auto &op : layer->GetOperations())
                                 {
-                                    if (op->AffectedQubits().size() >= 2)
+                                    if (op && op->GetType() == Circuits::OperationType::kGate && op->AffectedQubits().size() >= 2)
                                     {
                                         ++twoQubitGates;
                                     }
                                 }
                                 avgTwoQubitGatesPerLayer += twoQubitGates;
+                                if (twoQubitGates > 0 || !circuitHasDisentangle)
+                                    ++realTwoQubitLayers;
                             }
-                            if (!layers.empty())
-                                avgTwoQubitGatesPerLayer /= layers.size();
+                            effectiveLayerCount = circuitHasDisentangle ? realTwoQubitLayers : layers.size();
+                            if (effectiveLayerCount > 0)
+                                avgTwoQubitGatesPerLayer /= static_cast<double>(effectiveLayerCount);
 
                             int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
                             if (lookaheadVal > 15)
                                 lookaheadVal = 15;
 
-                            lookaheadDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0
-                                                  : layers.size() < 15                    ? static_cast<int>(lookaheadVal)
-                                                  : layers.size() < 25                    ? static_cast<int>(1.5 * lookaheadVal)
-                                                                                          : 2 * lookaheadVal;
+                            lookaheadDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0
+                                                  : effectiveLayerCount < 15                    ? static_cast<int>(lookaheadVal)
+                                                  : effectiveLayerCount < 25                    ? static_cast<int>(1.5 * lookaheadVal)
+                                                                                                : 2 * lookaheadVal;
                         }
 
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
+                            lookaheadHeuristicDepthLocal = effectiveLayerCount < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;
@@ -3828,9 +3876,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
                         // The CPU window installed before layout planning has not
                         // changed. Its routing setters already refresh the plan.
-                        if (sim->GetType() != Simulators::SimulatorType::kQCSim)
+                        if (freshRegister && sim->GetType() != Simulators::SimulatorType::kQCSim)
                             sim->SetUpcomingGates(dcirc->GetOperations());
                     }
+                    return true;
                 }
             }
             // A register of that size whose bond limit is below the one a layout is planned for still gets
@@ -3838,7 +3887,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             // over the circuit, the chain then makes no swap, and QCSim's chains get the order along the
             // lines, as a chain in index order has it from the noise plan. A smaller register is left
             // alone: its swaps cost less than looking for the lines.
-            if (!planned && optimizeInitialQubitsMap && mpsOptimizationQubitsNumberThreshold <= routedQubits)
+            if (placeQubits && mpsOptimizationQubitsNumberThreshold <= routedQubits)
             {
                 const auto line = Circuits::ChainLine(dcirc, nrQubits, sim->SwapGatesRelabelQubits());
                 if (!line.empty())
@@ -3858,6 +3907,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 }
             }
         }
+        return false;
     }
 
     /**

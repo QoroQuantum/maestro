@@ -462,6 +462,27 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator>
         return true;
     }
 
+    // Reset specified qubits to |0> or |1> (per resetTargets) as a single circuit
+    // operation so wrappers such as FusionState consume one boundary without
+    // invalidating prepared routing plans on |1> resets.
+    virtual void ApplyResetToTargets(const Types::qubits_vector &qubits, const std::vector<bool> &resetTargets)
+    {
+        ApplyReset(qubits);
+        for (size_t qi = 0; qi < resetTargets.size() && qi < qubits.size(); ++qi)
+        {
+            if (resetTargets[qi])
+            {
+                ApplyX(qubits[qi]);
+                if (SupportsMPSSwapOptimization())
+                {
+                    const auto counter = GetGatesCounter();
+                    if (counter > 0)
+                        SetGatesCounter(counter - 1);
+                }
+            }
+        }
+    }
+
     /**
      * @brief Get a shared pointer to this object.
      *

@@ -27,6 +27,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         normSaved = false; // the chain is replaced, and its save with it
         RefreshRoutingSettings();
         InvalidateDummyHistory();
+        ClearSavedRoutingState();
         if (nrQubits)
         {
             auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
@@ -995,9 +996,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
             cloned->mps->SetCallbackContext(static_cast<GpuTensorChainSimulator *>(cloned.get()));
         }
         cloned->RefreshRoutingSettings();
-        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-        cloned->dummyHistoryValid = dummyHistoryValid;
-        cloned->savedDummyBondDims = savedDummyBondDims;
+        CopyRoutingHistoryTo(*cloned);
         cloned->RefreshRoutingCallback();
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));

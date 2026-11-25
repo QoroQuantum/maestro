@@ -763,15 +763,18 @@ json::array Expectations(const std::shared_ptr<Simulators::ISimulator> &simulato
     return result;
 }
 
-void Prepare(Context &context, const CircuitPtr &circuit, size_t bits)
+void Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool checkpoint = false)
 {
     Circuits::OperationState state(bits);
     auto simulator = context.simulator();
     simulator->Reset();
+    const bool routed = checkpoint && context.network->PrepareCheckpointRouting(simulator, circuit, true);
     simulator->SetGatesCounter(0);
     simulator->SetUpcomingGates(circuit->GetOperations());
     size_t bond = 0;
     circuit->ExecuteBD(simulator, state, &bond);
+    if (routed)
+        simulator->SetUpcomingGates({});
 }
 
 json::array Basis(const json::object &request, size_t qubits, size_t limit)
@@ -1294,6 +1297,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         {
             additional.push_back(ParseCircuit(Object(suffix)));
             SameSize(input, additional.back());
+            additional.back().circuit = InlinedCheckpointCircuit(additional.back().circuit);
             if (noise.enabled)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
@@ -2400,7 +2404,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             std::mt19937 prefixRng(noise.seed ^ 0x70726566u);
             prefixCircuit = Inject(noise::NoiseInjectionPlan(circuit, noise.model, false, noise.policy.chain_order), noise, prefixRng);
         }
-        Prepare(context, prefixCircuit, input.clbits);
+        Prepare(context, prefixCircuit, input.clbits, true);
         simulator->SaveState();
         json::array outputs;
         size_t bond = 0;
@@ -2474,6 +2478,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const uint64_t suffix_head_streams = draws ? Simulators::IState::DeriveSeed(suffix_seed, 0x6865616473ULL) : head_streams;
             if (draws)
                 simulator->SetSeed(Simulators::IState::DeriveSeed(suffix_seed, outputs.size()));
+            // The lookahead follows the suffix's two-qubit gates, which its noise realizations share: resolved once.
+            context.network->PrepareCheckpointRouting(simulator, suffix.circuit, false);
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = runtime_suffix ? runtime_suffix : r == 0 ? first_sample : Inject(suffixPlan, noise, rng);

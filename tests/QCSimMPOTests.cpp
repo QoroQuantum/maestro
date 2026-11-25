@@ -27,12 +27,47 @@ namespace bdata = boost::unit_test::data;
 #include "../Circuit/Factory.h"
 #include "../Simulators/Core/Factory.h"
 #include "../python/Noise.h"
+#define INCLUDED_BY_FACTORY
+#include "../Simulators/QCSim/QCSimMPOSimulator.h"
+#undef INCLUDED_BY_FACTORY
 
 namespace
 {
 
 constexpr size_t kMPONumQubits = 4;
 constexpr double kMPOTolerance = 1e-9;
+
+struct MPORoutingProbe : Simulators::Private::QCSimMPOSimulator
+{
+    explicit MPORoutingProbe(size_t qubits)
+    {
+        AllocateQubits(qubits);
+        Initialize();
+        SetUseOptimalMeetingPosition(false);
+    }
+
+    std::vector<double> EstimatedBonds(std::vector<double> bonds = {}) const
+    {
+        if (bonds.empty())
+            bonds = CurrentBondDimensions();
+        DeflateLiveBondDimensions(QCSimMPOSimulator::CurrentRoutingMap(), bonds.data(), bonds.size());
+        return bonds;
+    }
+
+    double SiteRank(size_t q) const
+    {
+        return liveSiteRank.at(q);
+    }
+
+    mutable size_t mapReads = 0;
+
+  protected:
+    std::vector<long long> CurrentRoutingMap() const override
+    {
+        ++mapReads;
+        return QCSimMPOSimulator::CurrentRoutingMap();
+    }
+};
 
 struct MPOOperation
 {
@@ -211,6 +246,139 @@ void CheckMPOSamples(const std::unordered_map<Types::qubit_t, Types::qubit_t> &c
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(qcsim_matrix_product_operator_tests)
+
+BOOST_AUTO_TEST_CASE(two_site_updates_clear_reset_markers_and_skip_unused_map_reads)
+{
+    const Eigen::Matrix4cd cz = Circuits::CZGate<>(0, 1).GetMatrix();
+    const Simulators::QuantumChannel channel(Simulators::QuantumChannel::KrausOperators{cz});
+    const auto check = [&](auto apply) {
+        MPORoutingProbe sim(4);
+        sim.mapReads = 0;
+        apply(sim);
+        BOOST_TEST(sim.mapReads == 0U);
+
+        sim.ApplyReset({0, 0});
+        sim.ApplyH(0);
+        sim.ApplyH(1);
+        apply(sim);
+        BOOST_TEST(sim.mapReads == 1U);
+        BOOST_TEST(sim.EstimatedBonds().at(0) == 4.);
+        BOOST_TEST(sim.SiteRank(0) > 1.);
+        apply(sim);
+        BOOST_TEST(sim.mapReads == 1U);
+
+        const std::vector<double> bonds{4., 4., 4.};
+        sim.Configure("matrix_product_operator_hermitize_after_truncation", "true");
+        sim.Configure("matrix_product_operator_truncation_threshold", "0");
+        sim.ApplyReset({3});
+        apply(sim);
+        BOOST_TEST(sim.EstimatedBonds(bonds).back() == 1.); // no compression limit, distant marker remains
+        sim.Configure("matrix_product_operator_max_bond_dimension", "2");
+        sim.ApplySwap(2, 3);
+        BOOST_TEST(sim.EstimatedBonds(bonds).back() == 1.); // label-only SWAP leaves the physical bonds in place
+        apply(sim);
+        BOOST_TEST(sim.EstimatedBonds(bonds).back() == 4.);
+    };
+    check([](auto &sim) { sim.ApplyCZ(0, 1); });
+    check([&](auto &sim) { sim.ApplyGenericTwoQubitGate(0, 1, cz); });
+    check([&](auto &sim) { sim.ApplyOperator({0, 1}, cz, false); });
+    check([&](auto &sim) { sim.ApplyOperator({0, 1}, cz, true); });
+    check([&](auto &sim) { sim.ApplyQuantumChannel({0, 1}, channel); });
+    check([&](auto &sim) { sim.ApplySuperoperator({0, 1}, channel.Superoperator()); });
+}
+
+BOOST_AUTO_TEST_CASE(consecutive_product_sites_have_equal_bonds_in_physical_order)
+{
+    for (bool reverse : {false, true})
+    {
+        MPORoutingProbe sim(7);
+        const std::vector<long long> map = reverse ? std::vector<long long>{6, 5, 4, 3, 2, 1, 0} : std::vector<long long>{0, 1, 2, 3, 4, 5, 6};
+        const std::vector<double> bonds{4., 8., 16., 16., 8., 4.};
+        sim.SetInitialQubitsMap(map);
+        sim.ApplyReset({static_cast<size_t>(map[2]), static_cast<size_t>(map[3])});
+        const auto interior = sim.EstimatedBonds(bonds);
+        const double rank = 8. / std::pow(2., Simulators::MPSDummySimulator::kDisentangleDropExponent);
+        for (size_t cut : {1, 2, 3})
+            BOOST_CHECK_CLOSE(interior[cut], rank, 1e-9);
+
+        sim.Reset();
+        sim.SetInitialQubitsMap(map);
+        sim.ApplyReset({0, 1, 5, 6});
+        const std::vector<double> expected{1., 1., 16., 16., 1., 1.};
+        BOOST_TEST(sim.EstimatedBonds(bonds) == expected, boost::test_tools::per_element());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(explicit_chain_moves_retire_only_swept_reset_markers)
+{
+    const std::vector<double> bonds(6, 8.);
+    for (bool hermitize : {false, true})
+    {
+        MPORoutingProbe sim(7);
+        sim.Configure("matrix_product_operator_hermitize_after_truncation", hermitize ? "true" : "false");
+        sim.mapReads = 0;
+        sim.MoveAtBeginningOfChain({3});
+        BOOST_TEST(sim.mapReads == 0U);
+        sim.Reset();
+        sim.ApplyReset({0, 1, 2, 3, 4, 6});
+        const auto marked = sim.EstimatedBonds(bonds);
+        sim.MoveAtBeginningOfChain({0, 1});
+        BOOST_TEST(sim.EstimatedBonds(bonds) == marked, boost::test_tools::per_element());
+        sim.MoveAtBeginningOfChain({0, 3, 4}); // physical sites 1 through 4 move
+        const auto expected = hermitize ? bonds : std::vector<double>{1., 8., 8., 8., 8., 1.};
+        BOOST_TEST(sim.EstimatedBonds(bonds) == expected, boost::test_tools::per_element());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(reinitialization_discards_routing_snapshot)
+{
+    MPORoutingProbe sim(4);
+    sim.ApplyReset({0});
+    sim.SaveState();
+    sim.Initialize();
+    sim.ApplyH(0);
+    sim.ApplyH(1);
+    sim.ApplyCZ(0, 1);
+    sim.RestoreState();
+    BOOST_TEST(sim.EstimatedBonds().at(0) == 4.);
+    BOOST_TEST(sim.SiteRank(0) > 1.);
+}
+
+BOOST_AUTO_TEST_CASE(full_chain_sweeps_retire_reset_markers)
+{
+    MPORoutingProbe sim(4);
+    const std::vector<double> bonds{4., 4., 4.};
+    sim.Configure("matrix_product_operator_truncation_threshold", "0");
+    sim.ApplyH(0);
+    sim.ApplyCX(0, 1);
+    sim.ApplyReset({0});
+    BOOST_TEST(sim.EstimatedBonds(bonds).front() == 1.);
+    sim.Configure("matrix_product_operator_max_bond_dimension", "8");
+    sim.Trim();
+    BOOST_TEST(sim.EstimatedBonds(bonds).front() == 4.);
+
+    sim.ApplyReset({0});
+    sim.ReCanonicalize();
+    BOOST_TEST(sim.EstimatedBonds(bonds).front() == 4.);
+    sim.ApplyReset({0});
+    sim.HermitizeDensityMatrix();
+    BOOST_TEST(sim.EstimatedBonds(bonds).front() == 4.);
+    sim.ApplyReset({0});
+    sim.Configure("matrix_product_operator_truncation_threshold", "1e-15");
+    sim.Trim();
+    BOOST_TEST(sim.EstimatedBonds(bonds).front() == 4.);
+}
+
+BOOST_AUTO_TEST_CASE(reset_to_repeated_targets_applies_flips_after_all_resets)
+{
+    auto sim = MakeQCSimMPOTestSimulator(Simulators::SimulationType::kMatrixProductOperator, 2);
+    auto reset = Circuits::CircuitFactory<>::CreateReset({0, 0, 1}, {true, true, true});
+    sim->SetUpcomingGates({reset});
+    Circuits::OperationState state(2);
+    reset->Execute(sim, state);
+    BOOST_CHECK_CLOSE(sim->Probability(2), 1., 1e-9);
+    BOOST_TEST(sim->GetGatesCounter() == 1);
+}
 
 BOOST_AUTO_TEST_CASE(factory_configuration_and_unsupported_amplitudes)
 {

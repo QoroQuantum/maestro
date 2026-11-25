@@ -26,6 +26,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
+        ClearSavedRoutingState();
+        ResetLiveSiteRanks();
+        pendingDeflate = {};
+        savedPendingDeflate.reset();
         if (nrQubits != 0)
         {
             InitializeSamplingSeed();
@@ -83,6 +87,9 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             converted.emplace_back(static_cast<size_t>(basisState), weight);
         NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(converted);
+        liveSiteRank.assign(num_qubits, mixture.size() > 1 ? 2. : 1.);
+        if (mixture.size() > 1)
+            MarkAllTouched(); // a mixture of basis states correlates its qubits
     }
 
     void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<std::vector<bool>, double>> &mixture) override
@@ -94,6 +101,9 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         Initialize();
         NotePossibleTruncation();
         mpoSimulator->setToMixtureOfBasisStates(mixture);
+        liveSiteRank.assign(num_qubits, mixture.size() > 1 ? 2. : 1.);
+        if (mixture.size() > 1)
+            MarkAllTouched(); // a mixture of basis states correlates its qubits
     }
 
     void Reset() override
@@ -105,17 +115,14 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             stateMayHaveTruncated = false;
         }
         upcomingGateIndex = 0;
+        pendingDeflate = {};
         ResetDummySimulator();
     }
 
     void SetInitialQubitsMap(const std::vector<long long int> &initialMap) override
     {
-        if (mpoSimulator)
-        {
-            mpoSimulator->SetInitialQubitsMap(initialMap);
-            EnsureDummySimulator(initialMap.size());
-            dummySim->SetInitialQubitsMap(initialMap);
-        }
+        if (mpoSimulator && !RelabelQubitsMap(*mpoSimulator, initialMap))
+            pendingDeflate = {};
     }
 
     void SetUseOptimalMeetingPosition(bool enable) override
@@ -255,6 +262,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         mpoSimulator = nullptr;
         ForgetTruncationHistory();
         ClearDummySimulator();
+        pendingDeflate = {};
+        savedPendingDeflate.reset();
         nrQubits = 0;
         upcomingGateIndex = 0;
         upcomingGates.clear();
@@ -262,7 +271,6 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     size_t Measure(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         if (mpoSimulator && qubits.size() > sizeof(size_t) * 8)
             throw std::invalid_argument("Use MeasureMany for more than 64 measured qubits");
         if (qubits.size() > sizeof(size_t) * 8)
@@ -282,6 +290,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 mask <<= 1;
             }
         }
+        NotePendingDisentangle(qubits);
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
         return res;
@@ -289,7 +299,6 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         std::vector<bool> res(qubits.size(), false);
         DontNotify();
         {
@@ -298,6 +307,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             for (size_t q = 0; q < qubits.size(); ++q)
                 res[q] = measured.at(static_cast<Eigen::Index>(qubits[q]));
         }
+        NotePendingDisentangle(qubits);
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
         return res;
@@ -305,12 +316,29 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        InvalidateDummyHistory();
         DontNotify();
         {
             for (size_t qubit : qubits)
                 mpoSimulator->ApplyReset(static_cast<Eigen::Index>(qubit));
         }
+        NotePendingDisentangle(qubits);
+        RecordDisentangledQubits(qubits);
+        Notify();
+        NotifyObservers(qubits);
+    }
+
+    void ApplyResetToTargets(const Types::qubits_vector &qubits, const std::vector<bool> &resetTargets) override
+    {
+        DontNotify();
+        {
+            for (const auto qubit : qubits)
+                mpoSimulator->ApplyReset(static_cast<Eigen::Index>(qubit));
+            for (size_t qi = 0; qi < std::min(qubits.size(), resetTargets.size()); ++qi)
+                if (resetTargets[qi])
+                    mpoSimulator->ApplyGate(xgate, static_cast<Eigen::Index>(qubits[qi]));
+        }
+        NotePendingDisentangle(qubits);
+        RecordDisentangledQubits(qubits);
         Notify();
         NotifyObservers(qubits);
     }
@@ -347,10 +375,16 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             throw std::runtime_error("QCSim MPO state is not initialized");
         // As for a channel: the native update can route before it finishes.
         InvalidateDummyHistory();
+        const auto mapBefore = targets.size() == 2 ? PendingDeflateMap() : std::vector<long long>{};
         if (targets.size() == 2)
             NotePossibleTruncation();
         mpoSimulator->ApplySuperoperator(superoperator, static_cast<Eigen::Index>(targets[0]),
                                          targets.size() > 1 ? static_cast<Eigen::Index>(targets[1]) : Eigen::Index{0});
+        if (targets.size() == 2)
+        {
+            ClearSpanPendingDeflate(mapBefore, targets[0], targets[1]);
+            NoteTwoQubitNonUnitaryTouch(targets[0], targets[1]);
+        }
         InvalidateDummyHistory();
         NotifyObservers(targets);
     }
@@ -383,8 +417,11 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]));
             else
             {
+                const auto mapBefore = PendingDeflateMap();
                 NotePossibleTruncation();
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]), static_cast<Eigen::Index>(targets[1]));
+                ClearSpanPendingDeflate(mapBefore, targets[0], targets[1]);
+                NoteTwoQubitNonUnitaryTouch(targets[0], targets[1]);
             }
         }
         InvalidateDummyHistory();
@@ -445,12 +482,18 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         // Native channel/operator application can invoke routing before it
         // finishes; discard old estimates both before and after that call.
         InvalidateDummyHistory();
+        const auto mapBefore = qubits.size() == 2 ? PendingDeflateMap() : std::vector<long long>{};
         if (qubits.size() == 2)
             NotePossibleTruncation();
         if (normalize)
             mpoSimulator->ApplyOperatorAndNormalize(op);
         else
             mpoSimulator->ApplyOperator(op);
+        if (qubits.size() == 2)
+        {
+            ClearSpanPendingDeflate(mapBefore, qubits[0], qubits[1]);
+            NoteTwoQubitNonUnitaryTouch(qubits[0], qubits[1]);
+        }
         InvalidateDummyHistory();
         NotifyObservers(qubits);
     }
@@ -461,8 +504,18 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             return IState::MoveAtBeginningOfChain(qubits);
         const auto selected = MPOValidation::Qubits(qubits, nrQubits);
         const std::set<Eigen::Index> targets(selected.begin(), selected.end());
-        NotePossibleTruncation();
+        const auto before = PendingDeflateMap();
         mpoSimulator->MoveAtBeginningOfChain(targets);
+        if (!before.empty())
+        {
+            const auto after = CurrentRoutingMap();
+            if (before == after)
+                return;
+            // QCSim stably partitions the chain. Every moved site crosses at
+            // least one site of the other group; sites that stayed put cross none.
+            RetirePendingDeflation([&](size_t q) { return before[q] != after[q]; });
+        }
+        NotePossibleTruncation();
         InvalidateDummyHistory();
     }
 
@@ -544,6 +597,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             throw std::runtime_error("Hermitization is only available for QCSim MPO");
         NotePossibleTruncation();
         mpoSimulator->Hermitize();
+        pendingDeflate = {};
+        InvalidateDummyHistory();
     }
 
     void Trim() override
@@ -553,6 +608,9 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         {
             NotePossibleTruncation();
             mpoSimulator->Trim();
+            // Initialize installs QCSim's singular-value threshold even at zero,
+            // so its compression pass visits every bond.
+            pendingDeflate = {};
         }
         else
             throw std::runtime_error("Trim is only available for QCSim MPS and MPO");
@@ -562,7 +620,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         InvalidateDummyHistory();
         if (mpoSimulator)
+        {
             mpoSimulator->ReCanonicalize();
+            pendingDeflate = {};
+        }
         else
             throw std::runtime_error("Canonicalization is only available for QCSim MPS and MPO");
     }
@@ -754,6 +815,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         mpoSimulator->SaveState();
         savedStateMayHaveTruncated = stateMayHaveTruncated;
+        savedPendingDeflate = pendingDeflate;
         SaveDummyState();
     }
 
@@ -762,6 +824,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         mpoSimulator->RestoreState();
         if (savedStateMayHaveTruncated)
             stateMayHaveTruncated = *savedStateMayHaveTruncated;
+        if (savedPendingDeflate)
+            pendingDeflate = *savedPendingDeflate;
         RestoreDummyState();
     }
 
@@ -1060,10 +1124,11 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         cloned->bondLimitEnabled = bondLimitEnabled;
         cloned->stateMayHaveTruncated = stateMayHaveTruncated;
         cloned->savedStateMayHaveTruncated = savedStateMayHaveTruncated;
+        cloned->upcomingHasDisentangle = upcomingHasDisentangle;
         cloned->RefreshRoutingSettings();
-        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-        cloned->dummyHistoryValid = dummyHistoryValid;
-        cloned->savedDummyBondDims = savedDummyBondDims;
+        CopyRoutingHistoryTo(*cloned);
+        cloned->pendingDeflate = pendingDeflate;
+        cloned->savedPendingDeflate = savedPendingDeflate;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(seed);
         else
@@ -1116,6 +1181,109 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         savedStateMayHaveTruncated.reset();
     }
 
+    std::vector<long long> PendingDeflateMap() const
+    {
+        return pendingDeflate.count ? CurrentRoutingMap() : std::vector<long long>{};
+    }
+
+    void NotePendingDisentangle(const Types::qubits_vector &qubits) noexcept
+    {
+        try
+        {
+            EnsureLiveSiteRanks();
+            if (pendingDeflate.ranks.size() != nrQubits)
+                pendingDeflate.ranks.assign(nrQubits, 0.);
+            for (const Types::qubit_t q : qubits)
+            {
+                if (q >= nrQubits)
+                    continue;
+                auto &rank = pendingDeflate.ranks[q];
+                if (rank == 0.)
+                    ++pendingDeflate.count;
+                rank = std::max(rank, liveSiteRank[q]);
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    void ExchangeTrackedStates(Types::qubit_t q0, Types::qubit_t q1) noexcept override
+    {
+        if (pendingDeflate.count && q0 < nrQubits && q1 < nrQubits)
+            std::swap(pendingDeflate.ranks[q0], pendingDeflate.ranks[q1]);
+    }
+
+    void ClearSpanPendingDeflate(const std::vector<long long> &mapBefore, Types::qubit_t q0, Types::qubit_t q1) noexcept
+    {
+        if (!pendingDeflate.count || mapBefore.size() != nrQubits || q0 >= nrQubits || q1 >= nrQubits)
+            return;
+        const long long lo = std::min(mapBefore[q0], mapBefore[q1]);
+        const long long hi = std::max(mapBefore[q0], mapBefore[q1]);
+        RetirePendingDeflation([&](size_t q) { return mapBefore[q] >= lo && mapBefore[q] <= hi; });
+    }
+
+    template <class SweptSite> void RetirePendingDeflation(SweptSite swept) noexcept
+    {
+        // A truncation may trigger a full-chain Hermitize. QCSim does not
+        // report whether that sweep occurred during a gate or physical swap.
+        if ((cutoffEnabled || bondLimitEnabled) && mpoSimulator->getHermitizeAfterTruncation())
+        {
+            pendingDeflate = {};
+            return;
+        }
+        for (size_t iq = 0; iq < nrQubits && pendingDeflate.count; ++iq)
+        {
+            if (pendingDeflate.ranks[iq] && swept(iq))
+            {
+                pendingDeflate.ranks[iq] = 0.;
+                --pendingDeflate.count;
+            }
+        }
+    }
+
+    // QCSim's MPOSimulatorImpl applies single-qubit Reset and Measure in-place
+    // without running an SVD sweep, so mpoSimulator->getBondDimensions() retains
+    // pre-reset bond dimensions until a two-site gate sweeps across those bonds.
+    void DeflateLiveBondDimensions(const std::vector<long long> &map, double *dims, size_t count, bool automaticLookahead = false) const override
+    {
+        if (!pendingDeflate.count || !dims || !count || map.size() != nrQubits || count + 1 != nrQubits)
+            return;
+        // The next two-site decomposition still pays for the allocated tensors.
+        // In automatic lookahead, price that work from the observed dimensions
+        // while every cut has headroom. Once any cut reaches the cap, use the
+        // projected ranks to estimate the truncation cost of competing routes.
+        if (automaticLookahead && (physicalBondCap <= 0 || *std::max_element(dims, dims + count) < physicalBondCap))
+            return;
+        // Every cut across a run of product sites has the same rank. Compute the
+        // estimates from the incoming bonds before assigning one rank to the run.
+        std::vector<double> physicalRanks(nrQubits);
+        for (size_t q = 0; q < nrQubits; ++q)
+            physicalRanks[map[q]] = pendingDeflate.ranks[q];
+        for (size_t p = 0; p < nrQubits;)
+        {
+            if (!physicalRanks[p])
+            {
+                ++p;
+                continue;
+            }
+            const size_t first = p;
+            double rank = std::numeric_limits<double>::infinity();
+            for (; p < nrQubits && physicalRanks[p]; ++p)
+            {
+                if (p == 0 || p == count)
+                    rank = 1.;
+                else if (rank > 1.)
+                {
+                    const auto [low, high] = std::minmax(dims[p - 1], dims[p]);
+                    const double symmetricRank = std::max(1., physicalRanks[p] * low / high);
+                    rank = std::min(rank, std::max(1., low / std::pow(symmetricRank, MPSDummySimulator::kDisentangleDropExponent)));
+                }
+            }
+            std::fill(dims + (first ? first - 1 : 0), dims + std::min(p, count), rank);
+        }
+    }
+
     std::vector<double> CurrentBondDimensions() const override
     {
         if (!mpoSimulator)
@@ -1145,6 +1313,15 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     bool stateMayHaveTruncated = false;
     std::optional<bool> savedStateMayHaveTruncated;
 
+    struct PendingDeflation
+    {
+        std::vector<double> ranks; // pre-collapse site rank by logical qubit, zero for unmarked sites
+        size_t count = 0;
+    };
+
+    PendingDeflation pendingDeflate;
+    std::optional<PendingDeflation> savedPendingDeflate;
+
   private:
     template <class Function> void ApplyDecomposedGate(Function &&apply, const Types::qubits_vector &affectedQubits)
     {
@@ -1159,19 +1336,28 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     {
         if constexpr (sizeof...(Qubits) <= 2)
         {
-            if (gate.getQubitsNumber() > 1)
+            const bool isTwoSite = gate.getQubitsNumber() > 1;
+            const auto mapBefore = isTwoSite && !gate.isSwapGate() ? PendingDeflateMap() : std::vector<long long>{};
+            if (isTwoSite)
                 NotePossibleTruncation();
             mpoSimulator->ApplyGate(gate, static_cast<Eigen::Index>(qubits)...);
             if constexpr (sizeof...(Qubits) == 2)
             {
                 const std::array<Types::qubit_t, 2> qs{static_cast<Types::qubit_t>(qubits)...};
+                if (!gate.isSwapGate())
+                    ClearSpanPendingDeflate(mapBefore, qs[0], qs[1]);
                 RecordExecutedTwoQubitGate(qs[0], qs[1], gate.isSwapGate(), NativeGateSchmidtRank(gate));
             }
             else if constexpr (sizeof...(Qubits) == 0)
             {
                 if (gate.getQubitsNumber() == 2)
-                    RecordExecutedTwoQubitGate(static_cast<Types::qubit_t>(gate.getQubit1()), static_cast<Types::qubit_t>(gate.getQubit2()), gate.isSwapGate(),
-                                               NativeGateSchmidtRank(gate));
+                {
+                    const Types::qubit_t q0 = static_cast<Types::qubit_t>(gate.getQubit1());
+                    const Types::qubit_t q1 = static_cast<Types::qubit_t>(gate.getQubit2());
+                    if (!gate.isSwapGate())
+                        ClearSpanPendingDeflate(mapBefore, q0, q1);
+                    RecordExecutedTwoQubitGate(q0, q1, gate.isSwapGate(), NativeGateSchmidtRank(gate));
+                }
             }
         }
         else

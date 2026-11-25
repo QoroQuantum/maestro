@@ -97,13 +97,18 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
         if (!simulator_)
             throw std::runtime_error("PrefixCheckpointedSimulator: requested simulator/simulation type is not available.");
         network_->GetController()->SetOptimizeCircuit(false);
-        network_->SetInitialQubitsMapOptimization(false);
-        network_->SetMPSOptimizeSwaps(false);
         if (config_.seed)
             simulator_->SetSeed(*config_.seed);
         Circuits::OperationState state(num_qubits_);
+        const bool route_prefix = network_->PrepareCheckpointRouting(simulator_, executed_prefix, true);
+        if (route_prefix)
+            simulator_->SetUpcomingGates(executed_prefix->GetOperations());
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
+        // Saves and worker clones need the final site map, but every suffix
+        // provides its own gates. Drop the finished prefix's routing window.
+        if (route_prefix)
+            simulator_->SetUpcomingGates({});
         simulator_->SaveState();
         // A prefix with resets, or with measurements other than its end ones,
         // collapsed once here, so every suffix shot shares that branch: frames,
@@ -142,9 +147,10 @@ bool PrefixCheckpoint::HasNoise(const RecordCircuitPtr &suffix, const noise::Noi
     return suffix && suffix->HasDrawnChannels();
 }
 
-ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
+ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_t shots, const noise::NoiseModel *noise_model,
                                             std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, size_t num_measurements, bool rows)
 {
+    const auto suffix = InlinedCheckpointCircuit(given);
     if (!suffix)
         throw std::invalid_argument("suffix_circuit is null.");
     if (shots < 1)
@@ -225,6 +231,8 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
                                    size_t batch_shots, size_t first_shot, std::optional<uint64_t> seed, Circuits::Circuit<>::ExecuteResults &counts,
                                    size_t &max_bond) {
         state.Reset();
+        // Restoring recovers the prefix's tensors and site map; each sampling path
+        // binds its own execution window and starts its gate counter at zero.
         simulator->RestoreState();
         // A suffix begins in an arbitrary saved state: even its first reset
         // may branch on a pure-state backend, so CanSampleTerminal sends any
@@ -252,7 +260,11 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         }
         return false;
     };
+    // The lookahead of a suffix follows its two-qubit gates, which every noise realization shares. Resolve it
+    // once, before the workers copy this simulator and its settings: planning each realization cost 25% to 60%
+    // of a call that runs one realization per shot.
     const auto start = std::chrono::steady_clock::now();
+    network_->PrepareCheckpointRouting(simulator_, suffix, false);
     size_t terminal_calls = 0, trajectory_calls = 0;
     bool extended = false;
 

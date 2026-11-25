@@ -904,6 +904,56 @@ j::value ReadoutCounts(const j::object &result)
     return result.at("operation") == "checkpoint_batch" ? result.at("results").at(0).at("counts") : result.at("counts");
 }
 
+void TestRoutedCheckpointSuffixes()
+{
+    // One CZ crosses each cut along the path 4-2-1-0-5-3. These gates commute
+    // and are their own inverses, so applying the graph twice removes it.
+    const std::string graph = "cz q[4],q[2]; cz q[1],q[0]; cz q[5],q[3]; cz q[2],q[1]; cz q[0],q[5];";
+    std::string prepare, undo = graph;
+    for (int q = 0; q < 6; ++q)
+    {
+        const auto angle = std::to_string(1.2 + 0.1 * q);
+        const auto target = ") q[" + std::to_string(q) + "];";
+        prepare += "ry(" + angle + target;
+        undo += "ry(-" + angle + target;
+    }
+    for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+    {
+        const bool mpo = std::string_view(method) == "matrix_product_operator";
+        const size_t width = mpo ? 7 : 12;
+        auto request = Request("checkpoint_batch", width, prepare + graph, method, 2);
+        request["simulator"].as_object()["options"] = j::object{{"max_bond_dimension", mpo ? 4 : 2}, {"gate_fusion", true}};
+        const auto suffix = [&](const char *measure) { return Request("execute", width, undo + measure, method, 2).at("circuit"); };
+        // Wire 6 first appears in a suffix. Only the middle suffix flips it.
+        const auto terminal = suffix("measure q[0]->c[0]; measure q[6]->c[1];");
+        const auto dynamic = suffix("measure q[0]->c[0]; if(c==0) x q[6]; measure q[6]->c[1];");
+        request["suffixes"] = j::array{terminal, dynamic, terminal};
+        const auto clean = Call(request).at("results").as_array();
+        Check(clean.at(0).at("counts") == j::object{{"00", 80}} && clean.at(1).at("counts") == j::object{{"01", 80}} &&
+                  clean.at(2).at("counts") == clean.at(0).at("counts"),
+              "A restored checkpoint lost its routed state between terminal and dynamic suffixes");
+
+        // Ten shots per realization can share a head; one per realization runs
+        // directly from the restored map. Both must feed readout into control.
+        for (int realizations : {8, 80})
+        {
+            request["noise"] = j::object{{"realizations", realizations}, {"seed", 23}, {"channels", j::array{Channel("readout", {{"probability", 0.5}})}}};
+            const auto noisy = Call(request).at("results").as_array();
+            for (size_t i = 0; i < noisy.size(); ++i)
+            {
+                const auto &counts = noisy[i].at("counts").as_object();
+                Check(counts.size() == 2 && counts.contains(i == 1 ? "01" : "00") && counts.contains("10"),
+                      "A noisy routed checkpoint lost the measured bit or the suffix-only wire");
+            }
+        }
+
+        request.erase("noise");
+        request["simulator"].as_object().at("options").as_object()["disable_optimized_swapping"] = true;
+        Check(Call(request).at("results").at(0).at("counts").as_object().contains("10"),
+              "The disabled layout unexpectedly preserved the graph at its minimum bond dimension");
+    }
+}
+
 void TestReadoutExecution()
 {
     for (const char *method : {"statevector", "matrix_product_state", "density_matrix", "matrix_product_operator"})
@@ -2445,6 +2495,7 @@ void TestRequestNoiseAndOptions()
     TestLegacyCountsPolicy();
     TestMultinomialCountReplay();
     TestReadoutExecution();
+    TestRoutedCheckpointSuffixes();
     TestThermalApproximation();
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();

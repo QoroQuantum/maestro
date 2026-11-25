@@ -417,6 +417,23 @@ template <class Backend> struct HistoryProbe : RecordingImmediate<Backend>
         return this->CaptureDummyHistory();
     }
 
+    double SiteRank(size_t qubit) const
+    {
+        return this->liveSiteRank.at(qubit);
+    }
+
+    bool Untouched(size_t qubit) const
+    {
+        return this->liveUntouched.at(qubit) != 0;
+    }
+
+    std::vector<double> DeflatedBonds() const
+    {
+        std::vector<double> bonds(this->nrQubits - 1, 16.);
+        this->DeflateLiveBondDimensions(NativeMap(), bonds.data(), bonds.size());
+        return bonds;
+    }
+
     std::vector<double> NativeBonds() const
     {
         return Backend::CurrentBondDimensions();
@@ -708,6 +725,92 @@ template <class Backend> static void CachedGpuRoutingSettings()
 }
 #endif
 
+template <class Backend> static void AutomaticCheckpointHistory(const char *cap)
+{
+    HistoryProbe<Backend> sim;
+    sim.AllocateQubits(9);
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Initialize();
+    sim.setGrowthFactorGate(1.);
+    sim.SetLookaheadDepth(2);
+    const auto reset = CF::CreateReset({0});
+    const auto cx = CF::CreateGate(Kind::kCXGateType, 1, 2);
+    sim.SetUpcomingGates({reset});
+    GrowVirtualHistory(sim);
+    const auto history = sim.VirtualBonds();
+    Check(history.size() == 8 && history[1] > sim.NativeBonds()[1], "prefix did not acquire virtual bond history");
+    sim.SetUpcomingGates({}); // Both checkpoint entry points detach the prefix window before saving.
+    sim.SaveState();
+    auto worker = sim.Clone();
+    sim.SetUpcomingGates({cx});
+    sim.ApplyCX(1, 2);
+    sim.SetUpcomingGates({reset, cx});
+    Check(sim.VirtualBonds().empty(), "a two-site gate in an inactive window retained the old history");
+    for (ISimulator *s : {static_cast<ISimulator *>(&sim), worker.get()})
+    {
+        s->RestoreState();
+        s->SetUpcomingGates({reset, cx});
+        Check(CloneRoutingInspection<Backend>::VirtualBonds(dynamic_cast<const Backend &>(*s)) == history,
+              "checkpoint restore lost prefix estimates when the suffix reactivated automatic routing");
+    }
+    // The prefix touched q0. Its leading reset is a mid-circuit projection;
+    // still-untouched q8 can be crossed as a product site.
+    Check(sim.SiteRank(8) == 1., "leading reset on a restored entangled qubit was classified as a fresh-register reset");
+    sim.Initialize();
+    sim.ApplyH(0);
+    sim.ApplyCX(0, 1);
+    const double rank = sim.SiteRank(0);
+    sim.RestoreState();
+    Check(sim.SiteRank(0) == rank && sim.VirtualBonds() != history, "reinitialization retained an obsolete routing snapshot");
+
+    sim.Reset();
+    sim.ApplyX(0);
+    sim.ApplyResetToTargets({0, 0, 1}, {true, true, true});
+    Check(std::abs(sim.Probability(2) - 1.) < 1e-10, "repeated reset targets must reset all occurrences before applying the requested flips");
+}
+
+template <class Backend> static void RelabelPreparedRegister(const char *cap)
+{
+    for (bool detach : {false, true})
+    {
+        HistoryProbe<Backend> sim;
+        constexpr size_t n = 9;
+        sim.AllocateQubits(n);
+        sim.Configure("matrix_product_state_max_bond_dimension", cap);
+        sim.Initialize();
+        sim.SetLookaheadDepth(2);
+        sim.setGrowthFactorGate(1.);
+        const auto reset = CF::CreateReset({8});
+        sim.SetUpcomingGates({reset});
+        GrowVirtualHistory(sim);
+        sim.ApplyReset({8});
+        const auto bonds = sim.VirtualBonds(), deflated = sim.DeflatedBonds();
+        Check(!bonds.empty() && sim.SiteRank(8) == 1. && !sim.Untouched(0) && sim.Untouched(8), "layout test requires distinguishable site states");
+        if (detach)
+            sim.SetUpcomingGates({});
+        sim.SaveState();
+        const auto oldMap = sim.NativeMap();
+        auto map = oldMap;
+        std::rotate(map.begin(), map.begin() + 2, map.end());
+        std::vector<double> ranks(n);
+        std::vector<bool> untouched(n);
+        for (size_t q = 0; q < n; ++q)
+        {
+            ranks[q] = sim.SiteRank(q);
+            untouched[q] = sim.Untouched(q);
+        }
+        sim.SetInitialQubitsMap(map);
+        sim.SetUpcomingGates({reset});
+        Check(sim.NativeMap() == map && sim.PredictedMap() == map && sim.VirtualBonds() == bonds && sim.DeflatedBonds() == deflated,
+              "changing labels moved the physical bond estimates");
+        for (size_t q = 0; q < n; ++q)
+            Check(sim.SiteRank(q) == ranks[(q + 2) % n] && sim.Untouched(q) == untouched[(q + 2) % n], "routing state did not follow the physical site");
+        sim.RestoreState();
+        Check(sim.NativeMap() == oldMap && sim.SiteRank(8) == 1. && sim.Untouched(8) && sim.VirtualBonds() == bonds, "relabeling changed a saved snapshot");
+    }
+}
+
 template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
 {
     HistoryProbe<Backend> sim;
@@ -724,7 +827,7 @@ template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
     sim.SetLookaheadDepth(2);
     const Types::qubits_vector all{0, 1, 2, 3, 4, 5, 6, 7, 8};
 
-    for (int boundary = 0; boundary < 10; ++boundary)
+    for (int boundary = 0; boundary < 11; ++boundary)
     {
         sim.Reset();
         GrowVirtualHistory(sim);
@@ -776,8 +879,22 @@ template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
             else
                 continue;
             break;
+        case 10:
+            if constexpr (std::is_base_of_v<Private::QCSimMPSSimulator, Backend>)
+            {
+                // |00><ab| resets both sites. Unlike Z-basis dephasing,
+                // this channel cannot reduce to a sampled Pauli mixture.
+                QuantumChannel::KrausOperators reset(4, Eigen::Matrix4cd::Zero());
+                for (size_t index = 0; index < reset.size(); ++index)
+                    reset[index](0, index) = 1.;
+                sim.ApplyQuantumChannel({0, 3}, QuantumChannel(std::move(reset)));
+            }
+            else
+                continue;
+            break;
         }
-        Check(sim.VirtualBonds().empty(), "state boundary retained stale virtual bonds");
+        if (!sim.VirtualBonds().empty())
+            throw std::runtime_error(std::string(sim.MethodName()) + " retained stale virtual bonds at boundary " + std::to_string(boundary));
         const auto map = sim.NativeMap();
         const auto q0 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 2) - map.begin());
         const auto q1 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 3) - map.begin());
@@ -975,6 +1092,65 @@ static void DecompositionAndFusionRanks(bool gpu = false)
     }
 }
 
+static void AdaptiveRoutingReplay()
+{
+    const auto cx = [](size_t a, size_t b) { return CF::CreateGate(Kind::kCXGateType, a, b); };
+    constexpr auto infinity = std::numeric_limits<double>::infinity();
+    for (bool mpo : {false, true})
+    {
+        MPSDummySimulator warm(6, mpo), inputs(6, mpo);
+        const auto update = [&](auto change) {
+            change(warm);
+            change(inputs);
+        };
+        update([](auto &planner) {
+            planner.SetRoutingCostModel(4, 1.);
+            planner.SetCurrentBondDimensions({2, 3, 4, 2, 2});
+        });
+        const auto future = cx(5, 2);
+        const auto measurement = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{2, 0}}));
+        std::vector<Op> suffix{cx(0, 5), future, measurement, cx(3, 0), cx(1, 4), cx(5, 0)};
+        const auto alternate = std::vector<Op>{cx(0, 5), cx(0, 1), cx(3, 1), cx(2, 4)};
+        const auto verify = [&](const std::vector<Op> &ops, int depth = 4, double incurred = 0., double incumbent = std::numeric_limits<double>::infinity()) {
+            // 'inputs' has never planned a route. Each comparison starts from a fresh estimator.
+            auto cold = inputs.Clone();
+            double cost = incumbent, expected = incumbent;
+            const auto position = warm.SelectMeetingPositionAdaptive(ops, 0, depth, depth - 1, incurred, cost);
+            const auto reference = cold->SelectMeetingPositionAdaptive(ops, 0, depth, depth - 1, incurred, expected);
+            Check(position == reference && cost == expected, "warm adaptive route or cost differs from a fresh estimator");
+            return std::make_pair(reference, expected);
+        };
+
+        const auto original = verify(suffix);
+        verify(suffix);
+        Check(verify(alternate) != original, "alternate suffix must distinguish a stale adaptive route");
+        Check(verify(suffix) == original, "alternating suffixes changed a repeated forecast");
+        // Keep the window and gate addresses stable while the next directed interaction and projection change.
+        future->SetQubit(0, 0);
+        verify(suffix);
+        measurement->SetQubit(0, 4);
+        verify(suffix);
+        suffix[2] = CF::CreateConditionalMeasurement(measurement, CF::CreateEqualCondition({0}, {true}));
+        verify(suffix);
+        suffix[2] = CF::CreateReset({1, 3});
+        verify(suffix);
+        verify(suffix, 3);
+        verify(suffix);
+        update([](auto &planner) { planner.SetRoutingMap({3, 1, 2, 5, 4, 0}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetCurrentBondDimensions({2, 2, 8, 3, 2}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetCurrentSiteRanks({1, 2, 1, 2, 1, 2}); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetRoutingCostModel(2, 3.); });
+        verify(suffix);
+        update([](auto &planner) { planner.SetModelDisentangling(false); });
+        const auto unbounded = verify(suffix);
+        Check(verify(suffix, 4, 0., 0.).second == 0., "adaptive replay replaced a better incumbent");
+        Check(verify(suffix, 4, 7., infinity).second > unbounded.second, "adaptive replay lost prior cost");
+    }
+}
+
 static void NonGateRoutingFallbacks(bool gpu = false)
 {
     for (bool fusion : {false, true})
@@ -1163,6 +1339,95 @@ static void ConfigureExactAutomatic(ISimulator &sim, size_t n, bool optIn = true
     sim.AllocateQubits(n);
     sim.Initialize();
     sim.SetUseOptimalMeetingPosition(true);
+}
+
+template <class Backend> struct ProjectionSeedProbe : AutomaticRoutingProbe<Backend>
+{
+    mutable std::vector<double> seededBonds;
+
+    void DeflateLiveBondDimensions(const std::vector<long long> &map, double *dims, size_t count, bool automaticLookahead) const override
+    {
+        Backend::DeflateLiveBondDimensions(map, dims, count, automaticLookahead);
+        seededBonds.assign(dims, dims + count);
+    }
+
+    std::vector<double> Seed()
+    {
+        seededBonds.clear();
+        this->SaveState();
+        this->SetGatesCounter(0);
+        this->ApplyCX(0, 6);
+        this->RestoreState();
+        Check(seededBonds.size() + 1 == this->nrQubits, "native routing callback did not seed the forecast");
+        return seededBonds;
+    }
+};
+
+static void ProjectedMpsRoutingSeed()
+{
+    for (const bool reset : {false, true})
+    {
+        ProjectionSeedProbe<Private::QCSimMPSSimulator> sim;
+        ConfigureExactAutomatic(sim, 7);
+        sim.Configure("matrix_product_state_truncation_threshold", "1e-12");
+        // The product cut after site 4 separates a GHZ block from a Bell pair.
+        sim.ApplyH(0);
+        for (size_t q = 0; q < 4; ++q)
+            sim.ApplyCX(q, q + 1);
+        sim.ApplyH(5);
+        sim.ApplyCX(5, 6);
+        Check(sim.NativeBonds() == std::vector<double>{2., 2., 2., 2., 1., 2.}, "unexpected physical MPS ranks before projection");
+        if (reset)
+            sim.ApplyReset({2});
+        else
+            sim.Measure({2});
+        const auto physical = sim.NativeBonds();
+        Check(physical == std::vector<double>{1., 1., 1., 1., 1., 2.}, "MPS projection did not compress the GHZ block up to the product cut");
+        sim.SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 6), CF::CreateGate(Kind::kCXGateType, 1, 5)});
+        sim.SetAutomaticLookaheadDepth(2);
+        Check(sim.Seed() == physical, "MPS lookahead did not see the remote cuts reduced by the projection");
+    }
+}
+
+static void ProjectedMpoRoutingSeed()
+{
+    for (const bool reset : {false, true})
+    {
+        ProjectionSeedProbe<Private::QCSimMPOSimulator> sim;
+        ConfigureExactAutomatic(sim, 7);
+        // A GHZ state on sites 0..2 gives the projection two rank-four neighbors.
+        sim.ApplyH(0);
+        sim.ApplyCX(0, 1);
+        sim.ApplyCX(1, 2);
+        // Two crossing Bell pairs give the independent cut between sites 4 and 5 rank 16.
+        sim.ApplyH(3);
+        sim.ApplyCX(3, 4);
+        sim.ApplyH(5);
+        sim.ApplyCX(5, 6);
+        sim.ApplyCX(4, 5);
+        sim.ApplyCX(5, 4);
+        sim.ApplyCX(4, 5);
+        const auto physical = sim.NativeBonds();
+        Check(physical == std::vector<double>{4., 4., 1., 4., 16., 4.}, "unexpected physical MPO ranks before projection");
+        if (reset)
+            sim.ApplyReset({1});
+        else
+            sim.Measure({1});
+        Check(sim.NativeBonds() == physical, "MPO projection did not retain the native tensor sizes");
+        sim.SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 6), CF::CreateGate(Kind::kCXGateType, 1, 5)});
+        sim.SetLookaheadDepth(2);
+        const auto analytical = sim.Seed();
+        Check(analytical[0] < physical[0] && analytical[1] < physical[1] && std::equal(analytical.begin() + 2, analytical.end(), physical.begin() + 2),
+              "explicit MPO forecast did not reduce only the cuts neighboring the projection");
+        sim.SetAutomaticLookaheadDepth(0);
+        Check(sim.Seed() == analytical, "bounded MPO routing changed its projection estimate");
+        sim.SetAutomaticLookaheadDepth(2);
+        Check(sim.Seed() == physical, "automatic MPO lookahead underestimated the below-cap cost of moving allocated tensors");
+        sim.Configure("matrix_product_operator_max_bond_dimension", "0");
+        Check(sim.Seed() == physical, "automatic MPO lookahead underestimated the cost of moving uncapped tensors");
+        sim.Configure("matrix_product_operator_max_bond_dimension", "16");
+        Check(sim.Seed() == analytical, "MPO lookahead ignored a saturated cut elsewhere in the same chain");
+    }
 }
 
 template <class Backend> static void AutomaticRoutingSelection(size_t n, bool eligible)
@@ -2066,6 +2331,8 @@ int main(int argc, char **argv)
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(6, true);
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(8, true);
         AutomaticRoutingSelection<Private::QCSimMPOSimulator>(9, false);
+        ProjectedMpsRoutingSeed();
+        ProjectedMpoRoutingSeed();
         AutomaticRoutingLifecycle<Private::QCSimMPSSimulator>(12);
         AutomaticRoutingLifecycle<Private::QCSimMPOSimulator>(6);
         AutomaticFactoryFusionAndChannels();
@@ -2086,9 +2353,14 @@ int main(int argc, char **argv)
         CallbackFallback();
         DeferredGatesKeepRouting();
         FiringConditionalKeepsRouting();
+        AdaptiveRoutingReplay();
         NonGateRoutingFallbacks();
         VirtualHistoryBoundaries<Private::QCSimMPSSimulator>("2");
         VirtualHistoryBoundaries<Private::QCSimMPOSimulator>("4");
+        AutomaticCheckpointHistory<Private::QCSimMPSSimulator>("2");
+        AutomaticCheckpointHistory<Private::QCSimMPOSimulator>("4");
+        RelabelPreparedRegister<Private::QCSimMPSSimulator>("2");
+        RelabelPreparedRegister<Private::QCSimMPOSimulator>("4");
         RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
         RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
         DecompositionAndFusionRanks();

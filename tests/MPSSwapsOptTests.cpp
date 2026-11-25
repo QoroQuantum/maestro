@@ -29,6 +29,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
+#include "../Circuit/Operations/QuantumChannelOperation.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Simulators/Core/Factory.h"
 #include "../Simulators/Fusion/FusionGate.h"
@@ -2411,6 +2412,462 @@ BOOST_AUTO_TEST_CASE(AdaptivePlannerCommonHorizonAndLargeSparseLayout)
             BOOST_CHECK_LE(cost2, cost1 + 1e-9);
             (void)pos2;
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(DisentangleCostModelAndLayoutCleanliness)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    for (const bool isMPO : {false, true})
+    {
+        const double d = isMPO ? 4.0 : 2.0;
+
+        // 1. End-site disentanglement collapses end bond to 1 and propagates cone bound d^k.
+        {
+            Simulators::MPSDummySimulator sim(9, isMPO);
+            sim.SetMaxBondDimension(64);
+            sim.SetCurrentBondDimensions({d, d * d, 8.0, 16.0, 16.0, 8.0, 4.0, 2.0});
+            sim.ApplyDisentangleQubit(0, 1.0);
+            const auto &bonds = sim.getCurrentBondDimensions();
+            BOOST_CHECK_CLOSE(bonds[0], 1.0, 1e-9);
+            BOOST_CHECK_CLOSE(bonds[1], d, 1e-9);
+            BOOST_CHECK_CLOSE(bonds[2], std::min(8.0, d * d), 1e-9);
+            BOOST_CHECK_CLOSE(sim.getCurrentSiteRanks()[0], 1.0, 1e-9);
+        }
+
+        // 2. Interior disentanglement preserves bystander min(chi_L, chi_R) / d^0.75
+        // and Measure(q) followed immediately by Reset(q) is idempotent.
+        {
+            Simulators::MPSDummySimulator sim(9, isMPO);
+            sim.SetMaxBondDimension(64);
+            sim.SetCurrentBondDimensions({2.0, 4.0, 8.0, 16.0, 16.0, 8.0, 4.0, 2.0});
+            sim.ApplyGate(CF::CreateMeasurement({{4, 0}}));
+            const auto bondsAfterM = sim.getCurrentBondDimensions();
+            const double expectedInterior = 16.0 / std::pow(d, Simulators::MPSDummySimulator::kDisentangleDropExponent);
+            BOOST_CHECK_CLOSE(bondsAfterM[3], expectedInterior, 1e-9);
+            BOOST_CHECK_CLOSE(bondsAfterM[4], expectedInterior, 1e-9);
+            BOOST_CHECK_CLOSE(sim.getCurrentSiteRanks()[4], 1.0, 1e-9);
+
+            sim.ApplyGate(CF::CreateReset({4}));
+            const auto &bondsAfterMR = sim.getCurrentBondDimensions();
+            for (size_t i = 0; i < bondsAfterM.size(); ++i)
+                BOOST_CHECK_CLOSE(bondsAfterMR[i], bondsAfterM[i], 1e-9);
+        }
+
+        // Two Bell pairs have cuts [d,1,d]. A four-site linear graph state has
+        // [d,d,d]. Crossing the middle sites raises the central cut to d*d in both.
+        for (const double middle : {1., d})
+        {
+            Simulators::MPSDummySimulator sim(4, isMPO);
+            sim.SetMaxBondDimension(64);
+            sim.setGrowthFactorSwap(1.0);
+            sim.SetCurrentBondDimensions({d, middle, d});
+            sim.SwapQubitsToPosition(0, 2, 0);
+            BOOST_CHECK_CLOSE(sim.getCurrentBondDimensions()[1], d * d, 1e-9);
+        }
+
+        // 4. Product-state ancilla shuttling conserves interior bystander entanglement
+        // and anchors the entangled partner qubit.
+        {
+            Simulators::MPSDummySimulator sim(11, isMPO);
+            sim.SetMaxBondDimension(8);
+            sim.setGrowthFactorSwap(1.0);
+            const std::vector<double> initBonds{2.0, 4.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 4.0, 2.0};
+            sim.SetCurrentBondDimensions(initBonds);
+            sim.SetCurrentSiteRanks({d, d, d, 1.0, d, d, d, d, d, d, d});
+
+            double bestCost = std::numeric_limits<double>::infinity();
+            const std::vector<std::shared_ptr<Circuits::IOperation<>>> window{CF::CreateGate(Kind::kCXGateType, 3, 7)};
+            const auto meetPos = sim.SelectMeetingPositionAdaptive(window, 0, 4, 2, 0.0, bestCost);
+            BOOST_CHECK_EQUAL(meetPos, 6);
+
+            sim.SwapQubitsToPosition(3, 7, meetPos);
+            const auto &afterBonds = sim.getCurrentBondDimensions();
+            for (size_t b = 2; b <= 7; ++b)
+                BOOST_CHECK_CLOSE(afterBonds[b], 8.0, 1e-9);
+        }
+
+        // 5. Batched multi-qubit Measure / Reset injects zero spurious 2-qubit graph cliques
+        // (matching split single-qubit Measure / Reset) and does not truncate lookahead.
+        {
+            const std::array<size_t, 12> perm{7, 2, 10, 0, 5, 11, 3, 8, 1, 9, 4, 6};
+            auto batchedCirc = std::make_shared<Circuits::Circuit<>>();
+            auto splitCirc = std::make_shared<Circuits::Circuit<>>();
+            size_t cbit = 0;
+            for (int round = 0; round < 4; ++round)
+            {
+                for (size_t k = 0; k + 1 < 6; ++k)
+                {
+                    batchedCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, perm[k], perm[k + 1]));
+                    splitCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, perm[k], perm[k + 1]));
+                }
+                for (size_t k = 0; k < 6; ++k)
+                {
+                    batchedCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, perm[k], perm[k + 6]));
+                    splitCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, perm[k], perm[k + 6]));
+                }
+                batchedCirc->AddOperation(CF::CreateMeasurement(
+                    {{perm[6], cbit}, {perm[7], cbit + 1}, {perm[8], cbit + 2}, {perm[9], cbit + 3}, {perm[10], cbit + 4}, {perm[11], cbit + 5}}));
+                batchedCirc->AddOperation(CF::CreateReset({perm[6], perm[7], perm[8], perm[9], perm[10], perm[11]}));
+                for (size_t k = 0; k < 6; ++k)
+                    splitCirc->AddOperation(CF::CreateMeasurement({{perm[k + 6], cbit + k}}));
+                for (size_t k = 0; k < 6; ++k)
+                    splitCirc->AddOperation(CF::CreateReset({perm[k + 6]}));
+                cbit += 6;
+            }
+            Simulators::MPSDummySimulator layoutPlanner(12, isMPO);
+            layoutPlanner.SetMaxBondDimension(32);
+            const auto batchedLayers = batchedCirc->ToMultipleQubitsLayersNoClone();
+            const auto mapBatched = layoutPlanner.ComputeOptimalQubitsMap(batchedLayers);
+
+            std::vector<long long int> identity(12);
+            std::iota(identity.begin(), identity.end(), 0);
+            BOOST_CHECK(mapBatched != identity);
+
+            const auto orderedOps = batchedCirc->LayersToCircuit(batchedLayers)->GetOperations();
+            layoutPlanner.SetInitialQubitsMap(identity);
+            layoutPlanner.SetCurrentSiteRanks(std::vector<double>(12, 1.));
+            layoutPlanner.ApplyGates(orderedOps);
+            const double identityCost = layoutPlanner.getTotalSwappingCost();
+            layoutPlanner.SetInitialQubitsMap(mapBatched);
+            layoutPlanner.SetCurrentSiteRanks(std::vector<double>(12, 1.));
+            layoutPlanner.ApplyGates(orderedOps);
+            const double optCost = layoutPlanner.getTotalSwappingCost();
+            BOOST_CHECK_LT(2.0 * optCost, identityCost);
+
+            Simulators::MPSDummySimulator lookaheadSim(8, isMPO);
+            lookaheadSim.SetMaxBondDimension(16);
+            lookaheadSim.SetCurrentBondDimensions({2.0, 4.0, 8.0, 8.0, 8.0, 4.0, 2.0});
+            const std::vector<std::shared_ptr<Circuits::IOperation<>>> fullOps{CF::CreateGate(Kind::kCXGateType, 1, 6), CF::CreateMeasurement({{6, 0}}),
+                                                                               CF::CreateReset({6}), CF::CreateGate(Kind::kCXGateType, 6, 2),
+                                                                               CF::CreateGate(Kind::kCXGateType, 2, 3)};
+            const std::vector<std::shared_ptr<Circuits::IOperation<>>> oneOp{CF::CreateGate(Kind::kCXGateType, 1, 6)};
+            double fullCost = std::numeric_limits<double>::infinity();
+            double singleCost = std::numeric_limits<double>::infinity();
+            (void)lookaheadSim.SelectMeetingPositionAdaptive(fullOps, 0, 4, 2, 0.0, fullCost);
+            (void)lookaheadSim.SelectMeetingPositionAdaptive(oneOp, 0, 4, 2, 0.0, singleCost);
+            BOOST_CHECK_GT(fullCost, singleCost);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(FreshLayoutStartsUnmeasuredWiresAsProducts)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    const auto cx = [](size_t a, size_t b) { return CF::CreateGate(Kind::kCXGateType, a, b); };
+    auto first = std::make_shared<Circuits::Circuit<>>();
+    first->AddOperation(cx(4, 5));
+    first->AddOperation(cx(0, 5));
+    first->AddOperation(cx(5, 1));
+    first->AddOperation(CF::CreateMeasurement({{4, 0}}));
+    auto last = std::make_shared<Circuits::Circuit<>>();
+    last->AddOperation(cx(2, 4));
+    last->AddOperation(cx(1, 4));
+    last->AddOperation(cx(2, 0));
+    last->AddOperation(cx(4, 0));
+    last->AddOperation(cx(1, 0));
+
+    auto explicitProducts = std::make_shared<Circuits::Circuit<>>();
+    explicitProducts->AddOperation(CF::CreateReset({0, 1, 2, 3, 4, 5}));
+    for (const auto &op : first->GetOperations())
+        explicitProducts->AddOperation(op);
+    for (const bool mpo : {false, true})
+    {
+        Simulators::MPSDummySimulator planner(6, mpo);
+        planner.SetMaxBondDimension(32);
+        planner.setMinLayoutGain(1.);
+        const auto actual = planner.ComputeOptimalQubitsMap({first, last});
+        const auto withResets = planner.ComputeOptimalQubitsMap({explicitProducts, last});
+        BOOST_CHECK(actual == withResets);
+    }
+}
+
+// Which circuits count as measuring or resetting before their end (RoutingConfig::ContainsMidCircuitDisentangling).
+// A reset of a qubit that is still a product state disentangles nothing, however often it repeats.
+BOOST_AUTO_TEST_CASE(MidCircuitDisentanglingIgnoresResetsOfProductQubits)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    using Ops = std::vector<std::shared_ptr<Circuits::IOperation<>>>;
+
+    const auto R = [](std::initializer_list<Types::qubit_t> q) { return CF::CreateReset(Types::qubits_vector(q)); };
+    const auto H = [](size_t q) { return std::static_pointer_cast<Circuits::IOperation<>>(CF::CreateGate(Kind::kHadamardGateType, q)); };
+    const auto CX = [](size_t a, size_t b) { return std::static_pointer_cast<Circuits::IOperation<>>(CF::CreateGate(Kind::kCXGateType, a, b)); };
+    const auto M = [](size_t q, size_t c) { return CF::CreateMeasurement({{q, c}}); };
+    const auto midCircuit = [](const Ops &ops) { return Simulators::RoutingConfig::ContainsMidCircuitDisentangling(ops); };
+
+    // The resets a circuit starts with, once or repeated, and final measurements.
+    BOOST_CHECK(!midCircuit({R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(!midCircuit({R({0}), R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(!midCircuit({R({0, 1}), R({0}), R({1}), H(0), CX(0, 1), M(0, 0), M(1, 1)}));
+    // A reset after one-qubit gates only: the qubit was a product state all along.
+    BOOST_CHECK(!midCircuit({H(0), R({0}), CX(0, 1), M(0, 0), M(1, 1)}));
+    // A reset or a measurement that nothing routed follows.
+    BOOST_CHECK(!midCircuit({H(0), CX(0, 1), R({0}), M(0, 0), M(1, 1)}));
+    // Real ones: after an entangling gate, with two-qubit gates still to come.
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), R({0}), CX(0, 1), M(0, 0), M(1, 1)}));
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), M(0, 0), CX(0, 1), M(1, 1)}));
+    // The reset of one entangled qubit among product ones.
+    BOOST_CHECK(midCircuit({R({0, 1, 2}), H(0), CX(0, 1), R({2}), R({1}), CX(0, 2), M(0, 0)}));
+    // The rest of a circuit: its first measurement acts on a qubit entangled before these operations.
+    BOOST_CHECK(midCircuit({M(0, 0), R({0}), CX(0, 1), M(1, 1)}));
+
+    // Move one half of a Bell pair onto wire 2. Resetting the vacated wire
+    // leaves the pair intact, while resetting wire 2 breaks it.
+    const auto swap = CF::CreateGate(Kind::kSwapGateType, 0, 2);
+    BOOST_CHECK(!midCircuit({H(0), CX(0, 1), swap, R({0}), CX(1, 2)}));
+    BOOST_CHECK(midCircuit({H(0), CX(0, 1), swap, R({2}), CX(1, 2)}));
+
+    const auto conditional = CF::CreateConditionalGate(CF::CreateGate(Kind::kCXGateType, 1, 2), CF::CreateEqualCondition({0}, {true}));
+    const auto channel =
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1, 2}, Simulators::QuantumChannel::TwoQubitDepolarizing(.1));
+    for (const auto &last : Ops{conditional, channel})
+    {
+        BOOST_CHECK(midCircuit({H(0), CX(0, 1), R({0}), last}));
+        BOOST_CHECK(midCircuit({M(0, 0), last}));
+    }
+}
+
+// A logical SWAP exchanges the states of its qubits, so the site ranks, which describe states, go with them:
+// after a Bell pair on (0, 1), a reset of 2 and SWAP(0, 2), it is qubit 2 that belongs to the pair.
+BOOST_AUTO_TEST_CASE(LogicalSwapsCarrySiteRanks)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    for (const bool isMPO : {false, true})
+        for (const bool relabel : {true, false})
+        {
+            Simulators::MPSDummySimulator sim(5, isMPO);
+            sim.SetSwapGatesRelabelQubits(relabel);
+            sim.SetMaxBondDimension(64);
+            sim.ApplyGate(CF::CreateGate(Kind::kHadamardGateType, 0));
+            sim.ApplyGate(CF::CreateGate(Kind::kCXGateType, 0, 1));
+            sim.ApplyGate(CF::CreateReset({2}));
+            const auto before = sim.getCurrentSiteRanks();
+            BOOST_REQUIRE_GT(before[0], 1.0);
+            BOOST_REQUIRE_CLOSE(before[2], 1.0, 1e-9);
+
+            sim.ApplyGate(CF::CreateGate(Kind::kSwapGateType, 0, 2));
+            const auto &after = sim.getCurrentSiteRanks();
+            BOOST_CHECK_CLOSE(after[2], before[0], 1e-9); // now half of the pair
+            BOOST_CHECK_CLOSE(after[0], 1.0, 1e-9);       // now the reset qubit
+            BOOST_CHECK_CLOSE(after[1], before[1], 1e-9);
+
+            // The same SWAP in a fusion window must carry the ranks back.
+            sim.ApplyGate(std::make_shared<Simulators::FusionRoutingOperation>(Types::qubits_vector{2, 0}, 4, true));
+            for (size_t q = 0; q < 5; ++q)
+                BOOST_CHECK_CLOSE(sim.getCurrentSiteRanks()[q], before[q], 1e-9);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(LiveResetRoutingFusionAndSyndromeAccuracy)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // 1. Reset to |1> under FusionSimulator preserves routing lookahead and state accuracy.
+    for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        auto ref = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+        BOOST_REQUIRE(sim != nullptr);
+        BOOST_REQUIRE(ref != nullptr);
+
+        sim->Configure("gate_fusion", "true");
+        sim->Configure("matrix_product_state_max_bond_dimension", "32");
+        sim->Configure("matrix_product_operator_max_bond_dimension", "32");
+        sim->AllocateQubits(5);
+        sim->Initialize();
+        sim->SetLookaheadDepth(3);
+
+        ref->AllocateQubits(5);
+        ref->Initialize();
+
+        const std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{
+            CF::CreateGate(Kind::kHadamardGateType, 0),       CF::CreateGate(Kind::kCXGateType, 0, 3), CF::CreateGate(Kind::kXGateType, 1),
+            CF::CreateReset({1, 2}, {true, false}),           CF::CreateGate(Kind::kCXGateType, 1, 4), CF::CreateGate(Kind::kCXGateType, 2, 3),
+            CF::CreateGate(Kind::kRyGateType, 4, 0, 0, 0.43), CF::CreateGate(Kind::kCXGateType, 4, 0)};
+
+        sim->SetUpcomingGates(ops);
+        BOOST_CHECK(sim->IsRoutingLookaheadEnabled());
+
+        Circuits::OperationState state;
+        for (size_t i = 0; i < ops.size(); ++i)
+        {
+            ops[i]->Execute(sim, state);
+            ops[i]->Execute(ref, state);
+            if (i == 3)
+                BOOST_CHECK(sim->IsRoutingLookaheadEnabled());
+        }
+
+        const auto probsSim = sim->AllProbabilities();
+        const auto probsRef = ref->AllProbabilities();
+        BOOST_REQUIRE_EQUAL(probsSim.size(), probsRef.size());
+        for (size_t i = 0; i < probsRef.size(); ++i)
+            BOOST_CHECK_SMALL(probsSim[i] - probsRef[i], 1e-10);
+    }
+
+    auto makeZObservables = [](size_t n) {
+        std::vector<std::string> obs;
+        for (size_t q = 0; q < n; ++q)
+        {
+            std::string z(n, 'I');
+            z[q] = 'Z';
+            obs.push_back(std::move(z));
+        }
+        for (size_t q = 0; q + 1 < n; ++q)
+        {
+            std::string zz(n, 'I');
+            zz[q] = 'Z';
+            zz[q + 1] = 'Z';
+            obs.push_back(std::move(zz));
+        }
+        return obs;
+    };
+
+    // 2. Multi-round MPO mixed-state stabilizer + reset circuit vs exact DensityMatrix.
+    {
+        constexpr size_t nQ = 9;
+        auto mpoCirc = std::make_shared<Circuits::Circuit<>>();
+        for (size_t d = 0; d < 5; ++d)
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kRyGateType, d, 0, 0, 0.37 + 0.05 * static_cast<double>(d)));
+        for (int r = 0; r < 4; ++r)
+        {
+            for (size_t d = 0; d < 5; ++d)
+            {
+                mpoCirc->AddOperation(CF::CreateGate(Kind::kRxGateType, d, 0, 0, 0.28 * (1.0 + 0.1 * ((d + r) % 4))));
+                mpoCirc->AddOperation(CF::CreateGate(Kind::kRzGateType, d, 0, 0, 0.19 * (1.0 + 0.1 * d)));
+            }
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, 5));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, 6));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 5, 0));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 5, 1));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 5, 2));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 6, 2));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 6, 3));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 6, 4));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 0, 7));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 1, 7));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 2, 8));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 3, 8));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, 4, 8));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, 5));
+            mpoCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, 6));
+            mpoCirc->AddOperation(CF::CreateReset({5, 6, 7, 8}));
+        }
+
+        const auto obs = makeZObservables(nQ);
+        auto runMpo = [&](Simulators::SimulationType type, bool swapsOpt) {
+            auto net = std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{nQ}, std::vector<size_t>{nQ});
+            net->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, type);
+            net->SetMPSOptimizationQubitsNumberThreshold(1);
+            net->SetMPSOptimizationBondDimensionThreshold(1);
+            net->SetInitialQubitsMapOptimization(swapsOpt);
+            net->SetMPSOptimizeSwaps(swapsOpt);
+            net->CreateSimulator();
+            net->Configure("matrix_product_state_max_bond_dimension", "32");
+            net->Configure("matrix_product_operator_max_bond_dimension", "32");
+            net->Configure("matrix_product_operator_truncation_threshold", "1e-16");
+            return net->ExecuteOnHostExpectations(std::make_shared<Circuits::Circuit<>>(*mpoCirc), 0, obs);
+        };
+
+        const auto refVals = runMpo(Simulators::SimulationType::kDensityMatrix, false);
+        const auto offVals = runMpo(Simulators::SimulationType::kMatrixProductOperator, false);
+        const auto onVals = runMpo(Simulators::SimulationType::kMatrixProductOperator, true);
+
+        double rmsOff = 0.0, rmsOn = 0.0, maxOn = 0.0;
+        for (size_t i = 0; i < obs.size(); ++i)
+        {
+            const double errOff = std::abs(offVals[i] - refVals[i]);
+            const double errOn = std::abs(onVals[i] - refVals[i]);
+            rmsOff += errOff * errOff;
+            rmsOn += errOn * errOn;
+            maxOn = std::max(maxOn, errOn);
+        }
+        rmsOff = std::sqrt(rmsOff / static_cast<double>(obs.size()));
+        rmsOn = std::sqrt(rmsOn / static_cast<double>(obs.size()));
+        BOOST_CHECK_LT(rmsOn, rmsOff);
+        BOOST_CHECK_LT(maxOn, 0.08);
+    }
+
+    // 3. Multi-round MPS deterministic parity-stabilizer + Measure/Reset circuit vs exact Statevector.
+    {
+        constexpr size_t nQ = 12;
+        auto mpsCirc = std::make_shared<Circuits::Circuit<>>();
+        auto addRxx = [&](size_t u, size_t v, double theta) {
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, u));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, v));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, u, v));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kRzGateType, v, 0, 0, theta));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, u, v));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, u));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kHadamardGateType, v));
+        };
+        auto addRzz = [&](size_t u, size_t v, double theta) {
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, u, v));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kRzGateType, v, 0, 0, theta));
+            mpsCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, u, v));
+        };
+
+        // Scrambled 1D data ring on 8 qubits + 4 parity ancillas: all Rxx and Rzz preserve
+        // global Z^8 = +1 so ancilla parity measurements/resets deterministically yield 0.
+        const std::array<size_t, 8> dataRing{0, 6, 3, 9, 1, 7, 4, 10};
+        const std::array<size_t, 4> anc{2, 5, 8, 11};
+        size_t cbit = 0;
+        for (int r = 0; r < 4; ++r)
+        {
+            for (size_t i = 0; i < 8; ++i)
+            {
+                const size_t u = dataRing[i];
+                const size_t v = dataRing[(i + 1) % 8];
+                addRxx(u, v, 0.53 + 0.07 * static_cast<double>((i + r) % 5));
+                addRzz(u, v, 0.41 + 0.09 * static_cast<double>((i + 2 * r) % 5));
+                mpsCirc->AddOperation(CF::CreateGate(Kind::kRzGateType, u, 0, 0, 0.29 * static_cast<double>(i + 1)));
+            }
+            for (size_t aIdx = 0; aIdx < 4; ++aIdx)
+            {
+                for (size_t q : dataRing)
+                    mpsCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, q, anc[aIdx]));
+            }
+            mpsCirc->AddOperation(CF::CreateMeasurement({{anc[0], cbit}, {anc[1], cbit + 1}, {anc[2], cbit + 2}, {anc[3], cbit + 3}}));
+            cbit += 4;
+            mpsCirc->AddOperation(CF::CreateReset({anc[0], anc[1], anc[2], anc[3]}));
+        }
+
+        const auto obs = makeZObservables(nQ);
+        auto runMps = [&](Simulators::SimulationType type, bool swapsOpt) {
+            auto net = std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{nQ}, std::vector<size_t>{cbit});
+            net->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, type);
+            net->SetMPSOptimizationQubitsNumberThreshold(1);
+            net->SetMPSOptimizationBondDimensionThreshold(1);
+            net->SetInitialQubitsMapOptimization(swapsOpt);
+            net->SetMPSOptimizeSwaps(swapsOpt);
+            net->CreateSimulator();
+            net->Configure("matrix_product_state_max_bond_dimension", "12");
+            net->Configure("matrix_product_state_truncation_threshold", "1e-16");
+            return net->ExecuteOnHostExpectations(std::make_shared<Circuits::Circuit<>>(*mpsCirc), 0, obs);
+        };
+
+        const auto refVals = runMps(Simulators::SimulationType::kStatevector, false);
+        const auto offVals = runMps(Simulators::SimulationType::kMatrixProductState, false);
+        const auto onVals = runMps(Simulators::SimulationType::kMatrixProductState, true);
+
+        double rmsOff = 0.0, rmsOn = 0.0;
+        for (size_t i = 0; i < obs.size(); ++i)
+        {
+            const double errOff = std::abs(offVals[i] - refVals[i]);
+            const double errOn = std::abs(onVals[i] - refVals[i]);
+            rmsOff += errOff * errOff;
+            rmsOn += errOn * errOn;
+        }
+        rmsOff = std::sqrt(rmsOff / static_cast<double>(obs.size()));
+        rmsOn = std::sqrt(rmsOn / static_cast<double>(obs.size()));
+        BOOST_CHECK_LT(rmsOn, rmsOff);
+        BOOST_CHECK_LT(rmsOn, 0.05);
     }
 }
 

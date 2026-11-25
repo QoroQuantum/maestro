@@ -76,6 +76,60 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
     }
 
   protected:
+    // QCSim changes logical labels without moving tensors. Bond estimates stay
+    // on the same cuts, while site ranks and reset markers follow the old label
+    // to its new logical index. Older QCSim releases cannot supply that map.
+    template <class Chain> bool RelabelQubitsMap(Chain &chain, const std::vector<long long> &map)
+    {
+        if (map.size() != nrQubits)
+            throw std::invalid_argument("Initial qubit map must match the register size");
+        std::vector<size_t> logicalAtSite(nrQubits, nrQubits);
+        for (size_t q = 0; q < nrQubits; ++q)
+        {
+            const auto p = static_cast<size_t>(map[q]);
+            if (p >= nrQubits || logicalAtSite[p] != nrQubits)
+                throw std::invalid_argument("Initial qubit map must be a permutation");
+            logicalAtSite[p] = q;
+        }
+        auto oldMap = ReadRoutingMap(&chain);
+        if (oldMap == map)
+            return true;
+        chain.SetInitialQubitsMap(map);
+        if (oldMap.size() != nrQubits)
+        {
+            InvalidateDummyHistory();
+            if (std::find(liveUntouched.begin(), liveUntouched.end(), uint8_t{0}) != liveUntouched.end())
+            {
+                MarkAllTouched();
+                std::fill(liveSiteRank.begin(), liveSiteRank.end(), operatorChain ? 4. : 2.);
+            }
+            return false;
+        }
+        if (dummyHistoryValid && dummySim->getQubitsMap() != oldMap)
+            InvalidateDummyHistory();
+        // Convert the old map to each logical qubit's new index, then apply
+        // that permutation to every per-qubit field in the same swaps.
+        for (auto &p : oldMap)
+            p = static_cast<long long>(logicalAtSite[p]);
+        for (size_t q = 0; q < nrQubits; ++q)
+        {
+            while (static_cast<size_t>(oldMap[q]) != q)
+            {
+                const auto other = static_cast<size_t>(oldMap[q]);
+                std::swap(liveSiteRank[q], liveSiteRank[other]);
+                std::swap(liveUntouched[q], liveUntouched[other]);
+                ExchangeTrackedStates(q, other);
+                std::swap(oldMap[q], oldMap[other]);
+            }
+        }
+        if (dummySim)
+        {
+            dummySim->SetRoutingMap(map);
+            dummySim->SetCurrentSiteRanks(liveSiteRank);
+        }
+        return true;
+    }
+
     static constexpr const char *kDefaultTruncationThreshold = "1e-15";
     mutable std::unordered_map<std::string, std::string> effectiveConfig;
 
@@ -131,9 +185,16 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
                             PrepareBoundedRouting();
                     }
                     if (boundedRouting)
-                        return boundedRouting->Select(CurrentRoutingMap(), bonds.data(), bonds.size(), static_cast<size_t>(upcomingGateIndex));
+                    {
+                        const auto map = CurrentRoutingMap();
+                        std::vector<double> liveBonds(bonds.begin(), bonds.end());
+                        DeflateLiveBondDimensions(map, liveBonds.data(), liveBonds.size());
+                        EnsureLiveSiteRanks();
+                        return boundedRouting->Select(map, liveBonds.data(), liveBonds.size(), static_cast<size_t>(upcomingGateIndex),
+                                                      liveSiteRank.size() == nrQubits ? liveSiteRank.data() : nullptr, liveSiteRank.size());
+                    }
                 }
-                return PlanMeetingPosition(bonds.data(), bonds.size());
+                return PlanMeetingPosition(bonds.data(), bonds.size(), automaticRoutingDepth);
             }
             catch (...)
             {
@@ -144,12 +205,18 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
         bondDimensionCallback = [this](auto maximum) { curMaxBondDim = std::max(curMaxBondDim, static_cast<size_t>(maximum)); };
     }
 
+    // Measure, MeasureMany and ApplyReset of the QCSim chains report the qubits they collapse.
+    bool TracksDisentangling() const override
+    {
+        return true;
+    }
+
     bool UsesBoundedRouting() const
     {
         // Apply the measured policy only to automatic CPU routing. Explicit
         // depth and cost-model overrides continue to select the legacy policy.
         return automaticRoutingDepth && useOptimalMeetingPosition && lookaheadDepth == 0 && nrQubits > 1 &&
-               RoutingConfig::GetStrategy(configuration) == RoutingConfig::Strategy::Combined && !virtualBondsEnabled && growthFactorGate == 0.7 &&
+               RoutingConfig::GetStrategy(configuration) == RoutingConfig::Strategy::Combined && !explicitVirtualBondsEnabled && growthFactorGate == 0.7 &&
                growthFactorSwap == 1. && (operatorChain ? nrQubits <= 8 : nrQubits > 10);
     }
 
