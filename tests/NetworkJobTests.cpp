@@ -2328,6 +2328,74 @@ void ExecuteRetainsGlobalPhase()
           "The executed phase reached a fresh template restored after a method change");
 }
 
+void ExtendedStabilizerCircuitPhase()
+{
+    const double angle = 0.37;
+    const auto method = Method::kExtendedStabilizer;
+    auto network = MakeNetwork(Backend::kQCSim, method, 1, 1);
+    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    const auto measuredX = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 0}})});
+    measuredX->SetGlobalPhase(angle);
+    Circuits::OperationState bits(1);
+    measuredX->Execute(network->GetSimulator(), bits);
+    Check(bits.GetBit(0) && std::abs(network->GetSimulator()->Probability(1) - 1.) < 1e-12, "Circuit phase changed the QCSim extended-stabilizer measurement");
+    network->Execute(measuredX);
+    Check(!network->GetState().GetBit(0) && std::abs(network->GetSimulator()->Probability(0) - 1.) < 1e-12,
+          "QCSim extended-stabilizer Execute lost the input of a phase-bearing circuit");
+    network->CreateSimulator(Backend::kQCSim, method, 1);
+    network->ExecuteOnHost(measuredX, 0);
+    Check(network->GetState().GetBit(0) && std::abs(network->GetSimulator()->Probability(1) - 1.) < 1e-12,
+          "Circuit phase changed the QCSim extended-stabilizer host measurement");
+
+#ifndef NO_QISKIT_AER
+    const auto checkPhase = [](Simulators::ISimulator &sim, const std::vector<std::complex<double>> &reference, double phase, const char *message) {
+        const auto values = sim.GetStateVector();
+        Check(values.size() == reference.size(), message);
+        for (size_t index = 0; index < values.size(); ++index)
+            Check(std::abs(values[index] - std::polar(1., phase) * reference[index]) < 1e-12, message);
+    };
+    // SX contributes its own global phase. Compare the entire coherent state with the same native gate on the same input.
+    auto aer = MakeNetwork(Backend::kQiskitAer, method, 1, 1);
+    aer->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    auto sim = aer->GetSimulator();
+    sim->ApplyX(0);
+    sim->ApplySx(0);
+    const auto fromOne = sim->GetStateVector();
+    sim->Reset();
+    sim->ApplyX(0);
+    const auto sx = CF::CreateCircuit({CF::CreateGate(Gate::kSxGateType, 0)});
+    sx->SetGlobalPhase(angle);
+    sx->Execute(sim, bits);
+    checkPhase(*sim, fromOne, angle, "Aer direct execution lost the SX or circuit phase");
+    sim->SaveState();
+    const auto phaseOnly = CF::CreateCircuit();
+    phaseOnly->SetGlobalPhase(-0.91);
+    aer->Execute(phaseOnly);
+    checkPhase(*aer->GetSimulator(), fromOne, angle - 0.91, "Aer phase-only Execute did not continue the caller's coherent state");
+    const auto clone = aer->GetSimulator()->Clone();
+    checkPhase(*clone, fromOne, angle - 0.91, "Aer clone lost the current circuit phase");
+    clone->RestoreState();
+    checkPhase(*clone, fromOne, angle, "Aer clone lost its separately saved circuit phase");
+    sim->RestoreState();
+    checkPhase(*sim, fromOne, angle, "Aer restore lost the checkpoint's circuit phase");
+
+    aer->CreateSimulator(Backend::kQiskitAer, method, 1);
+    sim = aer->GetSimulator();
+    sim->ApplySx(0);
+    const auto fromZero = sim->GetStateVector();
+    for (int repeat = 0; repeat < 2; ++repeat)
+    {
+        aer->ExecuteOnHost(sx, 0);
+        checkPhase(*aer->GetSimulator(), fromZero, angle, "Aer host execution failed to start from a fresh unphased register");
+    }
+    sim = aer->GetSimulator();
+    sim->Reset();
+    const double halfPi = std::acos(0.);
+    sim->ApplyU(0, halfPi, halfPi, 0., 0.31);
+    checkPhase(*sim, {std::sqrt(0.5), {0., std::sqrt(0.5)}}, 0.31, "Aer extended-stabilizer U lost its Euler-angle or explicit scalar");
+#endif
+}
+
 // A single-shot trajectory on an unseeded network seeds only its execution.
 // Neither the simulator Execute keeps nor the configuration the next run
 // captures from it may turn the network's later executions deterministic.
@@ -3440,6 +3508,7 @@ try
     HostSimulatorReuse();
     ExecuteTrajectoryPreservesState();
     ExecuteRetainsGlobalPhase();
+    ExtendedStabilizerCircuitPhase();
     UnseededExecuteStaysUnseeded();
     TransientExecutionCloneStreams();
     DistributedSimulatorReuse();

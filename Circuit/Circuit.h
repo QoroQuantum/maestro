@@ -3282,14 +3282,19 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         case Method::kStabilizer:
             return 0.; // These methods do not expose complex state amplitudes.
         case Method::kExtendedStabilizer:
+            // QCSim exposes probabilities only. Aer exposes the amplitudes of its decomposition.
+            if (sim.GetType() == Simulators::SimulatorType::kQCSim)
+                return 0.;
+            break;
         case Method::kOther:
             throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
                                         "complex amplitudes by GlobalPhaseFactor().");
         default:
-            if (sim.GetNumberOfQubits() == 0)
-                throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
-            return phase;
+            break;
         }
+        if (sim.GetNumberOfQubits() == 0)
+            throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
+        return phase;
     }
 
     static void ApplyPhase(Simulators::ISimulator &sim, double phase)

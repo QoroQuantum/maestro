@@ -484,9 +484,16 @@ class AerSimulator : public AerState
 
         if (GetSimulationType() == SimulationType::kExtendedStabilizer)
         {
-            ApplyRz(qubit, lambda);
-            ApplyRy(qubit, theta);
-            ApplyRz(qubit, phi);
+            RequireGateTargets(qubits);
+            if (theta != 0. || phi != 0. || lambda != 0.)
+            {
+                ApplyRz(qubit, lambda);
+                ApplyRy(qubit, theta);
+                ApplyRz(qubit, phi);
+            }
+            // The Euler rotations have determinant one. Store U's scalar on the native state
+            // where it commutes with buffered gates and survives cloning and checkpoints.
+            state->get_state()->add_global_phase(gamma + 0.5 * phi + 0.5 * lambda);
         }
         else
         {
