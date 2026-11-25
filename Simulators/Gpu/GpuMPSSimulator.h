@@ -333,13 +333,9 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
         InvalidateDummyHistory();
-        DontNotify();
-        {
-            for (size_t qubit : qubits)
-                if (mps->Measure(static_cast<unsigned int>(qubit)))
-                    mps->ApplyX(static_cast<unsigned int>(qubit));
-        }
-        Notify();
+        for (size_t qubit : qubits)
+            if (mps->Measure(static_cast<unsigned int>(qubit)))
+                RequireGateSuccess(mps->ApplyX(static_cast<unsigned int>(qubit)), "X");
         NotifyObservers(qubits);
     }
 
@@ -529,6 +525,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = mps->ExpectationValue(pauliString);
         return result;
@@ -536,6 +533,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
     {
+        ValidatePauliStrings(paulis);
         if (!mps)
             return IState::ExpectationValues(paulis);
         std::vector<double> result(paulis.size(), 0.);
@@ -728,166 +726,166 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
-        mps->ApplyP(qubit, lambda);
+        RequireGateSuccess(mps->ApplyP(qubit, lambda), "P");
         NotifyObservers({qubit});
     }
 
     void ApplyX(Types::qubit_t qubit) override
     {
-        mps->ApplyX(qubit);
+        RequireGateSuccess(mps->ApplyX(qubit), "X");
         NotifyObservers({qubit});
     }
 
     void ApplyY(Types::qubit_t qubit) override
     {
-        mps->ApplyY(qubit);
+        RequireGateSuccess(mps->ApplyY(qubit), "Y");
         NotifyObservers({qubit});
     }
 
     void ApplyZ(Types::qubit_t qubit) override
     {
-        mps->ApplyZ(qubit);
+        RequireGateSuccess(mps->ApplyZ(qubit), "Z");
         NotifyObservers({qubit});
     }
 
     void ApplyH(Types::qubit_t qubit) override
     {
-        mps->ApplyH(qubit);
+        RequireGateSuccess(mps->ApplyH(qubit), "H");
         NotifyObservers({qubit});
     }
 
     void ApplyS(Types::qubit_t qubit) override
     {
-        mps->ApplyS(qubit);
+        RequireGateSuccess(mps->ApplyS(qubit), "S");
         NotifyObservers({qubit});
     }
 
     void ApplySDG(Types::qubit_t qubit) override
     {
-        mps->ApplySDG(qubit);
+        RequireGateSuccess(mps->ApplySDG(qubit), "SDG");
         NotifyObservers({qubit});
     }
 
     void ApplyT(Types::qubit_t qubit) override
     {
-        mps->ApplyT(qubit);
+        RequireGateSuccess(mps->ApplyT(qubit), "T");
         NotifyObservers({qubit});
     }
 
     void ApplyTDG(Types::qubit_t qubit) override
     {
-        mps->ApplyTDG(qubit);
+        RequireGateSuccess(mps->ApplyTDG(qubit), "TDG");
         NotifyObservers({qubit});
     }
 
     void ApplySx(Types::qubit_t qubit) override
     {
-        mps->ApplySX(qubit);
+        RequireGateSuccess(mps->ApplySX(qubit), "SX");
         NotifyObservers({qubit});
     }
 
     void ApplySxDAG(Types::qubit_t qubit) override
     {
-        mps->ApplySXDG(qubit);
+        RequireGateSuccess(mps->ApplySXDG(qubit), "SXDG");
         NotifyObservers({qubit});
     }
 
     void ApplyK(Types::qubit_t qubit) override
     {
-        mps->ApplyK(qubit);
+        RequireGateSuccess(mps->ApplyK(qubit), "K");
         NotifyObservers({qubit});
     }
 
     void ApplyRx(Types::qubit_t qubit, double theta) override
     {
-        mps->ApplyRx(qubit, theta);
+        RequireGateSuccess(mps->ApplyRx(qubit, theta), "Rx");
         NotifyObservers({qubit});
     }
 
     void ApplyRy(Types::qubit_t qubit, double theta) override
     {
-        mps->ApplyRy(qubit, theta);
+        RequireGateSuccess(mps->ApplyRy(qubit, theta), "Ry");
         NotifyObservers({qubit});
     }
 
     void ApplyRz(Types::qubit_t qubit, double theta) override
     {
-        mps->ApplyRz(qubit, theta);
+        RequireGateSuccess(mps->ApplyRz(qubit, theta), "Rz");
         NotifyObservers({qubit});
     }
 
     void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
     {
-        mps->ApplyU(qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(mps->ApplyU(qubit, theta, phi, lambda, gamma), "U");
         NotifyObservers({qubit});
     }
 
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCX(ctrl_qubit, tgt_qubit), "CX");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCY(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCY(ctrl_qubit, tgt_qubit), "CY");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCZ(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCZ(ctrl_qubit, tgt_qubit), "CZ");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
     {
-        mps->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+        RequireGateSuccess(mps->ApplyCP(ctrl_qubit, tgt_qubit, lambda), "CP");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(lambda / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        mps->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(mps->ApplyCRx(ctrl_qubit, tgt_qubit, theta), "CRx");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        mps->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(mps->ApplyCRy(ctrl_qubit, tgt_qubit, theta), "CRy");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        mps->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(mps->ApplyCRz(ctrl_qubit, tgt_qubit, theta), "CRz");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCH(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCH(ctrl_qubit, tgt_qubit), "CH");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCSX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCSX(ctrl_qubit, tgt_qubit), "CSX");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(std::sqrt(2.)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        mps->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(mps->ApplyCSXDG(ctrl_qubit, tgt_qubit), "CSXDG");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(std::sqrt(2.)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
@@ -907,19 +905,19 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
             const size_t q1 = qubit0;
             const size_t q2 = qubit1;
             const size_t q3 = qubit2;
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3)), "CSX");
             RecordExecutedTwoQubitGate(qubit1, qubit2, false, 2.);
             NotifyObservers({qubit1, qubit2});
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
-            mps->ApplyCSXDG(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSXDG(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3)), "CSXDG");
             RecordExecutedTwoQubitGate(qubit1, qubit2, false, 2.);
             NotifyObservers({qubit1, qubit2});
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
-            mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3)), "CSX");
             RecordExecutedTwoQubitGate(qubit0, qubit2, false, 2.);
             NotifyObservers({qubit0, qubit2});
         }
@@ -933,31 +931,31 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
             const size_t q1 = ctrl_qubit;
             const size_t q2 = qubit0;
             const size_t q3 = qubit1;
-            mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(qubit1, qubit0, false, 2.);
             NotifyObservers({qubit1, qubit0});
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3)), "CSX");
             RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, 2.);
             NotifyObservers({ctrl_qubit, qubit0});
-            mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
+            RequireGateSuccess(mps->ApplyP(static_cast<unsigned int>(q3), M_PI), "P");
             NotifyObservers({qubit1});
-            mps->ApplyP(static_cast<unsigned int>(q2), -M_PI_2);
+            RequireGateSuccess(mps->ApplyP(static_cast<unsigned int>(q2), -M_PI_2), "P");
             NotifyObservers({qubit0});
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3)), "CSX");
             RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, 2.);
             NotifyObservers({ctrl_qubit, qubit0});
-            mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
+            RequireGateSuccess(mps->ApplyP(static_cast<unsigned int>(q3), M_PI), "P");
             NotifyObservers({qubit1});
-            mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
+            RequireGateSuccess(mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3)), "CSX");
             RecordExecutedTwoQubitGate(ctrl_qubit, qubit1, false, 2.);
             NotifyObservers({ctrl_qubit, qubit1});
-            mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RequireGateSuccess(mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2)), "CX");
             RecordExecutedTwoQubitGate(qubit1, qubit0, false, 2.);
             NotifyObservers({qubit1, qubit0});
         }
@@ -966,7 +964,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
-        mps->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(mps->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma), "CU");
         RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.) * std::cos((phi + lambda) / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }

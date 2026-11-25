@@ -158,7 +158,7 @@ struct QubitNoise
     /// Damping factor a single-qubit Pauli operator acquires from this channel.
     double damping_for(char pauli) const
     {
-        switch (toupper(pauli))
+        switch (toupper(static_cast<unsigned char>(pauli)))
         {
         case 'X':
             return 1.0 - 2.0 * (py + pz);
@@ -166,8 +166,10 @@ struct QubitNoise
             return 1.0 - 2.0 * (px + pz);
         case 'Z':
             return 1.0 - 2.0 * (px + py);
+        case 'I':
+            return 1.0;
         default:
-            return 1.0; // Identity
+            throw std::invalid_argument("Invalid Pauli character in damping factor.");
         }
     }
 
@@ -767,6 +769,7 @@ class NoiseModel
      */
     double compute_damping(const std::string &pauli) const
     {
+        Simulators::ValidatePauliString(pauli);
         double d = 1.0;
         for (size_t q = 0; q < pauli.size(); ++q)
         {

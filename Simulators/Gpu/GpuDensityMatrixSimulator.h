@@ -455,6 +455,7 @@ class GpuDensityMatrixSimulator : public ImmediateGpuSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = densityMatrix->ExpectationValue(pauliString);
         return result;

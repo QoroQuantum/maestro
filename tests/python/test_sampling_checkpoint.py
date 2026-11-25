@@ -407,6 +407,24 @@ def test_raw_samples_survive_checkpoint_destruction():
     assert np.isin(rows, [0, 1]).all()
 
 
+@pytest.mark.parametrize("return_samples", [False, True])
+def test_checkpoint_restores_prefix_bits_for_each_shot(return_samples):
+    parse = maestro.QasmToCirc().parse_and_translate
+    header = "OPENQASM 3.0; qubit[2] q; bit[4] c; "
+    prefix = parse(header + "x q[0]; c[3] = measure q[0]; x q[0];")
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 2)
+    # The first suffix overwrites the prefix bit. The next shot and the
+    # terminal-only suffix must both see its saved value again.
+    dynamic = parse(header + "z q[1]; if (c[3]) { x q[0]; } c[0] = measure q[0]; c[3] = measure q[1];")
+    terminal = parse(header + "c[0] = measure q[1];")
+    for suffix, shots, bits in [(dynamic, 1, "1000"), (dynamic, 23, "1000"), (terminal, 23, "0001")]:
+        result = checkpoint.execute_suffix(suffix, shots=shots, return_samples=return_samples)
+        if return_samples:
+            np.testing.assert_array_equal(result["samples"], np.tile([int(b) for b in bits], (shots, 1)))
+        else:
+            assert result["counts"] == {bits: shots}
+
+
 def _mixed_checkpoint(method, workers=1):
     prefix = QuantumCircuit()
     prefix.h(0)

@@ -175,7 +175,7 @@ struct AddGateExpr : public AbstractSyntaxTree
                     // "id" is the identity gate: standard in both qelib1.inc and
                     // stdgates.inc, emitted by Qiskit, and contributing no operation.
                     // It has no gate type of its own, so it lands on kNone - whose
-                    // GateNrQubits is 0, the arity the qubit-less "gphase" needs - and
+                    // GateNrQubits is 0 - and
                     // the generic arity below would reject its qubit argument. Its own
                     // arity is therefore spelled out by name: "id" is a one-qubit gate
                     // and takes exactly one argument (a whole-register broadcast, `id
@@ -319,6 +319,8 @@ struct AddGateExpr : public AbstractSyntaxTree
                             stmt.parameters.push_back(lambda);
                         }
                     }
+                    else if (gateName == "gphase")
+                        throw std::invalid_argument("OpenQASM gphase is unsupported: the circuit cannot represent a global phase.");
                     else if (gateName == "u2")
                     {
                         // Only names absent from the allowed-gate sets reach this chain:
@@ -541,9 +543,8 @@ struct AddGateExpr : public AbstractSyntaxTree
         else if (gateName == "cu" || gateName == "cu3" || gateName == "cu1")
             return Circuits::QuantumGateType::kCUGateType;
 
-        // Returned for an unmapped name, and for the three accepted names that
-        // legitimately have no gate of their own: 'id', 'u0' and 'gphase', all
-        // of which are dropped rather than emitted. The callers pair this with an
+        // Returned for an unmapped name and for the identity gates 'id' and
+        // 'u0', which emit no operation. The callers pair this with an
         // arity check, so an unmapped name is still rejected rather than being
         // silently treated as a no-op.
         return Circuits::QuantumGateType::kNone;
@@ -594,8 +595,8 @@ struct AddGateExpr : public AbstractSyntaxTree
     static inline std::unordered_set<std::string> allowedNoParamGates = {"x",    "y",  "z",    "h",     "s",      "sdg",   "sdag", "t",  "tdg",
                                                                          "tdag", "sx", "sxdg", "sxdag", "k",      "swap",  "cx",   "CX", "cy",
                                                                          "cz",   "ch", "csx",  "csxdg", "csxdag", "cswap", "ccx",  "id"};
-    static inline std::unordered_set<std::string> allowedOneParamGates = {"p",   "rx", "ry",  "rz",    "cp",     "crx",    "cry",
-                                                                          "crz", "u1", "cu1", "phase", "cphase", "gphase", "u0"};
+    static inline std::unordered_set<std::string> allowedOneParamGates = {"p",   "rx", "ry",  "rz",    "cp",     "crx", "cry",
+                                                                          "crz", "u1", "cu1", "phase", "cphase", "u0"};
     // "cu1" is deliberately absent: like "u1" it takes exactly one angle, and
     // listing it here made cu1(a, b, c) accepted and silently lowered as cu3.
     static inline std::unordered_set<std::string> allowedMultipleParamsGates = {"u", "U", "u3", "cu", "cu3"}; // max 4
@@ -1115,6 +1116,8 @@ inline std::vector<bool> DecodeRegisterCondition(const std::string &registerName
 // in condBits; everything else becomes a CondUop conditioned via cbits.
 inline void ApplyCondition(StatementType &stmt, const std::vector<int> &conditionBits, const std::vector<bool> &expectedValues)
 {
+    if (stmt.opType == QoperationStatement::OperationType::Delay)
+        throw std::invalid_argument("Conditional delay is unsupported: the circuit cannot represent a classically guarded idle period.");
     stmt.condExpected = expectedValues;
     if (stmt.opType == QoperationStatement::OperationType::Measurement || stmt.opType == QoperationStatement::OperationType::Reset)
     {

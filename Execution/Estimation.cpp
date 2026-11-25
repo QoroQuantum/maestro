@@ -190,6 +190,7 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
 {
     if (!circuit)
         throw std::invalid_argument("Estimation requires a non-null circuit");
+    Simulators::ValidatePauliStrings(observables);
     config.Validate();
     EstimationPlan plan;
     plan.qubits_before = Width(circuit, observables);

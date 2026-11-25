@@ -356,10 +356,39 @@ def test_non_clifford_task_circuit_preserves_rx_ry_resets():
         OBSERVABLE_INCLUDE(0) rec[-2]
     """
     task_circuit = NonCliffordTaskCircuit(circuit_str)
-    assert "RX 0" in str(task_circuit._clifford_circuit)
-    assert "RY 1" in str(task_circuit._clifford_circuit)
-    assert "T 0" not in str(task_circuit._clifford_circuit)
-    assert "RX(0.5)" not in str(task_circuit._clifford_circuit)
+    assert task_circuit.flattened()[:4] == [
+        ("RX", [], [0]), ("RY", [], [1]), ("T", [], [0]), ("RX", [0.5], [1])]
+
+
+@pytest.mark.parametrize("preparation", ["RX(3.141592653589793) 0", "H 0\n" + "T 0\n" * 4 + "H 0"])
+def test_non_clifford_reference_preserves_deterministic_measurements(preparation):
+    circuit = NonCliffordTaskCircuit(preparation + "\nM 0\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]")
+    sampler = MaestroCompiledSampler(circuit, decoder="vacuous", seed=5)
+    assert sampler.sample_measurements(8).all()
+    dets, obs = sampler.sample_detection_events(8)
+    assert not dets.any() and not obs.any()
+    assert sampler.sample(8).errors == 0
+    with pytest.raises(ValueError, match="detector_error_model"):
+        circuit.detector_error_model()
+
+
+def test_non_clifford_reference_excludes_noise_and_preserves_record_offsets():
+    # The two Z measurements are individually random but agree without readout noise.
+    circuit = NonCliffordTaskCircuit("H 0\nT 0\nM(1) 0\nM 0\nDETECTOR rec[-2] rec[-1]")
+    sampler = MaestroCompiledSampler(circuit, seed=6)
+    assert sampler.sample_detection_events(16)[0].all()
+
+
+def test_non_clifford_decoder_uses_supplied_error_model():
+    circuit = NonCliffordTaskCircuit("T 0\nX_ERROR(1) 0\nM 0\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]")
+    with pytest.raises(ValueError, match="detector_error_model"):
+        MaestroCompiledSampler(circuit, decoder="pymatching")
+    prior = stim.DetectorErrorModel("error(0.25) D0 L0")
+    task = sinter.Task(circuit=circuit, detector_error_model=prior)
+    sampler = MaestroCompiledSampler(task, decoder="pymatching")
+    dets, obs = sampler.sample_detection_events(8)
+    assert dets.all() and obs.all()
+    assert sampler.sample(8).errors == 0
 
 
 def test_sampler_accepts_simulator_config():

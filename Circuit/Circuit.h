@@ -113,6 +113,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     void ExecuteBD(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
     {
         state.Reset();
+        ExecuteContinuation(sim, state, curMaxBondDim);
+    }
+
+    // Apply a fragment of an already running shot, preserving its classical register.
+    void ExecuteContinuation(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
+    {
         if (!sim)
             return;
 
@@ -333,11 +339,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::shared_ptr<Circuit<Time>> RemoveEndMeasurements() const
     {
-        OperationsVector retained;
-        retained.reserve(operations.size());
-
         std::unordered_set<Types::qubit_t> activeQubits;
         std::unordered_set<size_t> neededBits;
+        return RemoveEndMeasurementsBefore(activeQubits, neededBits);
+    }
+
+    // Continue the backwards scan across circuit fragments. The incoming sets
+    // describe the following operations; on return they describe this fragment too.
+    std::shared_ptr<Circuit<Time>> RemoveEndMeasurementsBefore(std::unordered_set<Types::qubit_t> &activeQubits, std::unordered_set<size_t> &neededBits) const
+    {
+        OperationsVector retained;
+        retained.reserve(operations.size());
 
         for (auto it = operations.rbegin(); it != operations.rend(); ++it)
         {
@@ -722,90 +734,45 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 continue;
             }
 
-            // ok, if it's a measurement, look ahead, accumulate all measurements and
-            // then add them in the right order
-            std::unordered_set<size_t> bits;
-            std::unordered_map<size_t, Types::qubit_t> measQubits;
-            std::unordered_map<size_t, Time> measDelays;
-            // Only for bits whose source measurement carried readout rates.
-            std::unordered_map<size_t, ReadoutRates> measReadout;
-
-            auto affectedBits = op->AffectedBits();
-            auto affectedQubits = op->AffectedQubits();
-
-            const auto firstMeas = std::static_pointer_cast<MeasurementOperation<Time>>(op);
-            const auto &firstRates = firstMeas->GetReadout();
-
-            for (size_t q = 0; q < affectedQubits.size(); ++q)
+            // Keep every write to a bit in its original order. A later write to
+            // the same bit does not undo the collapse of the earlier qubit.
+            std::unordered_map<size_t, OperationsVector> byBit;
+            std::vector<size_t> bitOrder;
+            size_t next = i;
+            for (; next < operations.size() && operations[next]->GetType() == OperationType::kMeasurement; ++next)
             {
-                bits.insert(affectedBits[q]);
-                measQubits[affectedBits[q]] = affectedQubits[q];
-                measDelays[affectedBits[q]] = op->GetDelay();
-                if (q < firstRates.size())
-                    measReadout[affectedBits[q]] = firstRates[q];
-            }
-
-            size_t j = i + 1;
-            for (; j < operations.size(); ++j)
-            {
-                const auto op2 = operations[j];
-
-                if (op2->GetType() != OperationType::kMeasurement)
-                    break;
-
-                affectedQubits = op2->AffectedQubits();
-
-                const auto meas = std::static_pointer_cast<MeasurementOperation<Time>>(op2);
-                affectedBits = meas->GetBitsIndices();
-                const auto &rates = meas->GetReadout();
-                for (size_t q = 0; q < affectedBits.size(); ++q)
+                const auto measurement = std::static_pointer_cast<MeasurementOperation<Time>>(operations[next]);
+                const auto &qubits = measurement->GetQubits();
+                const auto &bits = measurement->GetBitsIndices();
+                const auto &rates = measurement->GetReadout();
+                for (size_t j = 0; j < bits.size(); ++j)
                 {
-                    bits.insert(affectedBits[q]);
-                    measQubits[affectedBits[q]] = affectedQubits[q];
-                    measDelays[affectedBits[q]] = op2->GetDelay();
-                    if (q < rates.size())
-                        measReadout[affectedBits[q]] = rates[q];
-                    else
-                        measReadout.erase(affectedBits[q]);
+                    const auto bit = bits[j];
+                    auto [group, first] = byBit.try_emplace(bit);
+                    if (first)
+                        bitOrder.push_back(bit);
+                    auto single = std::make_shared<MeasurementOperation<Time>>(std::vector{std::make_pair(qubits[j], bit)}, measurement->GetDelay());
+                    if (j < rates.size())
+                        single->SetReadout({rates[j]});
+                    group->second.push_back(std::move(single));
                 }
             }
+            i = next - 1;
 
-            i = j - 1;
-
-            // the right order is the one following in the classically controlled
-            // gates
-            for (; j < operations.size(); ++j)
-            {
-                const auto op2 = operations[j];
-                if (op2->GetType() == OperationType::kConditionalGate || op2->GetType() == OperationType::kConditionalMeasurement ||
-                    op2->GetType() == OperationType::kConditionalRandomGen)
+            const auto emit = [&](size_t bit) {
+                const auto group = byBit.find(bit);
+                if (group != byBit.end())
                 {
-                    auto condop = std::static_pointer_cast<IConditionalOperation<Time>>(op2);
-                    const auto condbits = condop->AffectedBits();
-                    for (const auto bit : condbits)
-                        if (bits.find(bit) != bits.end())
-                        {
-                            auto rebuilt = std::make_shared<MeasurementOperation<Time>>(std::vector{std::make_pair(measQubits[bit], bit)}, measDelays[bit]);
-                            const auto rateit = measReadout.find(bit);
-                            if (rateit != measReadout.end())
-                                rebuilt->SetReadout({rateit->second});
-                            newops.emplace_back(rebuilt);
-                            bits.erase(bit);
-                        }
+                    newops.insert(newops.end(), group->second.begin(), group->second.end());
+                    byBit.erase(group);
                 }
-                if (bits.empty())
-                    break;
-            }
-
-            // now add the measurements that were left in any order
-            for (auto bit : bits)
-            {
-                auto rebuilt = std::make_shared<MeasurementOperation<Time>>(std::vector{std::make_pair(measQubits[bit], bit)}, measDelays[bit]);
-                const auto rateit = measReadout.find(bit);
-                if (rateit != measReadout.end())
-                    rebuilt->SetReadout({rateit->second});
-                newops.emplace_back(rebuilt);
-            }
+            };
+            for (; next < operations.size() && !byBit.empty(); ++next)
+                if (operations[next]->IsConditional())
+                    for (auto bit : operations[next]->AffectedBits())
+                        emit(bit);
+            for (auto bit : bitOrder)
+                emit(bit);
         }
 
         operations.swap(newops);
@@ -1973,7 +1940,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
     bool HasCompositeOperations() const
     {
-        return std::any_of(operations.begin(), operations.end(), [](const auto &op) { return op->GetType() == OperationType::kComposite; });
+        return std::any_of(operations.begin(), operations.end(), [](const auto &op) {
+            if (!op)
+                throw std::invalid_argument("Circuit contains a null operation.");
+            return op->GetType() == OperationType::kComposite;
+        });
     }
 
     // A copy in which every nested circuit is replaced by its operations,
@@ -2070,10 +2041,14 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     void AppendInlined(OperationsVector &flat) const
     {
         for (const auto &op : operations)
+        {
+            if (!op)
+                throw std::invalid_argument("Circuit contains a null operation.");
             if (op->GetType() == OperationType::kComposite)
                 std::static_pointer_cast<Circuit<Time>>(op)->AppendInlined(flat);
             else
                 flat.push_back(op);
+        }
     }
 
     // Whether evolving this circuit observes no random classical result. Unlike
@@ -2918,76 +2893,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayers() const
     {
-        std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
-        layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
-
-        std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
-        std::unordered_map<size_t, size_t> classicalBitLayer;
-        // The last layer reading each bit: a later write (a measurement) must not
-        // move ahead of a read of the old value or of an earlier write.
-        std::unordered_map<size_t, size_t> classicalBitReadLayer;
-
-        for (const auto &op : GetOperations())
-        {
-            // check the instruction, see if a new layer is needed
-
-            // only qubits matter here, the others can be classicaly sent if they are
-            // needed, even if they are shared... but that should be handled
-            // somewhere, when not done implicitely (as for the 'simple network' case)
-            if (op->CanAffectQuantumState())
-            {
-                const auto qubits = op->AffectedQubits();
-                size_t maxLevel = 0;
-
-                for (Types::qubit_t qbit : qubits)
-                {
-                    ++qubitsUsed[qbit];
-                    maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
-
-                    if (layers.size() < qubitsUsed[qbit])
-                    {
-                        auto circ = std::make_shared<Circuits::Circuit<Time>>();
-                        layers.push_back(std::move(circ));
-                    }
-                }
-
-                if (op->IsConditional())
-                {
-                    const auto bits = op->AffectedBits();
-                    for (const auto bit : bits)
-                        maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
-                }
-                else
-                {
-                    // the bits are written: keep the order of the writes and reads
-                    for (const auto bit : op->AffectedBits())
-                        maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit], classicalBitReadLayer[bit]));
-                }
-
-                // now set all the qubits in the instruction to the max level
-                for (Types::qubit_t qbit : qubits)
-                    qubitsUsed[qbit] = maxLevel;
-
-                const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
-
-                // ensure enough layers exist for the computed level
-                while (layers.size() <= layerIdx)
-                    layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
-
-                layers[layerIdx]->AddOperation(op->Clone());
-
-                const auto usedBits = op->AffectedBits();
-                const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
-                auto &bitLayers = op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
-                for (const auto bit : usedBits)
-                    bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
-            }
-            else
-                // add the instruction to the last layer
-                layers.back()->AddOperation(op->Clone());
-        }
-
-        return layers;
+        return BuildLayers(false, true);
     }
 
     /**
@@ -3000,76 +2906,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayersNoClone() const
     {
-        std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
-        layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
-
-        std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
-        std::unordered_map<size_t, size_t> classicalBitLayer;
-        // The last layer reading each bit: a later write (a measurement) must not
-        // move ahead of a read of the old value or of an earlier write.
-        std::unordered_map<size_t, size_t> classicalBitReadLayer;
-
-        for (const auto &op : GetOperations())
-        {
-            // check the instruction, see if a new layer is needed
-
-            // only qubits matter here, the others can be classicaly sent if they are
-            // needed, even if they are shared... but that should be handled
-            // somewhere, when not done implicitely (as for the 'simple network' case)
-            if (op->CanAffectQuantumState())
-            {
-                const auto qubits = op->AffectedQubits();
-                size_t maxLevel = 0;
-
-                for (Types::qubit_t qbit : qubits)
-                {
-                    ++qubitsUsed[qbit];
-                    maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
-
-                    if (layers.size() < qubitsUsed[qbit])
-                    {
-                        auto circ = std::make_shared<Circuits::Circuit<Time>>();
-                        layers.push_back(std::move(circ));
-                    }
-                }
-
-                if (op->IsConditional())
-                {
-                    const auto bits = op->AffectedBits();
-                    for (const auto bit : bits)
-                        maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
-                }
-                else
-                {
-                    // the bits are written: keep the order of the writes and reads
-                    for (const auto bit : op->AffectedBits())
-                        maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit], classicalBitReadLayer[bit]));
-                }
-
-                // now set all the qubits in the instruction to the max level
-                for (Types::qubit_t qbit : qubits)
-                    qubitsUsed[qbit] = maxLevel;
-
-                const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
-
-                // ensure enough layers exist for the computed level
-                while (layers.size() <= layerIdx)
-                    layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
-
-                layers[layerIdx]->AddOperation(op);
-
-                const auto usedBits = op->AffectedBits();
-                const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
-                auto &bitLayers = op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
-                for (const auto bit : usedBits)
-                    bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
-            }
-            else
-                // add the instruction to the last layer
-                layers.back()->AddOperation(op);
-        }
-
-        return layers;
+        return BuildLayers(false, false);
     }
 
     /**
@@ -3084,77 +2921,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToMultipleQubitsLayers() const
     {
-        std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
-        layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
-
-        std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
-        std::unordered_map<size_t, size_t> classicalBitLayer;
-        // The last layer reading each bit: a later write (a measurement) must not
-        // move ahead of a read of the old value or of an earlier write.
-        std::unordered_map<size_t, size_t> classicalBitReadLayer;
-
-        for (const auto &op : GetOperations())
-        {
-            // check the instruction, see if a new layer is needed
-
-            // only qubits matter here, the others can be classicaly sent if they are
-            // needed, even if they are shared... but that should be handled
-            // somewhere, when not done implicitely (as for the 'simple network' case)
-            if (op->CanAffectQuantumState())
-            {
-                const auto qubits = op->AffectedQubits();
-                size_t maxLevel = 0;
-
-                for (Types::qubit_t qbit : qubits)
-                {
-                    if (qubits.size() > 1)
-                        ++qubitsUsed[qbit];
-                    maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
-
-                    if (layers.size() < qubitsUsed[qbit])
-                    {
-                        auto circ = std::make_shared<Circuits::Circuit<Time>>();
-                        layers.push_back(std::move(circ));
-                    }
-                }
-
-                if (op->IsConditional())
-                {
-                    const auto bits = op->AffectedBits();
-                    for (const auto bit : bits)
-                        maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
-                }
-                else
-                {
-                    // the bits are written: keep the order of the writes and reads
-                    for (const auto bit : op->AffectedBits())
-                        maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit], classicalBitReadLayer[bit]));
-                }
-
-                // now set all the qubits in the instruction to the max level
-                for (Types::qubit_t qbit : qubits)
-                    qubitsUsed[qbit] = maxLevel;
-
-                const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
-
-                // ensure enough layers exist for the computed level
-                while (layers.size() <= layerIdx)
-                    layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
-
-                layers[layerIdx]->AddOperation(op->Clone());
-
-                const auto usedBits = op->AffectedBits();
-                const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
-                auto &bitLayers = op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
-                for (const auto bit : usedBits)
-                    bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
-            }
-            else
-                // add the instruction to the last layer
-                layers.back()->AddOperation(op->Clone());
-        }
-
-        return layers;
+        return BuildLayers(true, true);
     }
 
     /**
@@ -3169,86 +2936,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToMultipleQubitsLayersNoClone() const
     {
-        std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
-        layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
-
-        std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
-
-        // Track which layer (1-based, like qubitsUsed) each classical bit was last
-        // written to, so that conditional operations reading those bits are placed
-        // in the same layer or later.
-        std::unordered_map<size_t, size_t> classicalBitLayer;
-        // Likewise the last layer reading each bit: a later write (a measurement)
-        // must not move ahead of a read of the old value or of an earlier write.
-        std::unordered_map<size_t, size_t> classicalBitReadLayer;
-
-        for (const auto &op : GetOperations())
-        {
-            // check the instruction, see if a new layer is needed
-
-            // only qubits matter here, the others can be classicaly sent if they are
-            // needed, even if they are shared... but that should be handled
-            // somewhere, when not done implicitely (as for the 'simple network' case)
-            if (op->CanAffectQuantumState())
-            {
-                const auto qubits = op->AffectedQubits();
-                size_t maxLevel = 0;
-
-                for (Types::qubit_t qbit : qubits)
-                {
-                    if (qubits.size() > 1)
-                        ++qubitsUsed[qbit];
-                    maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
-
-                    if (layers.size() < qubitsUsed[qbit])
-                    {
-                        auto circ = std::make_shared<Circuits::Circuit<Time>>();
-                        layers.push_back(std::move(circ));
-                    }
-                }
-
-                // For conditional operations, ensure this op is placed no earlier than
-                // the layer where the classical bits it depends on were written.
-                if (op->IsConditional())
-                {
-                    const auto bits = op->AffectedBits();
-                    for (const auto bit : bits)
-                        maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
-                }
-                else
-                {
-                    // the bits are written: keep the order of the writes and reads
-                    for (const auto bit : op->AffectedBits())
-                        maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit], classicalBitReadLayer[bit]));
-                }
-
-                // now set all the qubits in the instruction to the max level
-                for (Types::qubit_t qbit : qubits)
-                    qubitsUsed[qbit] = maxLevel;
-
-                const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
-
-                // ensure enough layers exist for the computed level
-                while (layers.size() <= layerIdx)
-                    layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
-
-                layers[layerIdx]->AddOperation(op);
-
-                // Record the layer for classical bits written by measurements / resets
-                // so that later conditional ops respect the dependency, and the layer
-                // of the bits read by conditional ops so that later writes do.
-                const auto usedBits = op->AffectedBits();
-                const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
-                auto &bitLayers = op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
-                for (const auto bit : usedBits)
-                    bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
-            }
-            else
-                // add the instruction to the last layer
-                layers.back()->AddOperation(op);
-        }
-
-        return layers;
+        return BuildLayers(true, false);
     }
 
     /**
@@ -3457,6 +3145,51 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     }
 
   private:
+    std::vector<std::shared_ptr<Circuit<Time>>> BuildLayers(bool multiQubitLayers, bool clone) const
+    {
+        std::vector<std::shared_ptr<Circuit<Time>>> layers{std::make_shared<Circuit<Time>>()};
+        std::unordered_map<Types::qubit_t, size_t> qubitLevel;
+        std::unordered_map<size_t, size_t> lastRead;
+        std::unordered_map<size_t, size_t> lastWrite;
+
+        for (const auto &op : operations)
+        {
+            const auto qubits = op->AffectedQubits();
+            size_t level = op->CanAffectQuantumState() ? 0 : layers.size();
+            const bool advance = op->CanAffectQuantumState() && (!multiQubitLayers || qubits.size() > 1);
+            for (const auto q : qubits)
+                level = std::max(level, qubitLevel[q] + advance);
+
+            std::vector<size_t> reads;
+            auto writes = op->AffectedBits();
+            if (op->IsConditional())
+            {
+                reads.swap(writes);
+                const auto &nested = std::static_pointer_cast<IConditionalOperation<Time>>(op)->GetOperation();
+                if (nested)
+                    writes = nested->AffectedBits();
+            }
+            // Operations in one layer retain input order. Both conditional and
+            // unconditional writes must follow all earlier users of the old bit.
+            for (const auto bit : reads)
+                level = std::max(level, lastWrite[bit]);
+            for (const auto bit : writes)
+                level = std::max({level, lastRead[bit], lastWrite[bit]});
+
+            for (const auto q : qubits)
+                qubitLevel[q] = level;
+            const size_t usedLevel = std::max<size_t>(1, level);
+            for (const auto bit : reads)
+                lastRead[bit] = std::max(lastRead[bit], usedLevel);
+            for (const auto bit : writes)
+                lastWrite[bit] = usedLevel;
+            while (layers.size() < usedLevel)
+                layers.emplace_back(std::make_shared<Circuit<Time>>());
+            layers[usedLevel - 1]->AddOperation(clone ? op->Clone() : op);
+        }
+        return layers;
+    }
+
     // A conditional's AffectedBits() is deliberately predicate-only. Register
     // sizing, mapping and dependencies also need the wrapped operation's outputs.
     // Nested circuits collect their referenced bits through GetBits().

@@ -297,7 +297,9 @@ void bind_api(nb::module_ &m)
         "init_circuit"_a, "trotter_step"_a, "measure_at_steps"_a, "observables"_a, "config"_a = SimulatorConfig{},
         "Incremental time evolution with persistent simulator state.\n\n"
         "Creates a single simulator, executes init_circuit once, then applies\n"
-        "trotter_step incrementally. At each step in measure_at_steps, computes\n"
+        "trotter_step incrementally, carrying classical bits across steps. Mid-circuit\n"
+        "measurements and sampled channels select one trajectory. Only terminal\n"
+        "readout of the entire evolution is removed. At each requested step, computes\n"
         "expectation values for the given observables without re-simulating\n"
         "from scratch. Cost: O(total_steps) instead of O(sum of step "
         "indices).\n\n"

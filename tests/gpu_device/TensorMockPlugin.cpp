@@ -41,6 +41,26 @@ extern "C"
         return calls[index];
     }
 
+    void *CreateTensorNet(void *context)
+    {
+        return CreateStateVector(context);
+    }
+
+    void DestroyTensorNet(void *obj)
+    {
+        DestroyStateVector(obj);
+    }
+
+    int TNCreate(void *obj, unsigned n)
+    {
+        return Create(obj, n);
+    }
+
+    int TNApplyX(void *obj, unsigned q)
+    {
+        return Fails("gate") ? 0 : ApplyX(obj, q);
+    }
+
     void *CreateMPS(void *)
     {
         ++live;
@@ -69,6 +89,11 @@ extern "C"
             t->full(t->context, dims.data());
         }
         return 1;
+    }
+
+    int MPSApplyX(void *obj, unsigned q)
+    {
+        return Fails("gate") ? 0 : ApplyX(obj, q);
     }
 
     int MPSGetNrQubits(void *obj)

@@ -69,34 +69,31 @@ inline std::shared_ptr<Circuits::Circuit<>> UnitaryPreparation(const std::shared
     return result;
 }
 
-// Noisy fidelity also takes adjoints of validated nested preparations and skips
-// their non-gates. Its historical clone fallback is opt-in.
-inline OperationPtr adjoint_gate(const OperationPtr &op, bool clone_unsupported = false)
+// Only delays and no-ops have an empty inverse in a preparation.
+inline OperationPtr adjoint_gate(const OperationPtr &op)
 {
+    if (!op)
+        throw std::invalid_argument("Cannot take the adjoint of a null operation.");
     if (op->GetType() == Circuits::OperationType::kComposite)
     {
         const auto &nested = std::static_pointer_cast<Circuits::Circuit<double>>(op)->GetOperations();
         auto adjoint = std::make_shared<Circuits::Circuit<double>>();
         for (auto it = nested.rbegin(); it != nested.rend(); ++it)
-            if (auto inverse = adjoint_gate(*it, clone_unsupported))
+            if (auto inverse = adjoint_gate(*it))
                 adjoint->AddOperation(inverse);
         return adjoint;
     }
-    if (op->GetType() != Circuits::OperationType::kGate)
+    if (op->GetType() == Circuits::OperationType::kDelay || op->GetType() == Circuits::OperationType::kNoOp)
         return nullptr;
 
     auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(op);
     if (!gate)
-        return nullptr;
+        throw std::invalid_argument("Only unitary gates have a gate adjoint.");
 
     const auto type = gate->GetGateType();
     const auto inverse = AdjointGateType(type);
     if (inverse == Circuits::QuantumGateType::kNone)
-    {
-        if (clone_unsupported)
-            return op->Clone();
         throw Error("unsupported_capability", "Adjoint is not implemented for this gate");
-    }
 
     auto params = gate->GetParams();
     if (inverse == type && params.empty())

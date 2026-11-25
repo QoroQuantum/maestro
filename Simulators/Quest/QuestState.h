@@ -539,6 +539,7 @@ class QuestState : public ISimulator
      */
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         return questLib->GetExpectationValue(sim, pauliString.c_str());
     }
 

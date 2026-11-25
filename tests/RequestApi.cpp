@@ -937,6 +937,28 @@ try
     Near(Real(result.at("expectation_values").at(1).at(0)), -1);
     Near(Real(result.at("expectation_values").at(2).at(0)), 1);
 
+    // With a zero horizon, the unused step cannot make initial readout intermediate.
+    request = Request("incremental_evolve", 1, "h q[0]; measure q[0] -> c[0];");
+    request["step_circuit"] = Request("execute", 1, "if(c==1) z q[0];").at("circuit");
+    request["steps"] = j::array{0};
+    request["observables"] = j::array{"X"};
+    Near(Real(Call(request).at("expectation_values").at(0).at(0)), 1);
+
+    request = Request("incremental_evolve", 1, "x q[0]; measure q[0] -> c[0];");
+    request["step_circuit"] = Request("execute", 1, "if(c==1) x q[0]; x q[0]; measure q[0] -> c[0];").at("circuit");
+    request["steps"] = j::array{1, 2, 3};
+    request["observables"] = j::array{"Z"};
+    result = Call(request);
+    for (const auto &values : result.at("expectation_values").as_array())
+        Near(Real(values.at(0)), -1);
+
+    request = Request("checkpoint_batch", 2, "x q[0]; measure q[0] -> c[0]; x q[0];");
+    request["suffixes"] = j::array{Request("execute", 2, "z q[1]; if(c==1) x q[0]; measure q[0] -> c[1]; measure q[1] -> c[0];").at("circuit"),
+                                   Request("execute", 2, "measure q[1] -> c[1];").at("circuit")};
+    result = Call(request);
+    Near(Real(result.at("results").at(0).at("counts").at("01")), 80);
+    Near(Real(result.at("results").at(1).at("counts").at("10")), 80);
+
     request = Request("checkpoint_batch", 1, "x q[0];");
     request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit"), Request("execute", 1, "x q[0]; measure q->c;").at("circuit")};
     result = Call(request);
@@ -1001,7 +1023,9 @@ try
     Near(Real(result.at("expectation_values").at(1).at(0)), -1);
     Near(Real(result.at("expectation_values").at(2).at(0)), 1);
     request["simulator"].as_object()["method"] = "statevector";
-    Call(request, false, true);
+    Call(request, true, true);
+    result = Call(request);
+    Near(Real(result.at("expectation_values").at(1).at(0)), -1);
 
     request = Request("checkpoint_batch", 1, "x q[0];", "density_matrix");
     request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit"), Request("execute", 1, "x q[0]; measure q->c;").at("circuit")};

@@ -28,6 +28,25 @@ def simulator(method, backend):
         owner.destroy_simulator(handle)
 
 
+@pytest.mark.parametrize("method", [
+    maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState,
+    maestro.SimulationType.PathIntegral, maestro.SimulationType.TensorNetwork,
+    maestro.SimulationType.PauliPropagator,
+])
+def test_invalid_pauli_rejected_before_reduction_and_by_simulator(method):
+    backend = maestro.SimulatorType.QCSim
+    config = maestro.SimulatorConfig(simulator_type=backend, simulation_type=method, fixed_backend=True)
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.x(0)
+    with pytest.raises(ValueError, match="Invalid Pauli"):
+        circuit.estimate("Z;A", config=config)
+    with pytest.raises(ValueError, match="Invalid Pauli"):
+        circuit.mirror_fidelity(observables=["A"], config=config)
+    with simulator(method, (backend, "double")) as sim:
+        with pytest.raises(ValueError, match="Invalid Pauli"):
+            sim.expectation_values(["Z", "A"])
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
     maestro.SimulationType.MatrixProductState, maestro.SimulationType.MatrixProductOperator])
 def test_real_batches(method, backend):
@@ -38,6 +57,9 @@ def test_real_batches(method, backend):
         assert sim.expectation_values(paulis) == pytest.approx([1, -1, 1, 1, 1])
         assert sim.ExpectationValues(paulis) == pytest.approx([1, -1, 1, 1, 1])
         assert sim.expectation_values([]) == []
+        for word in ("A", "IIXA"):
+            with pytest.raises(ValueError, match="Invalid Pauli"):
+                sim.expectation_values(["ZZ", word])
         sim.SaveState()
         sim.ApplyX(0)
         assert sim.expectation_values(paulis) == pytest.approx([1, 1, -1, 1, 1])

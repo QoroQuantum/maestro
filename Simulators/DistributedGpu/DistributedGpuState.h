@@ -250,6 +250,7 @@ class DistributedGpuState : public ISimulator
 
     double ExpectationValue(const std::string &pauli) override
     {
+        ValidatePauliString(pauli);
         return Native().ExpectationValue(pauli.c_str(), pauli.size());
     }
 

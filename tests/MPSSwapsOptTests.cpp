@@ -981,6 +981,23 @@ BOOST_AUTO_TEST_CASE(DummyOperatorChainModel)
 // Layering moves operations on idle qubits forward. Measurements writing a
 // classical bit must still follow earlier writes to it and the conditional
 // operations reading its previous value.
+BOOST_AUTO_TEST_CASE(LayersKeepConditionalMeasurementDestination)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+    const auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}});
+    const auto circuit = CF::CreateCircuit({CF::CreateGate(Gate::kCXGateType, 0, 1), CF::CreateGate(Gate::kCXGateType, 0, 2),
+                                            CF::CreateConditionalMeasurement(measurement, CF::CreateEqualCondition({0}, {false})),
+                                            CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kXGateType, 3), 1)});
+    for (const auto &layers : {circuit->ToLayers(), circuit->ToLayersNoClone(), circuit->ToMultipleQubitsLayers(), circuit->ToMultipleQubitsLayersNoClone()})
+    {
+        const auto flattened = Circuits::Circuit<>::LayersToCircuit(layers);
+        BOOST_REQUIRE_EQUAL(flattened->size(), 4u);
+        BOOST_CHECK(flattened->GetOperations()[2]->GetType() == Circuits::OperationType::kConditionalMeasurement);
+        BOOST_CHECK(flattened->GetOperations()[3]->GetType() == Circuits::OperationType::kConditionalGate);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(LayersKeepClassicalBitOrder)
 {
     using CF = Circuits::CircuitFactory<>;

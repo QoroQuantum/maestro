@@ -690,47 +690,75 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
 
 
 class NonCliffordTaskCircuit:
-    """Wrapper around a Stim-like circuit that supports non-Clifford gates for Sinter tasks."""
+    """Stim-like Sinter input with non-Clifford gates and a Maestro noiseless reference."""
 
     def __init__(self, circuit_str: str):
         self.circuit_str = circuit_str
-        self._clifford_lines = []
-        num_dets = 0
-        num_obs = 0
-        num_meas = 0
-
+        annotation_lines = []
+        self._has_non_clifford_gates = False
         for line in circuit_str.strip().splitlines():
             name, args, targets = _parse_instruction_line(line)
-            # Skip non-Clifford gates (T, T_DAG, or parameterized rotations) in Clifford baseline representation
             if name in ("T", "T_DAG") or (name in ("RX", "RY", "RZ") and args):
-                continue
-            if name:
-                self._clifford_lines.append(line)
-                if name == "DETECTOR":
-                    num_dets += 1
-                elif name == "OBSERVABLE_INCLUDE":
-                    num_obs += 1
-                elif name in ("M", "MZ", "MX", "MY", "MR", "MRZ", "MRX", "MRY"):
-                    num_meas += len(targets)
+                self._has_non_clifford_gates = True
+                # Keep the qubit indices, including wires touched only by these gates.
+                annotation_lines.append("I " + " ".join(map(str, targets)))
+            elif name:
+                annotation_lines.append(line)
 
-        self._clifford_circuit = stim.Circuit("\n".join(self._clifford_lines))
-        self.num_detectors = self._clifford_circuit.num_detectors
-        self.num_observables = self._clifford_circuit.num_observables
-        self.num_measurements = self._clifford_circuit.num_measurements
+        self._annotation_circuit = stim.Circuit("\n".join(annotation_lines))
+        self.num_detectors = self._annotation_circuit.num_detectors
+        self.num_observables = self._annotation_circuit.num_observables
+        self.num_measurements = self._annotation_circuit.num_measurements
 
     @property
     def num_qubits(self) -> int:
-        return self._clifford_circuit.num_qubits
+        return self._annotation_circuit.num_qubits
 
-    def compile_m2d_converter(self) -> stim.CompiledMeasurementTracker:
-        return self._clifford_circuit.compile_m2d_converter()
+    def compile_m2d_converter(self) -> stim.CompiledMeasurementsToDetectionEventsConverter:
+        if not self._has_non_clifford_gates or not self.num_measurements or not (self.num_detectors or self.num_observables):
+            return self._annotation_circuit.compile_m2d_converter()
+
+        # Any possible noiseless record has the correct deterministic parities.
+        # A fixed seed also gives gauge detectors a reproducible reference branch.
+        clean = [
+            (name, [] if name in MEASUREMENTS else args, targets)
+            for name, args, targets in self.flattened()
+            if name not in LOCAL_NOISE
+        ]
+        circuit, _, width = translate_stim_to_maestro(clean)
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            fixed_backend=True,
+            singular_value_threshold=0.0,
+            seed=0,
+        )
+        result = circuit.execute(config, shots=1, return_samples=True)
+        reference = samples_to_measurements(
+            result["samples"], width, 1, storage_width=max(circuit.num_qubits, width)
+        )[0]
+        # Supply that record to Stim at the original measurement positions. MPAD
+        # supplies fixed measurement results and preserves every rec[-k] offset.
+        annotations = stim.Circuit()
+        offset = 0
+        for instruction in self._annotation_circuit:
+            if instruction.name in MEASUREMENTS:
+                stop = offset + len(instruction.targets_copy())
+                annotations.append("MPAD", reference[offset:stop].astype(int).tolist())
+                offset = stop
+            elif instruction.name in STIM_ANNOTATIONS:
+                annotations.append(instruction)
+        return annotations.compile_m2d_converter()
 
     def compile_detector_sampler(self):
         # Explicitly fails because of non-Clifford gates
         raise ValueError("Circuit contains non-Clifford gates; cannot compile Stim detector sampler.")
 
     def detector_error_model(self, *args, **kwargs) -> stim.DetectorErrorModel:
-        return self._clifford_circuit.detector_error_model(*args, **kwargs)
+        if self._has_non_clifford_gates:
+            raise ValueError("Stim cannot derive an error model for non-Clifford gates. "
+                             "Supply sinter.Task(detector_error_model=...) for decoding.")
+        return self._annotation_circuit.detector_error_model(*args, **kwargs)
 
     def flattened(self):
         instructions = []
@@ -974,6 +1002,12 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
                 raise ValueError(f"Unknown decoder {decoder_to_use!r}")
             if hasattr(decoder_obj, "compile_decoder_for_dem"):
                 dem = task.detector_error_model
+                if dem is None and decoder_to_use == "vacuous" and isinstance(task.circuit, NonCliffordTaskCircuit):
+                    # The vacuous decoder only needs the width of its all-zero predictions.
+                    dem = stim.DetectorErrorModel()
+                    if task.circuit.num_observables:
+                        last = stim.target_logical_observable_id(task.circuit.num_observables - 1)
+                        dem.append("logical_observable", [], [last])
                 if dem is None and hasattr(task.circuit, "detector_error_model"):
                     try:
                         dem = task.circuit.detector_error_model(decompose_errors=True, approximate_disjoint_errors=True)

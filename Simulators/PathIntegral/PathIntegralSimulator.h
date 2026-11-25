@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "../../Circuit/UnitaryPreparation.h"
+#include "../Core/PauliString.h"
 #include "PathIntegral.h"
 
 namespace Simulators
@@ -321,6 +322,7 @@ class PathIntegralSimulator
 
     double ExpectationValue(const std::string &pauliStringOrig)
     {
+        ValidatePauliString(pauliStringOrig);
 #ifdef QC_PATH_INTEGRAL_DIRECT_EXPECTATION
         return simulator.ExpectationValue(pauliStringOrig);
 #else

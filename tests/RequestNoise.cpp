@@ -1503,6 +1503,24 @@ void TestLegacyCountsPolicy()
           "Legacy channel sampler lost the damped population or the handle's output width");
     program[1].as_object()["factors"] = j::array{};
     Check(!SimpleExecute(fresh.handle, j::serialize(program).c_str(), "{}"), "Legacy execution accepted an empty channel");
+
+    // A measurement conditioned on the initially clear bit must leave H;H coherent.
+    const j::object h{{"name", "h"}, {"qubits", j::array{0}}};
+    j::object read{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}, {"conditional_reg", j::array{1}}};
+    program = {h, read, h};
+    Near(estimate("{}"), 1.);
+    read.erase("conditional_reg");
+    read["readout_error"] = 1.;
+    const j::object readSecond{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{1}}};
+    program = {readSecond, read};
+    const auto flipped = Native(SimpleExecute(fresh.handle, j::serialize(program).c_str(), R"({"shots":8})"));
+    Check(Real(flipped.at("counts").at("10")) == 8, "Legacy JSON lost the measurement readout error");
+    // The flipped record is visible to a later conditional measurement.
+    const j::object x{{"name", "x"}, {"qubits", j::array{0}}};
+    const j::object guarded{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{1}}, {"conditional_reg", 0}};
+    program = {read, x, guarded};
+    const auto feedback = Native(SimpleExecute(fresh.handle, j::serialize(program).c_str(), R"({"shots":8})"));
+    Check(Real(feedback.at("counts").at("11")) == 8, "Legacy JSON lost the measurement predicate or its destination bit");
 }
 
 void TestAutomaticMixedStateNoise()

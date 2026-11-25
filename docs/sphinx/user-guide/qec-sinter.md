@@ -72,6 +72,13 @@ records = MaestroCompiledSampler(bell).sample_measurements(shots=1000)
 print(records.shape, "bits always agree:", bool((records[:, 0] == records[:, 1]).all()))
 ```
 
+For extended gate strings containing `T`, `T_DAG` or parameterized rotations,
+wrap the string in `maestro.sinter.NonCliffordTaskCircuit`. Maestro runs the
+full noiseless circuit once to establish the detector and observable reference.
+Pass `detector_error_model=` on the `sinter.Task` for `sinter.collect` or a
+decoder that needs a prior. When you use `MaestroCompiledSampler` directly,
+raw samples and the `vacuous` decoder work without a prior.
+
 :::{admonition} Requires GPU access
 :class: note
 `MaestroCompiledSampler(..., use_gpu=True)` and GPU configs need the GPU

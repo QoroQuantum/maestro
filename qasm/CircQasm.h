@@ -16,6 +16,10 @@
 #define _CIRCQASM_H_
 
 #include "../Circuit/Circuit.h"
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
 
 namespace qasm
 {
@@ -123,6 +127,9 @@ template <typename Time = Types::time_type> class CircToQasm
             qasm += GateToQasm(operation, version);
             break;
         case Circuits::OperationType::kMeasurement: {
+            const auto &rates = std::static_pointer_cast<Circuits::MeasurementOperation<Time>>(operation)->GetReadout();
+            if (std::any_of(rates.begin(), rates.end(), [](const auto &r) { return r.p_meas1_prep0 != 0 || r.p_meas0_prep1 != 0; }))
+                throw std::invalid_argument("OpenQASM cannot represent measurement readout error.");
             auto qbits = operation->AffectedQubits();
             auto bits = operation->AffectedBits();
 
@@ -134,9 +141,16 @@ template <typename Time = Types::time_type> class CircToQasm
         }
         break;
         case Circuits::OperationType::kReset: {
-            auto qbits = operation->AffectedQubits();
-            for (const auto &qbit : qbits)
-                qasm += "reset q[" + std::to_string(qbit) + "];\n";
+            const auto reset = std::static_pointer_cast<Circuits::Reset<Time>>(operation);
+            const auto &qubits = reset->GetQubits();
+            const auto &targets = reset->GetResetTargets();
+            for (size_t i = 0; i < qubits.size(); ++i)
+            {
+                const auto operand = " q[" + std::to_string(qubits[i]) + "];\n";
+                qasm += "reset" + operand;
+                if (i < targets.size() && targets[i])
+                    qasm += "U(pi,0,pi)" + operand; // X, using the built-in gate of both dialects
+            }
         }
         break;
         case Circuits::OperationType::kConditionalGate:
@@ -190,14 +204,16 @@ template <typename Time = Types::time_type> class CircToQasm
         case Circuits::OperationType::kDelay: {
             auto delayOp = std::static_pointer_cast<Circuits::Delay<Time>>(operation);
             auto qbit = delayOp->GetQubit();
-            auto dur = delayOp->GetDuration();
+            std::ostringstream duration;
+            duration.imbue(std::locale::classic());
+            duration << std::setprecision(std::numeric_limits<Time>::max_digits10) << delayOp->GetDuration();
             if (version == QasmVersion::V3)
             {
-                qasm += "delay[" + std::to_string(dur) + "s] q[" + std::to_string(qbit) + "];\n";
+                qasm += "delay[" + duration.str() + "s] q[" + std::to_string(qbit) + "];\n";
             }
             else
             {
-                qasm += "delay(" + std::to_string(dur) + ") q[" + std::to_string(qbit) + "];\n";
+                qasm += "delay(" + duration.str() + ") q[" + std::to_string(qbit) + "];\n";
             }
         }
         break;

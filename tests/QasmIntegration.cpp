@@ -285,6 +285,31 @@ BOOST_AUTO_TEST_CASE(ControlledGateExportUsesDialectSpecificNames)
     BOOST_CHECK_THROW(generate(Circuits::QuantumGateType::kCUGateType, 0.2, 0.3, 0.4, 0.5, v2), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(ExportPreservesResetTargetsAndSubMicrosecondDelays)
+{
+    using Exporter = qasm::CircToQasm<>;
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0, 1}, 0, std::vector<bool>{true, false}));
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(1, 1e-9));
+    for (const auto version : {Exporter::QasmVersion::V2, Exporter::QasmVersion::V3})
+    {
+        qasm::QasmToCirc<> parser;
+        const auto roundTrip = parser.ParseAndTranslate(Exporter::Generate(circuit, version));
+        BOOST_REQUIRE_MESSAGE(roundTrip, parser.GetErrorMessage());
+        const auto &last = roundTrip->GetOperations().back();
+        BOOST_REQUIRE(last->GetType() == Circuits::OperationType::kDelay);
+        BOOST_CHECK_EQUAL(std::static_pointer_cast<Circuits::Delay<>>(last)->GetDuration(), 1e-9);
+        auto simulator = MakeInitializedSimulator(2);
+        Circuits::OperationState state(2);
+        roundTrip->Execute(simulator, state);
+        BOOST_CHECK_CLOSE(simulator->Probability(1), 1., 1e-8);
+    }
+    auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+    measurement->SetReadout({{1., 0.}});
+    circuit->AddOperation(measurement);
+    BOOST_CHECK_THROW(Exporter::Generate(circuit), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(ConditionalMeasurementExportRoundTripsSemantics)
 {
     const auto executeExport = [](const std::string &qasmStr, bool predicateValue, size_t predicateBit = 0, size_t measuredBit = 1) {

@@ -99,12 +99,13 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
         network_->GetController()->SetOptimizeCircuit(false);
         if (config_.seed)
             simulator_->SetSeed(*config_.seed);
-        Circuits::OperationState state(num_qubits_);
+        const size_t prefix_bits = executed_prefix ? executed_prefix->GetMaxCbitIndex() + 1 : 0;
+        prefix_state_.AllocateBits(std::max(register_qubits, prefix_bits));
         const bool route_prefix = network_->PrepareCheckpointRouting(simulator_, executed_prefix, true);
         if (route_prefix)
             simulator_->SetUpcomingGates(executed_prefix->GetOperations());
         if (executed_prefix && !executed_prefix->GetOperations().empty())
-            executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
+            executed_prefix->ExecuteBD(simulator_, prefix_state_, &max_bond_dim_);
         // Saves and worker clones need the final site map, but every suffix
         // provides its own gates. Drop the finished prefix's routing window.
         if (route_prefix)
@@ -156,7 +157,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     if (shots < 1)
         throw std::invalid_argument("shots must be >= 1.");
 
-    size_t total_cbits = std::max(static_cast<size_t>(num_qubits_), num_measurements);
+    size_t total_cbits = std::max(prefix_state_.GetNumBits(), num_measurements);
     const auto cbits = suffix->GetBits();
     if (!cbits.empty())
         total_cbits = std::max(total_cbits, *cbits.rbegin() + 1);
@@ -230,7 +231,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     const auto sample_suffix = [&](const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, Circuits::OperationState &state,
                                    size_t batch_shots, size_t first_shot, std::optional<uint64_t> seed, Circuits::Circuit<>::ExecuteResults &counts,
                                    size_t &max_bond) {
-        state.Reset();
+        state.SetResultsInOrder(prefix_state_.GetAllBits());
         // Restoring recovers the prefix's tensors and site map; each sampling path
         // binds its own execution window and starts its gate counter at zero.
         simulator->RestoreState();
@@ -252,10 +253,13 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
         for (size_t shot = 0; shot < batch_shots; ++shot)
         {
             if (shot > 0)
+            {
                 simulator->RestoreState();
+                state.SetResultsInOrder(prefix_state_.GetAllBits());
+            }
             simulator->SetGatesCounter(0);
             simulator->SetUpcomingGates(circuit->GetOperations());
-            circuit->ExecuteBD(simulator, state, &max_bond);
+            circuit->ExecuteContinuation(simulator, state, &max_bond);
             record(state, first_shot + shot, counts);
         }
         return false;

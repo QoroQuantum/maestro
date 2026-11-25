@@ -478,6 +478,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
 {
     if (!circuit)
         throw std::invalid_argument("Circuit is null.");
+    Simulators::ValidatePauliStrings(observables);
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyEstimate out;
     out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels);
@@ -679,18 +680,24 @@ struct SpareRegister
     }
 };
 
+RecordCircuitPtr BeforeFidelityReadout(const RecordCircuitPtr &circuit)
+{
+    const auto flat = circuit->HasCompositeOperations() ? circuit->InlinedComposites() : circuit;
+    return flat->RemoveEndMeasurements();
+}
+
 double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config, SpareRegister *spare)
 {
     auto combined = std::make_shared<Circuits::Circuit<double>>();
     // Fidelity is evaluated before terminal readout, as in inner_product.
     // This includes conditional terminal readout. NoisyFidelity validates that
     // no genuinely intermediate measurement remains in the input circuit.
-    const auto before_readout = noisy->RemoveEndMeasurements();
+    const auto before_readout = BeforeFidelityReadout(noisy);
     for (const auto &op : before_readout->GetOperations())
         combined->AddOperation(op->Clone());
     const auto &ideal_ops = ideal->GetOperations();
     for (auto it = ideal_ops.rbegin(); it != ideal_ops.rend(); ++it)
-        if (auto adjoint = adjoint_gate(*it, true))
+        if (auto adjoint = adjoint_gate(*it))
             combined->AddOperation(adjoint);
 
     const int num_qubits = std::max(1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
@@ -734,7 +741,7 @@ double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitP
         throw std::runtime_error("noisy_fidelity: requested backend is unavailable.");
     if (config.seed)
         simulator->SetSeed(*config.seed);
-    Circuits::OperationState state(num_qubits);
+    Circuits::OperationState state(std::max(register_qubits, combined->GetMaxCbitIndex() + 1));
     combined->ExecuteBD(simulator, state);
     return simulator->Probability(0);
 }
@@ -742,7 +749,13 @@ double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitP
 
 double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config)
 {
-    return RealizationFidelityOn(ideal, noisy, config, nullptr);
+    if (!ideal || !noisy)
+        throw std::invalid_argument("RealizationFidelity requires both an ideal circuit and a noisy circuit.");
+    const auto preparation = BeforeFidelityReadout(ideal);
+    if (preparation->HasQuantumChannels() || !HasUnitaryIdeal(preparation))
+        throw std::invalid_argument("RealizationFidelity requires a unitary ideal preparation. Mid-circuit measurements, resets on used qubits, "
+                                    "classical control and quantum channels are unsupported in the ideal circuit.");
+    return RealizationFidelityOn(PreparedUnitary(preparation), noisy, config, nullptr);
 }
 
 bool HasUnitaryIdeal(const RecordCircuitPtr &before_readout)
@@ -786,11 +799,11 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     // nested circuits of them are admitted, as are resets that precede every
     // other operation on their wire: on the fresh register they prepare |0> or
     // |1>, which the ideal state includes (PreparedUnitary).
-    const auto before_readout = circuit->RemoveEndMeasurements();
+    const auto before_readout = BeforeFidelityReadout(circuit);
     if (!HasUnitaryIdeal(before_readout))
         throw std::invalid_argument("noisy_fidelity requires a unitary ideal circuit; mid-circuit measurements, resets after other operations "
                                     "on their qubit and classical control are unsupported.");
-    const auto ideal = PreparedUnitary(WithoutCircuitChannels(circuit));
+    const auto ideal = PreparedUnitary(WithoutCircuitChannels(before_readout));
     noise::NoiseInjectionPlan plan(circuit, noise_model);
     // The register each realization evaluates: fidelity drops terminal
     // readout, so a measured qubit no gate touches is not part of it, while a

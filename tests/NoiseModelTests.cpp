@@ -1032,7 +1032,7 @@ BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveEnsureProperOrder)
     BOOST_CHECK_EQUAL(seen, 2u);
 }
 
-BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates)
+BOOST_AUTO_TEST_CASE(RepeatedClassicalWritesPreserveBothMeasurementsAndTheirReadout)
 {
     Circuits::Circuit<double> circuit;
     auto noisy = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
@@ -1042,8 +1042,12 @@ BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates)
 
     circuit.EnsureProperOrderForMeasurements();
 
-    BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 1u);
-    auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[0]);
+    BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 2u);
+    const auto first = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[0]);
+    BOOST_CHECK_EQUAL(first->GetQubits()[0], 0u);
+    BOOST_REQUIRE(first->HasReadout());
+    BOOST_CHECK_EQUAL(first->GetReadout()[0].p_meas1_prep0, 1.);
+    auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[1]);
     BOOST_CHECK_EQUAL(rebuilt->GetQubits()[0], 1u);
     BOOST_CHECK(!rebuilt->HasReadout());
     auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);

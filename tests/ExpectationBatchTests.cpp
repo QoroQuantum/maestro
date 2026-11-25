@@ -110,6 +110,8 @@ void ComplexAndC()
     Near(imag[0], 0);
     Near(imag[3], 9);
     const char *invalid[]{"XX", "bad"};
+    Check(!MaestroExpectationValues(sim.get(), invalid, 2, real, 4), "C real batch accepted an invalid Pauli");
+    Near(real[0], 4);
     Check(!MaestroExpectationValuesComplex(sim.get(), invalid, 2, 1, real, imag, 4), "C invalid Pauli accepted");
     Near(real[0], 4);
     Near(imag[0], 0);

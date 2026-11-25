@@ -773,6 +773,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = mpo->ExpectationValue(pauliString);
         return result;
@@ -780,6 +781,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
     {
+        ValidatePauliStrings(paulis);
         if (!mpo)
             return IState::ExpectationValues(paulis);
         std::vector<double> result(paulis.size(), 0.);

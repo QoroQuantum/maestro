@@ -796,16 +796,8 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         if (pauliStringOrig.empty())
             return 1.0;
         std::string pauliString = pauliStringOrig;
-        if (pauliString.size() > GetNumberOfQubits())
-        {
-            for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i)
-            {
-                const auto pauliOp = toupper(pauliString[i]);
-                if (pauliOp != 'I' && pauliOp != 'Z')
-                    return 0.0;
-            }
-            pauliString.resize(GetNumberOfQubits());
-        }
+        if (!RestrictPauliToRegister(pauliString, GetNumberOfQubits()))
+            return 0.0;
         std::vector<QC::Gates::AppliedGate<Eigen::MatrixXcd>> pauliStringVec;
         pauliStringVec.reserve(pauliString.size());
         for (size_t q = 0; q < pauliString.size(); ++q)

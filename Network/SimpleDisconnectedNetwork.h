@@ -293,6 +293,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, const std::vector<std::string> &paulis) override
     {
+        Simulators::ValidatePauliStrings(paulis);
         if constexpr (std::is_same_v<Time, double>)
             if (GetNumHosts() == 1 && recreateIfNeeded && resetBeforeExecution && configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
                 if (auto values = MaestroExecution::TryNetworkTerminalExpectation(
@@ -419,6 +420,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
                                                   const std::vector<std::string> &paulis) override
     {
+        Simulators::ValidatePauliStrings(paulis);
         if constexpr (std::is_same_v<Time, double>)
             if (hostId < GetNumHosts() && recreateIfNeeded && resetBeforeExecution &&
                 configuration.GetConfiguration("terminal_channel_policy") != "trajectories")

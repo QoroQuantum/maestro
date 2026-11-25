@@ -1,16 +1,12 @@
+#include "Execution/IncrementalEvolution.h"
 #include "core.h"
 #include "runtime.h"
 
 namespace maestro_bindings
 {
 
-// Core Incremental Time Evolution Logic
-// Uses SaveState/RestoreState to avoid re-simulating from scratch at each
-// measurement point. Instead of building a fresh circuit with k Trotter steps
-// per measurement, this creates one simulator, evolves forward incrementally,
-// and checkpoints the MPS state for expectation value computation.
-//
-// Cost: O(total_steps) instead of O(Σ step_i) ≈ O(n_points × avg_step).
+// Each observation reads the current simulator state. Both the quantum and
+// classical registers continue into the next step on the same trajectory.
 nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init_circuit, std::shared_ptr<Circuits::Circuit<double>> trotter_step,
                                  const std::vector<int> &measure_at_steps, const std::vector<std::string> &paulis, const SimulatorConfig &config)
 {
@@ -65,17 +61,16 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     // Disable circuit optimization to preserve gate ordering
     network->GetController()->SetOptimizeCircuit(false);
 
-    Circuits::OperationState opState;
-    opState.AllocateBits(num_qubits);
+    Circuits::OperationState opState(std::max(init_circuit->GetMaxCbitIndex(), trotter_step->GetMaxCbitIndex()) + 1);
+    const MaestroExecution::IncrementalEvolution evolution(init_circuit, trotter_step, std::max(0, sorted_steps.back()));
 
     size_t current_max_bond_dim = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Execute initial circuit (non-measurement gates) — release GIL
     {
         nb::gil_scoped_release release;
-        init_circuit->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
+        evolution.Start(simulator, opState, current_max_bond_dim);
     }
 
     int current_step = 0;
@@ -89,10 +84,8 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
         // Apply delta trotter steps — release GIL for heavy computation
         {
             nb::gil_scoped_release release;
-            for (int s = 0; s < delta; ++s)
-            {
-                trotter_step->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
-            }
+            for (int s = current_step; s < target_step; ++s)
+                evolution.Step(s, simulator, opState, current_max_bond_dim);
         }
         current_step = target_step;
 

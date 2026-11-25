@@ -2930,6 +2930,26 @@ class TestMPSOptimizedSwapping:
         max_bond_dimension=16,
     )
 
+    @pytest.mark.parametrize("method", [maestro.SimulationType.MatrixProductState,
+                                      maestro.SimulationType.MatrixProductOperator])
+    def test_routing_preserves_feedback_from_conditional_measurements(self, method):
+        # Touch fourteen sites so both tensor chain backends invoke the layout planner.
+        source = """
+        OPENQASM 3.0; qubit[14] q; bit[6] c;
+        x q[13];
+        cx q[13], q[12]; cx q[12], q[11]; cx q[11], q[10]; cx q[10], q[9];
+        cx q[9], q[8]; cx q[8], q[7]; cx q[7], q[6];
+        x q[0]; c[0] = measure q[0];
+        x q[1]; cx q[1], q[2]; cx q[1], q[3]; cx q[1], q[4];
+        if (c[0]) { c[1] = measure q[1]; }
+        if (c[1]) { x q[5]; }
+        c[5] = measure q[5];
+        """
+        config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim,
+                                        simulation_type=method, seed=11)
+        counts = maestro.simple_execute(source, shots=8, config=config)["counts"]
+        assert sum(shots for bits, shots in counts.items() if bits[5] == "1") == 8
+
     def _make_non_nearest_neighbor_circuit(self):
         """Build a circuit with long-range 2-qubit gates that trigger swap insertion.
 
@@ -5793,6 +5813,42 @@ class TestCorrelatedNoisePhysics:
 
 class TestIncrementalEvolve:
     """Test the incremental_evolve function for time evolution."""
+
+    @pytest.mark.parametrize("init_body,step_body,expected", [
+        ("x q; c[3] = measure q;", "if (c[3]) { x q; }", [1, -1, 1]),
+        ("", "if (c[3]) { x q; } x q; c[3] = measure q;", [-1, -1, -1]),
+    ])
+    def test_classical_feedback_across_fragments(self, init_body, step_body, expected):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit q; bit[4] c; "
+        values = maestro.incremental_evolve(parse(header + init_body), parse(header + step_body), [1, 2, 3], ["Z"])["expectation_values"]
+        assert [v[0] for v in values] == pytest.approx(expected)
+
+    @pytest.mark.parametrize("fragment", ["init", "step"])
+    @pytest.mark.parametrize("operation", ["reset", "measure_x", "channel"])
+    def test_dynamic_operations(self, fragment, operation):
+        init = maestro.circuits.QuantumCircuit()
+        step = maestro.circuits.QuantumCircuit()
+        circuit = init if fragment == "init" else step
+        circuit.x(0)
+        if operation == "reset":
+            circuit.reset(0)
+        elif operation == "measure_x":
+            circuit.measure([(0, 0)])
+            circuit.x(0)
+        else:
+            circuit.channel([0], maestro.QuantumChannel.amplitude_damping(1.0))
+        config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim,
+                                        simulation_type=maestro.SimulationType.Statevector, fixed_backend=True)
+        assert maestro.incremental_evolve(init, step, [1], ["Z"], config)["expectation_values"][0] == pytest.approx([1])
+
+    def test_final_readout_on_unused_wire(self):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit[2] q; bit c; "
+        init = parse(header + "h q[0]; c = measure q[0];")
+        step = parse(header + "x q[1];")
+        values = maestro.incremental_evolve(init, step, [0, 1, 2], ["XI"])["expectation_values"]
+        assert [v[0] for v in values] == pytest.approx([1, 1, 1])
 
     def test_candidate_list_selects_the_driven_backend(self):
         """Evolution drives the backend a candidate list resolves to, not the

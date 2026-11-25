@@ -183,9 +183,7 @@ BOOST_AUTO_TEST_CASE(StdgatesOnlyGateNamesAreQasm3Only)
     CheckQasm3Only("qreg q[2];\n"
                    "cphase(0.5) q[0], q[1];\n",
                    "'cphase' is an OpenQASM 3 stdgates.inc gate");
-    CheckQasm3Only("qreg q[1];\n"
-                   "gphase(0.5);\n",
-                   "'gphase' is an OpenQASM 3 stdgates.inc gate");
+    CheckRejectedWithMessage(kQasm2Header + "qreg q[1];\ngphase(0.5);\n", "'gphase' is an OpenQASM 3 stdgates.inc gate");
 
     // The diagnostic points at the qelib1.inc spelling where there is one,
     // which is the whole reason this rejection is by name rather than a syntax

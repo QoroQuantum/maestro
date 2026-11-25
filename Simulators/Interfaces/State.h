@@ -39,6 +39,7 @@
 #endif
 
 #include "../../Utils/RandomStream.h"
+#include "../Core/PauliString.h"
 #include "../Core/QuantumChannel.h"
 #include "../TensorNetworks/TensorQueries.h"
 #include "SimulatorObserver.h"
