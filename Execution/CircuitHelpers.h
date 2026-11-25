@@ -1,17 +1,76 @@
 #pragma once
-#include "Circuit/Circuit.h"
+#include "Circuit/Factory.h"
+#include "Circuit/UnitaryPreparation.h"
 #include "Json/Json.h"
 
 namespace MaestroExecution
 {
 using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
 
-// The adjoint of a gate, or null for a non-gate operation. A gate without an
-// implemented adjoint throws, or is returned cloned when clone_unsupported is
-// set (the Python bindings' historical fallback). A nested circuit yields the
-// nested circuit of its operations' adjoints in reverse order; like the top
-// level, its non-gate operations are omitted, so callers validate that it is
-// unitary.
+// An inverse with the same gate type may still require transformed parameters.
+inline Circuits::QuantumGateType AdjointGateType(Circuits::QuantumGateType type)
+{
+    using Gate = Circuits::QuantumGateType;
+    switch (type)
+    {
+    case Gate::kXGateType:
+    case Gate::kYGateType:
+    case Gate::kZGateType:
+    case Gate::kHadamardGateType:
+    case Gate::kKGateType:
+    case Gate::kCXGateType:
+    case Gate::kCYGateType:
+    case Gate::kCZGateType:
+    case Gate::kCHGateType:
+    case Gate::kSwapGateType:
+    case Gate::kCCXGateType:
+    case Gate::kCSwapGateType:
+    case Gate::kPhaseGateType:
+    case Gate::kRxGateType:
+    case Gate::kRyGateType:
+    case Gate::kRzGateType:
+    case Gate::kUGateType:
+    case Gate::kCPGateType:
+    case Gate::kCRxGateType:
+    case Gate::kCRyGateType:
+    case Gate::kCRzGateType:
+    case Gate::kCUGateType:
+        return type;
+    case Gate::kSGateType:
+        return Gate::kSdgGateType;
+    case Gate::kSdgGateType:
+        return Gate::kSGateType;
+    case Gate::kTGateType:
+        return Gate::kTdgGateType;
+    case Gate::kTdgGateType:
+        return Gate::kTGateType;
+    case Gate::kSxGateType:
+        return Gate::kSxDagGateType;
+    case Gate::kSxDagGateType:
+        return Gate::kSxGateType;
+    case Gate::kCSxGateType:
+        return Gate::kCSxDagGateType;
+    case Gate::kCSxDagGateType:
+        return Gate::kCSxGateType;
+    default:
+        return Gate::kNone;
+    }
+}
+
+// Both overlap operands must be reversible, including the one only executed forward.
+inline std::shared_ptr<Circuits::Circuit<>> UnitaryPreparation(const std::shared_ptr<Circuits::Circuit<>> &circuit, const std::string &query)
+{
+    auto result = std::make_shared<Circuits::Circuit<>>();
+    Circuits::ForEachUnitaryGate(circuit, query, Circuits::UnitaryPreparationQuery::Overlap, [&](const auto &gate) {
+        if (AdjointGateType(gate->GetGateType()) == Circuits::QuantumGateType::kNone)
+            throw std::invalid_argument(query + " does not support gate type " + std::to_string(static_cast<int>(gate->GetGateType())) + " (unknown adjoint).");
+        result->AddOperation(gate);
+    });
+    return result;
+}
+
+// Noisy fidelity also takes adjoints of validated nested preparations and skips
+// their non-gates. Its historical clone fallback is opt-in.
 inline OperationPtr adjoint_gate(const OperationPtr &op, bool clone_unsupported = false)
 {
     if (op->GetType() == Circuits::OperationType::kComposite)
@@ -30,77 +89,25 @@ inline OperationPtr adjoint_gate(const OperationPtr &op, bool clone_unsupported 
     if (!gate)
         return nullptr;
 
-    const auto gt = gate->GetGateType();
-    const auto params = gate->GetParams();
-
-    switch (gt)
+    const auto type = gate->GetGateType();
+    const auto inverse = AdjointGateType(type);
+    if (inverse == Circuits::QuantumGateType::kNone)
     {
-    // ---- Self-inverse (Hermitian) gates ----
-    case Circuits::QuantumGateType::kXGateType:
-    case Circuits::QuantumGateType::kYGateType:
-    case Circuits::QuantumGateType::kZGateType:
-    case Circuits::QuantumGateType::kHadamardGateType:
-    case Circuits::QuantumGateType::kKGateType:
-    case Circuits::QuantumGateType::kCXGateType:
-    case Circuits::QuantumGateType::kCYGateType:
-    case Circuits::QuantumGateType::kCZGateType:
-    case Circuits::QuantumGateType::kCHGateType:
-    case Circuits::QuantumGateType::kSwapGateType:
-    case Circuits::QuantumGateType::kCCXGateType:
-    case Circuits::QuantumGateType::kCSwapGateType:
-        return op->Clone();
-
-    // ---- Paired gates ----
-    case Circuits::QuantumGateType::kSGateType:
-        return std::make_shared<Circuits::SdgGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSdgGateType:
-        return std::make_shared<Circuits::SGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kTGateType:
-        return std::make_shared<Circuits::TdgGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kTdgGateType:
-        return std::make_shared<Circuits::TGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSxGateType:
-        return std::make_shared<Circuits::SxDagGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kSxDagGateType:
-        return std::make_shared<Circuits::SxGate<>>(gate->GetQubit());
-    case Circuits::QuantumGateType::kCSxGateType:
-        return std::make_shared<Circuits::CSxDagGate<>>(gate->GetQubit(0), gate->GetQubit(1));
-    case Circuits::QuantumGateType::kCSxDagGateType:
-        return std::make_shared<Circuits::CSxGate<>>(gate->GetQubit(0), gate->GetQubit(1));
-
-    // ---- Parametric single-qubit: negate angle ----
-    case Circuits::QuantumGateType::kPhaseGateType:
-        return std::make_shared<Circuits::PhaseGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRxGateType:
-        return std::make_shared<Circuits::RxGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRyGateType:
-        return std::make_shared<Circuits::RyGate<>>(gate->GetQubit(), -params[0]);
-    case Circuits::QuantumGateType::kRzGateType:
-        return std::make_shared<Circuits::RzGate<>>(gate->GetQubit(), -params[0]);
-
-    // ---- U gate: U†(θ,φ,λ,γ) = U(-θ, -λ, -φ, -γ) ----
-    case Circuits::QuantumGateType::kUGateType:
-        return std::make_shared<Circuits::UGate<>>(gate->GetQubit(), -params[0], -params[2], -params[1], -params[3]);
-
-    // ---- Controlled parametric: negate angle ----
-    case Circuits::QuantumGateType::kCPGateType:
-        return std::make_shared<Circuits::CPGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRxGateType:
-        return std::make_shared<Circuits::CRxGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRyGateType:
-        return std::make_shared<Circuits::CRyGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-    case Circuits::QuantumGateType::kCRzGateType:
-        return std::make_shared<Circuits::CRzGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0]);
-
-    // ---- CU gate: CU†(θ,φ,λ,γ) = CU(-θ, -λ, -φ, -γ) ----
-    case Circuits::QuantumGateType::kCUGateType:
-        return std::make_shared<Circuits::CUGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0], -params[2], -params[1], -params[3]);
-
-    default:
         if (clone_unsupported)
             return op->Clone();
         throw Error("unsupported_capability", "Adjoint is not implemented for this gate");
     }
+
+    auto params = gate->GetParams();
+    if (inverse == type && params.empty())
+        return op->Clone();
+
+    // Rotations and phase gates negate their angle. U and CU also exchange phi and lambda.
+    for (double &param : params)
+        param = -param;
+    if (type == Circuits::QuantumGateType::kUGateType || type == Circuits::QuantumGateType::kCUGateType)
+        std::swap(params[1], params[2]);
+    return Circuits::CircuitFactory<>::CreateGateWithVectors(inverse, gate->AffectedQubits(), params);
 }
 
 } // namespace MaestroExecution

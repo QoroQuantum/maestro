@@ -394,7 +394,7 @@ void bind_api(nb::module_ &m)
         "computation (small circuits only). Pass observables (a Pauli "
         "string, ';'-separated string or list) to instead return the "
         "expectation of each observable on the mirror circuit: a float "
-        "for a single string, otherwise a list.");
+        "for a single string, otherwise a list. " MAESTRO_UNITARY_PREPARATION_DOC);
 
     m.def(
         "inner_product",
@@ -402,7 +402,7 @@ void bind_api(nb::module_ &m)
            const SimulatorConfig &config) { return inner_product_core(circuit_1, circuit_2, config); },
         "circuit_1"_a, "circuit_2"_a, "config"_a = SimulatorConfig{},
         "Compute the inner product ``<psi_1|psi_2> = <0|U1^dag U2|0>`` between "
-        "two circuits' output states, using ProjectOnZero.");
+        "two circuits' output states, using ProjectOnZero. " MAESTRO_UNITARY_PREPARATION_DOC);
 
     // =========================================================================
     // Path Integral: Single-State Probability
@@ -414,7 +414,7 @@ void bind_api(nb::module_ &m)
           "This is the path integral's key advantage: it computes a single "
           "amplitude ``<target_state|U|0...0>`` without building the full "
           "statevector, making it efficient for large circuits with few "
-          "branching gates. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
+          "branching gates. " MAESTRO_UNITARY_PREPARATION_DOC "\n\n"
           "Args:\n"
           "    circuit: The QuantumCircuit to evaluate. Any measurements must be unconditional and terminal on their respective qubits.\n"
           "    target_state: A bitstring like '10001001' (qubit 0 is leftmost).\n\n"
@@ -438,7 +438,7 @@ void bind_api(nb::module_ &m)
         },
         "qasm_circuit"_a, "target_state"_a,
         "Compute the probability of a specific output state from a QASM "
-        "circuit using the Pauli path integral simulator. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC);
+        "circuit using the Pauli path integral simulator. " MAESTRO_UNITARY_PREPARATION_DOC);
 }
 
 } // namespace maestro_bindings

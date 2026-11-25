@@ -236,8 +236,10 @@ print("circuit method, MPS: ", mirror.mirror_fidelity(config=mps_config, shots=1
 ```
 
 By default it samples 1024 shots. `full_amplitude=True` computes it exactly,
-which only suits small circuits. Measurements in the circuit are skipped; only
-unitary gates are inverted.
+which only suits small circuits. All mirror modes ignore delays, no-ops, and
+unconditional readout after the last gate on each measured qubit. A later gate
+on a measured qubit, a reset, a classically controlled operation, a quantum
+channel, or a nested circuit raises `ValueError`.
 
 (py_mirror_observables)=
 ### Observable mirror fidelity
@@ -267,7 +269,8 @@ not cancelled, and `shots` and `full_amplitude` are ignored.
 `maestro.inner_product(c1, c2)` returns the complex overlap ⟨ψ₁|ψ₂⟩ of two
 circuits' output states. It evaluates ⟨0|U₁†U₂|0⟩ directly, so with an MPS it
 never builds a full statevector. `abs(overlap) ** 2` is the state fidelity, and
-the phase is the relative global phase.
+the phase is the relative global phase. Both circuits must meet the same
+unitary preparation requirements as {ref}`mirror fidelity <py_mirror>`.
 
 ```{code-cell} python
 bell_a = QuantumCircuit()

@@ -3,7 +3,7 @@
 #include "Execution/SampleRecords.h"
 #include "common.h"
 
-#define MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC                                                                                                                   \
+#define MAESTRO_UNITARY_PREPARATION_DOC                                                                                                                        \
     "Delays, no-ops and unconditional measurements after the last gate on each measured qubit are ignored. "                                                   \
     "All other operations must be supported gates. A mid-circuit measurement, reset, classically controlled operation, "                                       \
     "random bit generator, quantum channel, composite operation or unsupported gate raises ValueError."
