@@ -104,6 +104,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return std::polar(1., TotalGlobalPhase());
     }
 
+    // Complete a retained state after executing only the physical operations.
+    void ApplyGlobalPhase(Simulators::ISimulator &sim) const
+    {
+        ApplyPhase(sim, PhaseForSimulator(sim));
+    }
+
     /**
      * @brief Execute the circuit on the given simulator.
      *
@@ -3262,41 +3268,49 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return bits;
     }
 
+    double PhaseForSimulator(const Simulators::ISimulator &sim) const
+    {
+        const double phase = TotalGlobalPhase();
+        if (phase == 0.)
+            return 0.;
+        using Method = Simulators::SimulationType;
+        switch (sim.GetSimulationType())
+        {
+        case Method::kDensityMatrix:
+        case Method::kMatrixProductOperator:
+        case Method::kPauliPropagator:
+        case Method::kStabilizer:
+            return 0.; // These methods do not expose complex state amplitudes.
+        case Method::kExtendedStabilizer:
+        case Method::kOther:
+            throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
+                                        "complex amplitudes by GlobalPhaseFactor().");
+        default:
+            if (sim.GetNumberOfQubits() == 0)
+                throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
+            return phase;
+        }
+    }
+
+    static void ApplyPhase(Simulators::ISimulator &sim, double phase)
+    {
+        if (phase == 0.)
+            return;
+        const auto sourcePosition = sim.GetGatesCounter();
+        sim.ApplyU(0, 0., 0., 0., phase); // Scalar times identity on the full register.
+        if (sim.IsGateFusionEnabled())
+            sim.FlushPendingGates();
+        sim.SetGatesCounter(sourcePosition); // The phase has no position in the routing window.
+    }
+
     void ExecuteWithPhase(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim, bool resetBits) const
     {
-        double phase = TotalGlobalPhase();
-        if (sim && phase != 0.)
-        {
-            using Method = Simulators::SimulationType;
-            switch (sim->GetSimulationType())
-            {
-            case Method::kDensityMatrix:
-            case Method::kMatrixProductOperator:
-            case Method::kPauliPropagator:
-            case Method::kStabilizer:
-                phase = 0.; // These methods do not expose complex state amplitudes.
-                break;
-            case Method::kExtendedStabilizer:
-            case Method::kOther:
-                throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
-                                            "complex amplitudes by GlobalPhaseFactor().");
-            default:
-                if (sim->GetNumberOfQubits() == 0)
-                    throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
-                break;
-            }
-        }
+        const double phase = sim ? PhaseForSimulator(*sim) : 0.;
         if (resetBits)
             state.Reset();
         ExecutePhysicalOperations(sim, state, curMaxBondDim);
-        if (sim && phase != 0.)
-        {
-            const auto sourcePosition = sim->GetGatesCounter();
-            sim->ApplyU(0, 0., 0., 0., phase); // Scalar times identity on the full register.
-            if (sim->IsGateFusionEnabled())
-                sim->FlushPendingGates();
-            sim->SetGatesCounter(sourcePosition); // The phase has no position in the routing window.
-        }
+        if (sim)
+            ApplyPhase(*sim, phase);
     }
 
     static void ExecuteOperation(const OperationPtr &op, const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim)

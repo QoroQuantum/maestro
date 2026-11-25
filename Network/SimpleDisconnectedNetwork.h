@@ -161,54 +161,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     void Execute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override
     {
-        const auto recreate = recreateIfNeeded;
-
-        auto simType = Simulators::SimulatorType::kQCSim;
-        auto method = Simulators::SimulationType::kMatrixProductState;
-        size_t numQubits = 2;
-        if (simulator)
-        {
-            simType = simulator->GetType();
-            method = simulator->GetSimulationType();
-            numQubits = simulator->GetNumberOfQubits();
-        }
-        const size_t templateQubits = simulatorQubits;
-        // Without a simulator the network does not simulate (a derived one may
-        // only translate the circuit): executing must not create one.
-        const bool hadSimulator = simulator != nullptr;
-
-        // Execute continues from the caller's prepared quantum state. Repeated
-        // shots and expectation queries still start from zero, even for one shot.
-        const auto reset = resetBeforeExecution;
-        recreateIfNeeded = false;
-        resetBeforeExecution = false;
-
-        ExecuteResults res;
-        try
-        {
-            res = RepeatedExecute(circuit, 1);
-        }
-        catch (...)
-        {
-            recreateIfNeeded = recreate;
-            resetBeforeExecution = reset;
-            throw;
-        }
-
-        recreateIfNeeded = recreate;
-        resetBeforeExecution = reset;
-
-        // put the results in the state
-        if (!res.empty())
-        {
-            const auto &first = *res.begin();
-            GetState().SetResultsInOrder(first.first);
-        }
-
-        if (recreate && hadSimulator &&
-            (!simulator ||
-             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
-            RecreateSimulatorKeepingResults(simType, method, templateQubits);
+        ExecuteAndRetainState(circuit, std::nullopt);
     }
 
     /**
@@ -225,57 +178,51 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     void ExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
     {
-        const auto recreate = recreateIfNeeded;
+        ExecuteAndRetainState(circuit, hostId);
+    }
 
-        auto simType = Simulators::SimulatorType::kQCSim;
-        auto method = Simulators::SimulationType::kMatrixProductState;
-        size_t numQubits = 2;
-        if (simulator)
-        {
-            simType = simulator->GetType();
-            method = simulator->GetSimulationType();
-            numQubits = simulator->GetNumberOfQubits();
-        }
-        const size_t templateQubits = simulatorQubits;
-        // Without a simulator the network does not simulate (a derived one may
-        // only translate the circuit): executing must not create one.
+  private:
+    void ExecuteAndRetainState(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, std::optional<size_t> hostId)
+    {
+        // Keep only the template metadata. Selection may replace the simulator,
+        // and a trajectory job can return a clone of its prepared state.
         const bool hadSimulator = simulator != nullptr;
-
-        // RAII: restore recreateIfNeeded on any exit path (including exceptions).
-        struct ScopedRestoreFlag
-        {
-            bool &flag, saved;
-
-            ScopedRestoreFlag(bool &f) : flag(f), saved(f)
-            {
-                flag = false;
-            }
-
-            ~ScopedRestoreFlag()
-            {
-                flag = saved;
-            }
-        };
+        const auto simType = simulator ? simulator->GetType() : Simulators::SimulatorType::kQCSim;
+        const auto method = simulator ? simulator->GetSimulationType() : Simulators::SimulationType::kMatrixProductState;
+        const size_t numQubits = simulator ? simulator->GetNumberOfQubits() : 0;
+        const size_t templateQubits = simulatorQubits;
 
         ExecuteResults res;
         {
-            ScopedRestoreFlag restoreGuard(recreateIfNeeded);
-            res = RepeatedExecuteOnHost(circuit, hostId, 1);
+            struct RestoreFlags
+            {
+                bool &recreate, &reset;
+                const bool savedRecreate = recreate, savedReset = reset;
+
+                ~RestoreFlags()
+                {
+                    recreate = savedRecreate;
+                    reset = savedReset;
+                }
+            } restore{recreateIfNeeded, resetBeforeExecution};
+
+            recreateIfNeeded = false;
+            if (!hostId)
+                resetBeforeExecution = false; // Whole-network Execute continues the caller's state.
+            res = hostId ? RepeatedExecuteOnHost(circuit, *hostId, 1) : RepeatedExecute(circuit, 1);
         }
 
-        // put the results in the state
         if (!res.empty())
-        {
-            const auto &first = *res.begin();
-            GetState().SetResultsInOrder(first.first);
-        }
+            GetState().SetResultsInOrder(res.begin()->first);
 
-        if (recreate && hadSimulator &&
-            (!simulator ||
-             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
+        if (recreateIfNeeded && hadSimulator &&
+            (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
             RecreateSimulatorKeepingResults(simType, method, templateQubits);
+        else if (!res.empty() && simulator && circuit)
+            circuit->ApplyGlobalPhase(*simulator);
     }
 
+  public:
     /**
      * @brief Execute the circuit on the network and return the expectation values
      * for the specified Pauli strings.
