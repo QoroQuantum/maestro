@@ -61,7 +61,7 @@ inline Circuits::QuantumGateType AdjointGateType(Circuits::QuantumGateType type)
 inline std::shared_ptr<Circuits::Circuit<>> UnitaryPreparation(const std::shared_ptr<Circuits::Circuit<>> &circuit, const std::string &query)
 {
     auto result = std::make_shared<Circuits::Circuit<>>();
-    Circuits::ForEachUnitaryGate(circuit, query, [&](const auto &gate) {
+    Circuits::ForEachUnitaryGate(circuit, query, Circuits::UnitaryPreparationQuery::Overlap, [&](const auto &gate) {
         if (AdjointGateType(gate->GetGateType()) == Circuits::QuantumGateType::kNone)
             throw std::invalid_argument(query + " does not support gate type " + std::to_string(static_cast<int>(gate->GetGateType())) + " (unknown adjoint).");
         result->AddOperation(gate);

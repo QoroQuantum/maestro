@@ -204,7 +204,7 @@ class PathIntegralSimulator
         std::vector<QC::Gates::AppliedGate<>> result;
         if (circuit)
             result.reserve(circuit->GetOperations().size());
-        Circuits::ForEachUnitaryGate(circuit, "Path-integral amplitude query", [&](const auto &gate) {
+        Circuits::ForEachUnitaryGate(circuit, "Path-integral amplitude query", Circuits::UnitaryPreparationQuery::Amplitude, [&](const auto &gate) {
             auto applied = ConvertGate(gate);
             if (!applied)
                 throw std::invalid_argument("Unsupported gate type " + std::to_string(static_cast<int>(gate->GetGateType())) +

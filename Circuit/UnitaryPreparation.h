@@ -8,15 +8,25 @@
 
 namespace Circuits
 {
+enum class UnitaryPreparationQuery
+{
+    Amplitude,
+    Overlap
+};
+
 // Visit the gates preparing the coherent state before readout. A measurement may
 // precede gates on other qubits, including qubits entangled with the measured one.
-template <typename VisitGate> void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::string &query, VisitGate visit)
+template <typename VisitGate>
+void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::string &query, UnitaryPreparationQuery kind, VisitGate visit)
 {
     if (!circuit)
         throw std::invalid_argument(query + " received a null circuit.");
 
-    const auto dynamicOperation = [&](const std::string &operation) {
-        return std::invalid_argument(query + " does not support " + operation + ". Use execute() or estimate() with SimulationType.PathIntegral.");
+    const auto nonunitaryOperation = [&](const std::string &operation, const char *backend = "SimulationType.PathIntegral") {
+        const auto message = query + " does not support " + operation + ".";
+        if (kind == UnitaryPreparationQuery::Overlap)
+            return std::invalid_argument(message + " This comparison requires a unitary preparation.");
+        return std::invalid_argument(message + " Use execute() for measurement counts or estimate() for observable expectations with " + backend + ".");
     };
     std::unordered_set<Types::qubit_t> measured;
     for (const auto &op : circuit->GetOperations())
@@ -33,7 +43,7 @@ template <typename VisitGate> void ForEachUnitaryGate(const std::shared_ptr<Circ
             if (!measured.empty())
                 for (unsigned int i = 0; i < gate->GetNumQubits(); ++i)
                     if (measured.count(gate->GetQubit(i)))
-                        throw dynamicOperation("mid-circuit measurement on qubit " + std::to_string(gate->GetQubit(i)));
+                        throw nonunitaryOperation("mid-circuit measurement on qubit " + std::to_string(gate->GetQubit(i)));
             visit(gate);
             break;
         }
@@ -46,19 +56,19 @@ template <typename VisitGate> void ForEachUnitaryGate(const std::shared_ptr<Circ
         case OperationType::kNoOp:
             break;
         case OperationType::kReset:
-            throw dynamicOperation("reset");
+            throw nonunitaryOperation("reset");
         case OperationType::kConditionalGate:
-            throw dynamicOperation("conditional gate");
+            throw nonunitaryOperation("conditional gate");
         case OperationType::kConditionalMeasurement:
-            throw dynamicOperation("conditional measurement");
+            throw nonunitaryOperation("conditional measurement");
         case OperationType::kConditionalRandomGen:
-            throw dynamicOperation("conditional random bit generation");
+            throw nonunitaryOperation("conditional random bit generation");
         case OperationType::kRandomGen:
-            throw dynamicOperation("random bit generation");
+            throw nonunitaryOperation("random bit generation");
         case OperationType::kComposite:
             throw std::invalid_argument(query + " does not support composite operations. Pass the constituent operations directly.");
         case OperationType::kQuantumChannel:
-            throw std::invalid_argument(query + " does not support quantum channels. Use execute() or estimate() with SimulationType.DensityMatrix.");
+            throw nonunitaryOperation("quantum channels", "SimulationType.DensityMatrix");
         default:
             throw std::invalid_argument(query + " encountered an unknown operation type.");
         }

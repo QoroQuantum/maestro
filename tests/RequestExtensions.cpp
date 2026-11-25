@@ -296,7 +296,10 @@ void TestUnitaryPreparationValidation()
         {
             const auto response = Call(request, false, validate);
             Check(ErrorCode(response) == "unsupported_capability", "Non-unitary preparation returned the wrong error code");
-            Check(response.at("error").at("message").as_string().find(name) != j::string::npos, "Error did not identify the unsupported operation");
+            const auto &message = response.at("error").at("message").as_string();
+            Check(message.find(name) != j::string::npos, "Error did not identify the unsupported operation");
+            Check(message.find("unitary preparation") != j::string::npos && message.find("SimulationType") == j::string::npos,
+                  "Overlap and mirror diagnostics should explain the preparation requirement without suggesting a simulator change");
         }
     };
     mirror["circuit"] = invalidMeasurement;

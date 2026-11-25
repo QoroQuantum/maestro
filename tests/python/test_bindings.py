@@ -2534,7 +2534,7 @@ class TestMirrorFidelity:
     @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
     def test_rejects_nonunitary_operations(self, nonunitary_overlap_circuit, options, use_method, recwarn):
         qc, operation = nonunitary_overlap_circuit
-        with pytest.raises(ValueError, match=f"(?i){operation}"):
+        with pytest.raises(ValueError, match=f"(?i){operation}.*unitary preparation"):
             if use_method:
                 qc.mirror_fidelity(**options)
             else:
@@ -2768,7 +2768,7 @@ class TestInnerProduct:
         other.x(0)
         # Dropping the reset from X; reset incorrectly makes its overlap with X equal to 1.
         bra, ket = (invalid, other) if invalid_first else (other, invalid)
-        with pytest.raises(ValueError, match=f"(?i){operation}"):
+        with pytest.raises(ValueError, match=f"(?i){operation}.*unitary preparation"):
             if use_method:
                 bra.inner_product(ket)
             else:
