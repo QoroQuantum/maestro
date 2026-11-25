@@ -416,7 +416,6 @@ set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp Execution/Estimati
     Execution/SampleRecords.cpp
     Execution/NoisyEstimation.h
     Execution/NoisyEstimation.cpp
-    Execution/CheckpointRouting.h
     Execution/PrefixCheckpoint.h
     Execution/PrefixCheckpoint.cpp
     Utils/Threads/RealizationWorkers.cpp

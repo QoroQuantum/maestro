@@ -105,8 +105,6 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
             simulator_->SetUpcomingGates(executed_prefix->GetOperations());
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
-        if (!prefix_noise || !prefix_noise->has_any())
-            routing_round_ = LowBondCheckpointRound::Capture(config_, executed_prefix, max_bond_dim_, simulator_->IsRoutingLookaheadEnabled());
         // Saves and worker clones need the final site map, but every suffix
         // provides its own gates. Drop the finished prefix's routing window.
         if (route_prefix)
@@ -266,7 +264,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     // once, before the workers copy this simulator and its settings: planning each realization cost 25% to 60%
     // of a call that runs one realization per shot.
     const auto start = std::chrono::steady_clock::now();
-    network_->PrepareCheckpointRouting(simulator_, suffix, false, !has_noise && routing_round_.Repeats(suffix));
+    network_->PrepareCheckpointRouting(simulator_, suffix, false);
     size_t terminal_calls = 0, trajectory_calls = 0;
     bool extended = false;
 

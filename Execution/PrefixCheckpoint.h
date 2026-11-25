@@ -3,7 +3,6 @@
 // (PrefixCheckpointedSimulator). This header has no Python dependency.
 #pragma once
 
-#include "CheckpointRouting.h"
 #include "SampleRecords.h"
 
 #include <memory>
@@ -90,7 +89,6 @@ class PrefixCheckpoint
     std::shared_ptr<Network::INetwork<double>> network_;
     std::shared_ptr<Simulators::ISimulator> simulator_;
     size_t max_bond_dim_ = 0;
-    LowBondCheckpointRound routing_round_;
     uint64_t calls_ = 0; // ExecuteSuffix calls, for per-call seeds
     // The ideal gate-only prefix of an extended_stabilizer checkpoint, which
     // batched frames evolve once per call for noisy suffixes.
