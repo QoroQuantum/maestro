@@ -107,7 +107,37 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // Complete a retained state after executing only the physical operations.
     void ApplyGlobalPhase(Simulators::ISimulator &sim) const
     {
-        ApplyPhase(sim, PhaseForSimulator(sim));
+        ApplyPhase(sim, PhaseForSimulator(sim.GetType(), sim.GetSimulationType(), sim.GetNumberOfQubits()));
+    }
+
+    // Selection knows the method and mapped width before a network starts a shot.
+    double PhaseForSimulator(Simulators::SimulatorType type, Simulators::SimulationType method, size_t qubits) const
+    {
+        const double phase = TotalGlobalPhase();
+        if (phase == 0.)
+            return 0.;
+        using Method = Simulators::SimulationType;
+        switch (method)
+        {
+        case Method::kDensityMatrix:
+        case Method::kMatrixProductOperator:
+        case Method::kPauliPropagator:
+        case Method::kStabilizer:
+            return 0.; // These methods do not expose complex state amplitudes.
+        case Method::kExtendedStabilizer:
+            // QCSim exposes probabilities only. Aer exposes the amplitudes of its decomposition.
+            if (type == Simulators::SimulatorType::kQCSim)
+                return 0.;
+            break;
+        case Method::kOther:
+            throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
+                                        "complex amplitudes by GlobalPhaseFactor().");
+        default:
+            break;
+        }
+        if (qubits == 0)
+            throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
+        return phase;
     }
 
     /**
@@ -3268,35 +3298,6 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return bits;
     }
 
-    double PhaseForSimulator(const Simulators::ISimulator &sim) const
-    {
-        const double phase = TotalGlobalPhase();
-        if (phase == 0.)
-            return 0.;
-        using Method = Simulators::SimulationType;
-        switch (sim.GetSimulationType())
-        {
-        case Method::kDensityMatrix:
-        case Method::kMatrixProductOperator:
-        case Method::kPauliPropagator:
-        case Method::kStabilizer:
-            return 0.; // These methods do not expose complex state amplitudes.
-        case Method::kExtendedStabilizer:
-            // QCSim exposes probabilities only. Aer exposes the amplitudes of its decomposition.
-            if (sim.GetType() == Simulators::SimulatorType::kQCSim)
-                return 0.;
-            break;
-        case Method::kOther:
-            throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
-                                        "complex amplitudes by GlobalPhaseFactor().");
-        default:
-            break;
-        }
-        if (sim.GetNumberOfQubits() == 0)
-            throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
-        return phase;
-    }
-
     static void ApplyPhase(Simulators::ISimulator &sim, double phase)
     {
         if (phase == 0.)
@@ -3310,7 +3311,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
     void ExecuteWithPhase(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim, bool resetBits) const
     {
-        const double phase = sim ? PhaseForSimulator(*sim) : 0.;
+        const double phase = sim ? PhaseForSimulator(sim->GetType(), sim->GetSimulationType(), sim->GetNumberOfQubits()) : 0.;
         if (resetBits)
             state.Reset();
         ExecutePhysicalOperations(sim, state, curMaxBondDim);
