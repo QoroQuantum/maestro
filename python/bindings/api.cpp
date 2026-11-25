@@ -416,7 +416,7 @@ void bind_api(nb::module_ &m)
           "statevector, making it efficient for large circuits with few "
           "branching gates. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
           "Args:\n"
-          "    circuit: A QuantumCircuit (no measurements needed).\n"
+          "    circuit: The QuantumCircuit to evaluate. Any measurements must be unconditional and terminal on their respective qubits.\n"
           "    target_state: A bitstring like '10001001' (qubit 0 is leftmost).\n\n"
           "Returns:\n"
           "    dict with 'probability', 'amplitude', 'target_state', "
