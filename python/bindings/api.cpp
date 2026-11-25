@@ -1,6 +1,5 @@
 #include "Execution/ExtendedFrameSampler.h"
 #include "Execution/ReferenceFrameSampler.h"
-#include "Simulators/PathIntegral/PathIntegralSimulator.h"
 #include "core.h"
 #include "module.h"
 #include "qasm/QasmCirc.h"
@@ -409,62 +408,19 @@ void bind_api(nb::module_ &m)
     // Path Integral: Single-State Probability
     // =========================================================================
 
-    m.def(
-        "state_probability",
-        [](std::shared_ptr<Circuits::Circuit<double>> circuit, const std::string &target_state) -> nb::dict {
-            if (!circuit)
-                throw nb::value_error("Circuit is null.");
-            if (target_state.empty())
-                throw nb::value_error("target_state must be a non-empty bitstring.");
-
-            // Convert bitstring to vector<bool>
-            std::vector<bool> end_state(target_state.size());
-            for (size_t i = 0; i < target_state.size(); ++i)
-            {
-                if (target_state[i] == '1')
-                    end_state[i] = true;
-                else if (target_state[i] == '0')
-                    end_state[i] = false;
-                else
-                    throw nb::value_error("target_state must contain only '0' and '1' characters.");
-            }
-
-            Simulators::PathIntegralSimulator sim;
-            sim.SetStartZeroState(target_state.size());
-
-            auto start = std::chrono::high_resolution_clock::now();
-            bool ok;
-            {
-                nb::gil_scoped_release release;
-                ok = sim.SetCircuit(circuit);
-            }
-            if (!ok)
-                throw std::runtime_error("Circuit contains operations not supported by the path "
-                                         "integral simulator.");
-
-            auto amplitude = sim.AmplitudeFromZero(end_state);
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict result;
-            result["amplitude"] = amplitude;
-            result["probability"] = std::norm(amplitude);
-            result["target_state"] = target_state;
-            result["time_taken"] = std::chrono::duration<double>(end - start).count();
-            return result;
-        },
-        "circuit"_a, "target_state"_a,
-        "Compute the probability of a specific output state using the Pauli "
-        "path integral simulator.\n\n"
-        "This is the path integral's key advantage: it computes a single "
-        "amplitude ``<target_state|U|0...0>`` without building the full "
-        "statevector, making it efficient for large circuits with few "
-        "branching gates.\n\n"
-        "Args:\n"
-        "    circuit: A QuantumCircuit (no measurements needed).\n"
-        "    target_state: A bitstring like '10001001' (qubit 0 is leftmost).\n\n"
-        "Returns:\n"
-        "    dict with 'probability', 'amplitude', 'target_state', "
-        "'time_taken'.");
+    m.def("state_probability", &state_probability_core, "circuit"_a, "target_state"_a,
+          "Compute the probability of a specific output state using the Pauli "
+          "path integral simulator.\n\n"
+          "This is the path integral's key advantage: it computes a single "
+          "amplitude ``<target_state|U|0...0>`` without building the full "
+          "statevector, making it efficient for large circuits with few "
+          "branching gates. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
+          "Args:\n"
+          "    circuit: A QuantumCircuit (no measurements needed).\n"
+          "    target_state: A bitstring like '10001001' (qubit 0 is leftmost).\n\n"
+          "Returns:\n"
+          "    dict with 'probability', 'amplitude', 'target_state', "
+          "'time_taken'.");
 
     // QASM variant
     m.def(
@@ -478,43 +434,11 @@ void bind_api(nb::module_ &m)
             if (parser.Failed() || !circuit)
                 throw nb::value_error("Failed to parse QASM string.");
 
-            std::vector<bool> end_state(target_state.size());
-            for (size_t i = 0; i < target_state.size(); ++i)
-            {
-                if (target_state[i] == '1')
-                    end_state[i] = true;
-                else if (target_state[i] == '0')
-                    end_state[i] = false;
-                else
-                    throw nb::value_error("target_state must contain only '0' and '1' characters.");
-            }
-
-            Simulators::PathIntegralSimulator sim;
-            sim.SetStartZeroState(target_state.size());
-
-            auto start = std::chrono::high_resolution_clock::now();
-            bool ok;
-            {
-                nb::gil_scoped_release release;
-                ok = sim.SetCircuit(circuit);
-            }
-            if (!ok)
-                throw std::runtime_error("Circuit contains operations not supported by the path "
-                                         "integral simulator.");
-
-            auto amplitude = sim.AmplitudeFromZero(end_state);
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict result;
-            result["amplitude"] = amplitude;
-            result["probability"] = std::norm(amplitude);
-            result["target_state"] = target_state;
-            result["time_taken"] = std::chrono::duration<double>(end - start).count();
-            return result;
+            return state_probability_core(circuit, target_state);
         },
         "qasm_circuit"_a, "target_state"_a,
         "Compute the probability of a specific output state from a QASM "
-        "circuit using the Pauli path integral simulator.");
+        "circuit using the Pauli path integral simulator. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC);
 }
 
 } // namespace maestro_bindings
