@@ -90,11 +90,16 @@ the whole circuit to run again for every shot.
 first; Pauli observables and `target_state` list qubit 0 first. Integer basis
 indices use qubit 0 as the least significant bit. Complex numbers are `[real,imag]`.
 QASM parameters can be supplied as `circuit.parameters:{name:number}`. The native
-QASM parser supports its existing OpenQASM 2/3 subset; parser errors are returned.
+QASM parser supports a subset of OpenQASM 2 and 3. A bare OpenQASM 3
+`gphase(angle)` multiplies the prepared state's amplitudes by `exp(i * angle)`.
+It cancels in counts, probabilities and expectation values. Controlled global
+phase and classically guarded delays remain unsupported.
 
 The alternative `format:"instructions"` takes an array as `source`. Gate and
-measurement entries use the existing CUNQA names, `qubits`, `params`, `clbits`,
-and an optional single `conditional_reg`. Native additions are:
+measurement entries use the existing CUNQA names, `qubits`, `params` and `clbits`.
+Schema v2 accepts `conditional_reg` on gates. The legacy C instruction array
+also accepts it on measurements. Both formats accept measurement `readout_error`.
+The following array illustrates the native instructions and options.
 
 ```json
 [
@@ -260,10 +265,24 @@ circuits, and gates without an implemented inverse are rejected. This also
 applies when requesting mirror observables. Explicit measurement `readout_error`
 is rejected because neither request returns classical measurement records.
 
-Other state queries remove terminal measurements and reject mid-circuit
-measurements. Incremental evolution accepts explicit Kraus instructions in
-the step circuit for exact noisy evolution and rejects a top-level stochastic
-noise model. State queries
+`incremental_evolve` observes each fragment before its terminal readout.
+A terminal measurement runs when a following step needs the bit it writes,
+after recording the preceding boundary. Unused terminal readout is discarded
+in every repetition. Mid-circuit measurements and classical feedback within a
+fragment execute in order. Channels act exactly on supporting mixed-state
+backends and draw one branch on statevector or MPS backends that sample them.
+When the evolution can draw a branch, `execution_metadata` reports
+`stochastic_execution: true`, `measurement_trajectories: 1`, and
+`estimate_evaluation: "single_trajectory"`. Deterministic runs report
+`false`, `0`, and `"deterministic"`, respectively.
+The evolution takes explicit channel instructions and rejects a top-level noise model.
+
+Each `checkpoint_batch` suffix shot starts with the saved quantum state and
+the classical bits written by measurements that ran in the prefix. An end
+measurement stripped from the prefix writes no bit. A suffix can overwrite
+these bits without changing the checkpoint for any other suffix or shot.
+
+Other state queries remove terminal measurements and reject mid-circuit measurements. State queries
 with top-level noise require a single exact realization. No statevector or
 pure-state overlap is advertised for density matrices/MPOs; their counterparts
 are the two mixed-state queries below. Individual methods may have narrower

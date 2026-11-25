@@ -21,11 +21,41 @@
 #include <iostream>
 
 #include "../Circuit/Factory.h"
+#include "../Execution/Json/Json.h"
 #include "../Execution/Request.h"
 #include "../qasm/QasmCirc.h"
 
 namespace Json
 {
+
+// Per-measurement readout rates: a symmetric flip probability, or the two
+// asymmetric rates named like the readout noise channel.
+inline Circuits::ReadoutRates ParseReadoutRates(const boost::json::value &value)
+{
+    using namespace MaestroExecution;
+    const auto probability = [](double p, const char *name) {
+        Require(p >= 0 && p <= 1, std::string(name) + " must be in [0, 1]");
+        return p;
+    };
+    if (value.is_number())
+    {
+        const double p = probability(Number(value), "readout_error");
+        return {p, p};
+    }
+    const auto &object = Object(value);
+    Keys(object, {"p_meas1_prep0", "p_meas0_prep1"});
+    return {probability(Number(Field(object, "p_meas1_prep0")), "p_meas1_prep0"), probability(Number(Field(object, "p_meas0_prep1")), "p_meas0_prep1")};
+}
+
+inline size_t ConditionalBit(const boost::json::value &condition)
+{
+    if (!condition.is_array())
+        return MaestroExecution::UInt(condition);
+    const auto &bits = condition.as_array();
+    if (bits.size() != 1)
+        throw std::runtime_error("Conditional register requires one bit.");
+    return MaestroExecution::UInt(bits[0]);
+}
 
 template <typename Time = Types::time_type> class JsonParserMaestro
 {
@@ -166,7 +196,13 @@ template <typename Time = Types::time_type> class JsonParserMaestro
         std::shared_ptr<Circuits::IOperation<Time>> operation;
 
         if (type == measurementString)
-            operation = ParseMeasurement(obj);
+        {
+            const auto measurement = ParseMeasurement(obj);
+            if (const auto *condition = obj.if_contains("conditional_reg"))
+                return Circuits::CircuitFactory<Time>::CreateConditionalMeasurement(
+                    measurement, Circuits::CircuitFactory<Time>::CreateEqualCondition({ConditionalBit(*condition)}, {true}));
+            return measurement;
+        }
         else if (type == "kraus" || type == "pauli_channel" || type == "channel")
         {
             const auto targets = ParseQubits(obj);
@@ -202,8 +238,13 @@ template <typename Time = Types::time_type> class JsonParserMaestro
         for (size_t i = 0; i < qubits.size(); i++)
             qs.push_back(std::make_pair(qubits[i], cbits[i]));
 
-        const auto operation = std::static_pointer_cast<Circuits::MeasurementOperation<Time>>(Circuits::CircuitFactory<Time>::CreateMeasurement(qs));
-
+        const auto operation = std::make_shared<Circuits::MeasurementOperation<Time>>(qs);
+        if (const auto *value = obj.if_contains("readout_error"))
+        {
+            const auto rates = ParseReadoutRates(*value);
+            if (rates.p_meas1_prep0 > 0 || rates.p_meas0_prep1 > 0)
+                operation->SetReadout(std::vector<Circuits::ReadoutRates>(qubits.size(), rates));
+        }
         return operation;
     }
 
@@ -248,35 +289,8 @@ template <typename Time = Types::time_type> class JsonParserMaestro
 
         // TODO: check parameters?
 
-        // check if it's a classically controlled gate
-        if (obj.contains("conditional_reg"))
-        {
-            auto cond = obj.at("conditional_reg");
-            unsigned long long int cbit = 0;
-            if (cond.is_uint64())
-                cbit = cond.as_uint64();
-            else if (cond.is_int64())
-                cbit = static_cast<unsigned long long int>(cond.as_int64());
-            else if (cond.is_array())
-            {
-                auto arr = cond.as_array();
-                if (arr.size() != 1 || !arr[0].is_number())
-                    throw std::runtime_error("Conditional register must be a single integer.");
-
-                if (arr[0].is_uint64())
-                    cbit = arr[0].as_uint64();
-                else if (arr[0].is_int64())
-                    cbit = static_cast<unsigned long long int>(arr[0].as_int64());
-                else
-                    throw std::runtime_error("Conditional register must be an integer or "
-                                             "an array of one integer.");
-            }
-            else
-                throw std::runtime_error("Conditional register must be an integer or "
-                                         "an array of one integer.");
-
-            return Circuits::CircuitFactory<Time>::CreateSimpleConditionalGate(operation, cbit);
-        }
+        if (const auto *condition = obj.if_contains("conditional_reg"))
+            return Circuits::CircuitFactory<Time>::CreateSimpleConditionalGate(operation, ConditionalBit(*condition));
 
         return std::static_pointer_cast<Circuits::IOperation<Time>>(operation);
     }

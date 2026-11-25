@@ -15,6 +15,26 @@ MIXED = [
 ]
 
 
+@pytest.mark.parametrize("method, sampled", [
+    (maestro.SimulationType.Statevector, True),
+    (maestro.SimulationType.DensityMatrix, False),
+])
+def test_incremental_channel_trajectory_metadata(method, sampled):
+    cfg = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method,
+                                  fixed_backend=True, seed=1)
+    init, step = QuantumCircuit(), QuantumCircuit()
+    init.x(0)
+    step.channel([0], maestro.QuantumChannel.amplitude_damping(0.5))
+    result = maestro.incremental_evolve(init, step, [0, 1], ["Z"], cfg)
+    assert result["stochastic_execution"] is sampled
+    assert result["measurement_trajectories"] == int(sampled)
+    assert result["estimate_evaluation"] == ("single_trajectory" if sampled else "deterministic")
+    z = result["expectation_values"][-1][0]
+    assert abs(z) == pytest.approx(float(sampled))
+    initial_only = maestro.incremental_evolve(init, step, [0], ["Z"], cfg)
+    assert initial_only["estimate_evaluation"] == "deterministic"
+
+
 def config(method):
     backend = "QCSim"
     if isinstance(method, tuple):

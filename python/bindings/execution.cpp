@@ -36,6 +36,7 @@ std::vector<std::string> ParseObservables(const nb::object &observables)
     {
         throw nb::type_error("Observables must be a ';'-separated string or a list of strings.");
     }
+    Simulators::ValidatePauliStrings(paulis);
     return paulis;
 }
 

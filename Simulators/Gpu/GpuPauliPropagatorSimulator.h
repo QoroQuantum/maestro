@@ -350,6 +350,7 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = pp->ExpectationValue(pauliString);
         return result;
@@ -357,6 +358,7 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
 
     std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
     {
+        ValidatePauliStrings(paulis);
         const int workers =
             configuration.IsSet("pauli_propagator_workers") ? static_cast<int>(configuration.GetConfigurationAsUnsigned("pauli_propagator_workers")) : 1;
         return pp->ExpectationValues(paulis, workers);

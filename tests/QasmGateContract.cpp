@@ -24,7 +24,7 @@ namespace
 
 // One accepted gate name, the shape of a minimal call to it, and the gate the
 // call must produce. kNone means the name is a legitimate no-op that must
-// parse and emit nothing - true of exactly "id" and "gphase", which are
+// parse and emit nothing - true of exactly "id" and "u0", which are
 // spelled out here rather than being excluded from the table, so that a name
 // silently resolving to nothing cannot hide among them.
 struct AllowedGateExpectation
@@ -91,10 +91,6 @@ const std::vector<AllowedGateExpectation> &AllowedGateExpectations()
                                                                      {"cu1", 1, 2, GateType::kCUGateType},
                                                                      // qelib1.inc's parametrised idle, a no-op like "id".
                                                                      {"u0", 1, 1, GateType::kNone},
-                                                                     // A global phase, which is unobservable and so emits nothing. It is the
-                                                                     // reason kNone cannot simply be made to accept any arity: its arity is
-                                                                     // genuinely zero.
-                                                                     {"gphase", 1, 0, GateType::kNone, true},
                                                                      // Several parameters.
                                                                      {"u", 3, 1, GateType::kUGateType},
                                                                      {"U", 3, 1, GateType::kUGateType},
@@ -128,12 +124,12 @@ std::string SingleCallProgram(const std::string &versionLine, const std::string 
     return versionLine + registerDecl + call + ";\n";
 }
 
-// The names that are legitimately no-ops: the identity, its parametrised
-// qelib1.inc form, and a global phase, which is unobservable. Nothing else may
+// The names that are legitimately no-ops: the identity and its parametrised
+// qelib1.inc form. Nothing else may
 // expect kNone.
 bool IsLegitimateNoOpGateName(const std::string &name)
 {
-    return name == "id" || name == "u0" || name == "gphase";
+    return name == "id" || name == "u0";
 }
 
 // The rule closing the hole this guard used to have. A table entry whose
@@ -141,7 +137,7 @@ bool IsLegitimateNoOpGateName(const std::string &name)
 // operations", so a name could be added to an allowed-gate set together with
 // a kNone row and pass both guard tests while being exactly the silent no-op
 // the guard exists to catch. kNone is now not an escape hatch but a claim
-// that has to match the name: only "id" and "gphase" may make it, and they
+// that has to match the name: only "id" and "u0" may make it, and they
 // must.
 bool ExpectationIsSelfConsistent(const AllowedGateExpectation &gate)
 {
@@ -214,7 +210,7 @@ BOOST_AUTO_TEST_CASE(EveryAllowedGateNameResolvesToTheGateItNames)
             // kNone is a claim only the legitimate no-ops may make, not a way for
             // any name to opt out of the gate-type assertion below.
             BOOST_TEST(ExpectationIsSelfConsistent(gate), "Gate '" << gate.name
-                                                                   << "': only 'id', 'u0' and 'gphase' may expect kNone (they "
+                                                                   << "': only 'id' and 'u0' may expect kNone (they "
                                                                       "are the only legitimate no-ops), and all must; every "
                                                                       "other name must name the gate it resolves to");
 
@@ -305,13 +301,12 @@ BOOST_AUTO_TEST_CASE(DaggerSpellingsAcceptTheSameModifiersAsTheirTwin)
                            2);
 }
 
-BOOST_AUTO_TEST_CASE(GphaseRejectsAQubitArgument)
+BOOST_AUTO_TEST_CASE(RejectMalformedPhaseAndUnsupportedGuardedOperations)
 {
-    // kNone still has arity zero, which is what gphase relies on.
-    CheckRejectedWithMessage("OPENQASM 3.0;\n"
-                             "qubit[1] q;\n"
-                             "gphase(0.5) q[0];\n",
-                             "requires exactly 0 qubits");
+    CheckRejectedWithMessage("OPENQASM 3.0; qubit[1] q; gphase(pi) q[0];", "no qubit operands");
+    CheckRejectedWithMessage("OPENQASM 3.0; bit c; if (c[0]) { gphase(pi); }", "conditioned gphase");
+    CheckRejectedWithMessage("OPENQASM 3.0; qubit[1] q; bit[1] c; if (!c[0]) { delay[1us] q[0]; }", "Conditional delay");
+    CheckRejectedWithMessage("OPENQASM 2.0; qreg q[1]; creg c[1]; if(c==0) delay(1e-6) q[0];", "Conditional delay");
 }
 
 BOOST_AUTO_TEST_CASE(UnknownGateNameIsStillRejected)

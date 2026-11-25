@@ -6,6 +6,7 @@
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
 #include "Estimation.h"
+#include "IncrementalEvolution.h"
 #include "NoisyEstimation.h"
 #include "ReferenceFrameSampler.h"
 #include "SampleRecords.h"
@@ -68,24 +69,6 @@ bool AdjointOperation(const std::string &operation)
 bool MixedStateQuery(const std::string &operation)
 {
     return operation == "density_matrix_overlap" || operation == "fidelity_with_statevector";
-}
-
-// Per-measurement readout rates: a symmetric flip probability, or the two
-// asymmetric rates named like the readout noise channel.
-Circuits::ReadoutRates ParseReadoutRates(const json::value &value)
-{
-    const auto probability = [](double p, const char *name) {
-        Require(p >= 0 && p <= 1, std::string(name) + " must be in [0, 1]");
-        return p;
-    };
-    if (value.is_number())
-    {
-        const double p = probability(Number(value), "readout_error");
-        return {p, p};
-    }
-    const auto &object = Object(value);
-    Keys(object, {"p_meas1_prep0", "p_meas0_prep1"});
-    return {probability(Number(Field(object, "p_meas1_prep0")), "p_meas1_prep0"), probability(Number(Field(object, "p_meas0_prep1")), "p_meas0_prep1")};
 }
 
 // qelib1.inc's two-qubit rotations have no gate type; expand them exactly as
@@ -350,11 +333,7 @@ ParsedCircuit ParseCircuit(const json::object &object)
                 Require(params.size() == (arities.count(name) ? arities.at(name) : 0), "Incorrect gate parameter count");
                 Require(name == "measure" || !instruction.contains("clbits"), "clbits applies only to measurement");
                 const bool noiseless = instruction.contains("noiseless") && Boolean(instruction.at("noiseless"));
-                std::optional<Circuits::ReadoutRates> readout;
-                if (const auto *value = instruction.if_contains("readout_error"))
-                    readout = ParseReadoutRates(*value);
                 instruction.erase("noiseless");
-                instruction.erase("readout_error");
                 if (const auto *condition = instruction.if_contains("conditional_reg"))
                 {
                     const auto bit = condition->is_array()
@@ -400,12 +379,6 @@ ParsedCircuit ParseCircuit(const json::object &object)
                     // expanded rxx/rzz is noiseless as a whole.
                     if (noiseless)
                         operation->SetNoiseless();
-                    if (readout && (readout->p_meas1_prep0 > 0 || readout->p_meas0_prep1 > 0))
-                    {
-                        auto measurement = std::dynamic_pointer_cast<Circuits::MeasurementOperation<>>(operation);
-                        Require(measurement != nullptr, "readout_error applies only to measurement");
-                        measurement->SetReadout(std::vector<Circuits::ReadoutRates>(measurement->GetQubits().size(), *readout));
-                    }
                     circuit->AddOperation(operation);
                 }
             }
@@ -773,7 +746,7 @@ json::array Expectations(const std::shared_ptr<Simulators::ISimulator> &simulato
     return result;
 }
 
-void Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool checkpoint = false)
+Circuits::OperationState Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool checkpoint = false)
 {
     Circuits::OperationState state(bits);
     auto simulator = context.simulator();
@@ -782,9 +755,11 @@ void Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool chec
     simulator->SetGatesCounter(0);
     simulator->SetUpcomingGates(circuit->GetOperations());
     size_t bond = 0;
-    circuit->ExecuteBD(simulator, state, &bond);
+    // Coherent query results include the input phase when they are read.
+    circuit->ExecutePhysicalOperations(simulator, state, &bond);
     if (routed)
         simulator->SetUpcomingGates({});
+    return state;
 }
 
 json::array Basis(const json::object &request, size_t qubits, size_t limit)
@@ -1213,7 +1188,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // channels from its state, the answer is the state of one branch (as after
     // a reset on any pure-state backend), which the metadata reports.
     const bool oneState = operation == "statevector" || operation == "amplitudes" || operation == "probabilities" || operation == "state_probability";
-    CheckChannels(input.circuit, config, noise, operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || oneState,
+    CheckChannels(input.circuit, config, noise,
+                  operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || operation == "incremental_evolve" || oneState,
                   operation == "checkpoint_batch");
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
@@ -1231,10 +1207,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
               "Readout noise applies to measurement counts only");
     if (noise.enabled)
         ValidateNoisyCircuit(input.circuit);
-    auto circuit = unitaryPreparation || operation == "execute" || operation == "checkpoint_batch" ? input.circuit
-                   : operation == "estimate"                                                       ? input.circuit->RemoveEndMeasurements()
-                   : operation == "noisy_fidelity"                                                 ? NoisyFidelityCircuit(input.circuit)
-                                                                                                   : Unmeasured(input.circuit);
+    auto circuit = unitaryPreparation || operation == "execute" || operation == "checkpoint_batch" || operation == "incremental_evolve" ? input.circuit
+                   : operation == "estimate"       ? input.circuit->RemoveEndMeasurements()
+                   : operation == "noisy_fidelity" ? NoisyFidelityCircuit(input.circuit)
+                                                   : Unmeasured(input.circuit);
     // Noise injection samples the circuit's Pauli channels into gates before anything runs, and on a backend that
     // samples no channels its one-qubit mixtures of unitaries too.
     const bool stochastic_estimation =
@@ -1280,7 +1256,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         additional.push_back(ParseCircuit(Object(Field(request, "step_circuit"))));
         SameSize(input, additional.back());
         rejectReadout(additional.back().circuit);
-        additional.back().circuit = Unmeasured(additional.back().circuit);
         const auto &steps = Array(Field(request, "steps"));
         Require(!steps.empty() && steps.size() <= limit, "Invalid observation steps");
         uint64_t previous = 0;
@@ -1295,14 +1270,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     {
         // The prefix runs once, before the saved state, by the rules of the prefix
         // of Python's PrefixCheckpointedSimulator. Only suffix measurements are
-        // sampled and returned: the prefix's end measurements are removed
+        // sampled per shot: the prefix's end measurements are removed
         // (ExecutedCheckpointPrefix), so a prefix that is a whole program does not
         // collapse the saved state, and readout on a prefix measurement would be
         // dropped silently. A measurement that later operations follow or read,
         // and on a pure state a reset, collapse once, for every suffix shot.
         // Channel instructions run where the backend takes them (CheckChannels).
-        Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
-                                                         "the outcomes of prefix measurements are not returned");
+        Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only");
         circuit = ExecutedCheckpointPrefix(input.circuit);
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
@@ -1358,7 +1332,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
     {
-        CheckChannels(other.circuit, config, noise, operation == "checkpoint_batch");
+        CheckChannels(other.circuit, config, noise, operation == "checkpoint_batch" || operation == "incremental_evolve");
         if (checkStabilizer)
             CheckStabilizerGates(other.circuit, config, false);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
@@ -2093,6 +2067,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
     bool frame_suffixes = false;
+    bool stochastic_evolution = false;
     // As in the non-distributed estimate, a dynamic estimate without sampled
     // noise still averages measurement branches.
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
@@ -2358,12 +2333,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         else
         {
             json::array values;
+            const auto phase = amplitudes ? input.circuit->GlobalPhaseFactor() : std::complex<double>{1., 0.};
             if (!request.contains("basis_states"))
             {
                 if (amplitudes)
                 {
                     for (const auto &value : simulator->GetStateVector())
-                        values.emplace_back(Complex(value));
+                        values.emplace_back(Complex(phase * value));
                 }
                 else
                 {
@@ -2378,7 +2354,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             {
                 for (const auto &index : basis)
                     if (amplitudes)
-                        values.emplace_back(Complex(simulator->Amplitude(UInt(index))));
+                        values.emplace_back(Complex(phase * simulator->Amplitude(UInt(index))));
                     else
                         values.emplace_back(simulator->Probability(UInt(index)));
             }
@@ -2388,17 +2364,21 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     else if (operation == "incremental_evolve")
     {
-        Prepare(context, circuit, input.clbits);
+        const auto &steps = Array(Field(request, "steps"));
+        IncrementalEvolution evolution(circuit, additional[0].circuit, UInt(steps.back()));
+        stochastic_evolution = evolution.IsStochastic(simulator->SupportsQuantumChannels());
+        simulator->Reset();
         Circuits::OperationState state(input.clbits);
         json::array values;
         uint64_t current = 0;
         size_t bond = 0;
-        for (const auto &value : Array(Field(request, "steps")))
+        evolution.Start(simulator, state, bond);
+        for (const auto &value : steps)
         {
             const auto step = UInt(value);
             while (current < step)
             {
-                additional[0].circuit->ExecuteBD(simulator, state, &bond);
+                evolution.Step(current, simulator, state, bond);
                 ++current;
             }
             values.emplace_back(Expectations(simulator, observables));
@@ -2418,7 +2398,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             std::mt19937 prefixRng(noise.seed ^ 0x70726566u);
             prefixCircuit = Inject(noise::NoiseInjectionPlan(circuit, noise.model, false, noise.policy.chain_order), noise, prefixRng);
         }
-        Prepare(context, prefixCircuit, input.clbits, true);
+        const auto prefixState = Prepare(context, prefixCircuit, input.clbits, true);
         simulator->SaveState();
         json::array outputs;
         size_t bond = 0;
@@ -2501,7 +2481,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->RestoreState();
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
-                Circuits::OperationState terminal_state(input.clbits);
+                Circuits::OperationState terminal_state(prefixState);
                 if (SampleCheckpointTerminal(
                         noisy, simulator, config, repetitions, terminal_state,
                         Simulators::IState::DeriveSeed(Simulators::IState::DeriveSeed(suffix_seed, outputs.size()), r),
@@ -2511,7 +2491,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     continue;
                 }
                 ++trajectory_batches;
-                Circuits::OperationState head_state(input.clbits);
+                Circuits::OperationState head_state(prefixState);
                 if (reuse_heads && SampleSharedHead(
                                        *noisy, simulator, repetitions, head_state, Simulators::IState::DeriveSeed(suffix_head_streams, head_stream++),
                                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
@@ -2522,8 +2502,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                         simulator->RestoreState();
                     simulator->SetGatesCounter(0);
                     simulator->SetUpcomingGates(noisy->GetOperations());
-                    Circuits::OperationState state(input.clbits);
-                    noisy->ExecuteBD(simulator, state, &bond);
+                    Circuits::OperationState state(prefixState);
+                    noisy->ExecutePhysicalOperations(simulator, state, &bond);
                     ++counts[Bits(state.GetAllBits(), input.clbits)];
                 }
             }
@@ -2601,7 +2581,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             squares += fidelity * fidelity;
         }
         if (operation == "inner_product")
-            result["inner_product"] = Complex(overlap);
+            result["inner_product"] = Complex(std::conj(input.circuit->GlobalPhaseFactor()) * additional[0].circuit->GlobalPhaseFactor() * overlap);
         else if (!mirrorObservables)
         {
             const auto mean = sum / realizations;
@@ -2638,6 +2618,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // the branch this execution drew.
     if (oneState && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config)))
         result["execution_metadata"].as_object()["stochastic_execution"] = true;
+    if (operation == "incremental_evolve")
+    {
+        auto &metadata = result["execution_metadata"].as_object();
+        metadata["stochastic_execution"] = stochastic_evolution;
+        metadata["measurement_trajectories"] = stochastic_evolution ? 1 : 0;
+        metadata["estimate_evaluation"] = stochastic_evolution ? "single_trajectory" : "deterministic";
+    }
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.

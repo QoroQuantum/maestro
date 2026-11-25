@@ -285,6 +285,95 @@ BOOST_AUTO_TEST_CASE(ControlledGateExportUsesDialectSpecificNames)
     BOOST_CHECK_THROW(generate(Circuits::QuantumGateType::kCUGateType, 0.2, 0.3, 0.4, 0.5, v2), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(ExportPreservesResetTargetsAndSubMicrosecondDelays)
+{
+    using Exporter = qasm::CircToQasm<>;
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0, 1}, 0, std::vector<bool>{true, false}));
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(1, 1e-9));
+    constexpr double secondDuration = 2.345678912345678e-8;
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(0, secondDuration));
+    for (const auto version : {Exporter::QasmVersion::V2, Exporter::QasmVersion::V3})
+    {
+        qasm::QasmToCirc<> parser;
+        const auto roundTrip = parser.ParseAndTranslate(Exporter::Generate(circuit, version));
+        BOOST_REQUIRE_MESSAGE(roundTrip, parser.GetErrorMessage());
+        const auto &ops = roundTrip->GetOperations();
+        BOOST_REQUIRE_GE(ops.size(), 2u);
+        const auto duration = [&](size_t index) {
+            const auto &op = ops[index];
+            BOOST_REQUIRE(op->GetType() == Circuits::OperationType::kDelay);
+            return std::static_pointer_cast<Circuits::Delay<>>(op)->GetDuration();
+        };
+        BOOST_CHECK_EQUAL(duration(ops.size() - 2), 1e-9);
+        BOOST_CHECK_CLOSE_FRACTION(duration(ops.size() - 1), secondDuration, 4e-16);
+        auto simulator = MakeInitializedSimulator(2);
+        Circuits::OperationState state(2);
+        roundTrip->Execute(simulator, state);
+        BOOST_CHECK_CLOSE(simulator->Probability(1), 1., 1e-8);
+    }
+    auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+    measurement->SetReadout({{1., 0.}});
+    circuit->AddOperation(measurement);
+    BOOST_CHECK_THROW(Exporter::Generate(circuit), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(GlobalPhaseSurvivesCompositionExecutionAndExport)
+{
+    using Exporter = qasm::CircToQasm<>;
+    qasm::QasmToCirc<> parser;
+    const auto phaseOnly = parser.ParseAndTranslate("OPENQASM 3.0; gphase(pi/3);");
+    BOOST_REQUIRE_MESSAGE(phaseOnly, parser.GetErrorMessage());
+    BOOST_CHECK(phaseOnly->empty());
+    BOOST_CHECK_SMALL(std::abs(phaseOnly->GlobalPhaseFactor() - std::polar(1., M_PI / 3)), 1e-14);
+    const auto exported = Exporter::Generate(phaseOnly, Exporter::QasmVersion::V3);
+    BOOST_CHECK(exported.find("qubit") == std::string::npos);
+    const auto reloaded = parser.ParseAndTranslate(exported);
+    BOOST_REQUIRE_MESSAGE(reloaded, parser.GetErrorMessage());
+    BOOST_CHECK_SMALL(std::abs(reloaded->GlobalPhaseFactor() - phaseOnly->GlobalPhaseFactor()), 1e-14);
+    BOOST_CHECK_THROW(Exporter::Generate(phaseOnly, Exporter::QasmVersion::V2), std::invalid_argument);
+
+    const auto circuit = parser.ParseAndTranslate("OPENQASM 3.0; qubit q; gate phased(a) b { gphase(a); x b; } phased(pi/3) q;");
+    BOOST_REQUIRE_MESSAGE(circuit, parser.GetErrorMessage());
+    circuit->AddCircuit(phaseOnly);
+    circuit->AddOperation(phaseOnly);
+    const auto flat = circuit->InlinedComposites();
+    auto mapped = std::static_pointer_cast<Circuits::Circuit<>>(flat->Remap({{0, 1}}));
+    const auto roundTrip = parser.ParseAndTranslate(Exporter::Generate(mapped, Exporter::QasmVersion::V3));
+    BOOST_REQUIRE_MESSAGE(roundTrip, parser.GetErrorMessage());
+    Circuits::OperationState bits(1);
+    using Method = Simulators::SimulationType;
+    for (const auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kPathIntegral})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        roundTrip->Execute(sim, bits);
+        BOOST_CHECK_SMALL(std::abs(sim->Amplitude(2) + 1.), 1e-12);
+        const auto position = sim->GetGatesCounter();
+        phaseOnly->ExecuteContinuation(sim, bits);
+        BOOST_CHECK_EQUAL(sim->GetGatesCounter(), position);
+        BOOST_CHECK_SMALL(std::abs(sim->Amplitude(2) + phaseOnly->GlobalPhaseFactor()), 1e-12);
+    }
+    mapped->Clear();
+    BOOST_CHECK_EQUAL(mapped->GetGlobalPhase(), 0.);
+
+    const auto modified = parser.ParseAndTranslate("OPENQASM 3.0; inv @ pow(0.5) @ gphase(pi);");
+    BOOST_REQUIRE_MESSAGE(modified, parser.GetErrorMessage());
+    BOOST_CHECK_SMALL(std::abs(modified->GlobalPhaseFactor() - std::complex<double>(0., -1.)), 1e-14);
+
+    Simulators::PathIntegralSimulator paths;
+    BOOST_REQUIRE(paths.SetCircuit(modified));
+    const auto clonedPaths = paths.Clone();
+    BOOST_CHECK_SMALL(std::abs(clonedPaths->Amplitude({false}, {false}) - std::complex<double>(0., -1.)), 1e-14);
+    BOOST_CHECK_THROW(paths.ConvertCircuit(modified), std::invalid_argument);
+
+    bits.SetBit(0);
+    auto empty = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+    BOOST_CHECK_THROW(modified->Execute(empty, bits), std::invalid_argument);
+    BOOST_CHECK(bits.GetBit(0));
+}
+
 BOOST_AUTO_TEST_CASE(ConditionalMeasurementExportRoundTripsSemantics)
 {
     const auto executeExport = [](const std::string &qasmStr, bool predicateValue, size_t predicateBit = 0, size_t measuredBit = 1) {

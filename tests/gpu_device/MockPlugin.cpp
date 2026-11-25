@@ -150,7 +150,10 @@ extern "C"
 
     int ApplyX(void *obj, int qubit)
     {
-        Checked(obj)->bits ^= 1U << qubit;
+        auto *state = Checked(obj);
+        if (qubit < 0 || static_cast<unsigned>(qubit) >= state->qubits)
+            return 0;
+        state->bits ^= 1U << qubit;
         return 1;
     }
 

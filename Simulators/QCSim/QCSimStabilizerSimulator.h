@@ -209,16 +209,8 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
         if (pauliStringOrig.empty())
             return 1.0;
         std::string pauliString = pauliStringOrig;
-        if (pauliString.size() > GetNumberOfQubits())
-        {
-            for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i)
-            {
-                const auto pauliOp = toupper(pauliString[i]);
-                if (pauliOp != 'I' && pauliOp != 'Z')
-                    return 0.0;
-            }
-            pauliString.resize(GetNumberOfQubits());
-        }
+        if (!RestrictPauliToRegister(pauliString, GetNumberOfQubits()))
+            return 0.0;
         return cliffordSimulator->ExpectationValue(pauliString);
     }
 

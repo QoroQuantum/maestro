@@ -118,6 +118,33 @@ MaestroExecution::SimulatorConfig Config(Method method)
     return config;
 }
 
+void CheckRealizationFidelityIdeal()
+{
+    const auto config = Config(Method::kStatevector);
+    const auto x = CF::CreateGate(Gate::kXGateType, 0);
+    const auto noisy = CF::CreateCircuit({x});
+    const auto readout = CF::CreateMeasurement({{0, 0}});
+    const auto h = CF::CreateGate(Gate::kHadamardGateType, 0);
+    const auto ideal = CF::CreateCircuit({CF::CreateCircuit({h, readout})});
+    Check(std::abs(MaestroExecution::RealizationFidelity(ideal, ideal, config) - 1.) < 1e-12, "Nested terminal readout collapsed a fidelity operand");
+    Check(std::abs(MaestroExecution::NoisyFidelity(ideal, noise::NoiseModel{}, 1, config, 5).fidelity - 1.) < 1e-12,
+          "Noisy fidelity lost nested terminal readout");
+    const auto channel = std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(1.));
+    for (const auto &invalid : {CF::CreateCircuit({x, CF::CreateReset({0})}), CF::CreateCircuit({x, readout, x}), CF::CreateCircuit({channel}),
+                                CF::CreateCircuit({CF::CreateSimpleConditionalGate(x, 0)}), CF::CreateCircuit({CF::CreateCircuit({nullptr})})})
+    {
+        try
+        {
+            MaestroExecution::RealizationFidelity(invalid, noisy, config);
+        }
+        catch (const std::invalid_argument &)
+        {
+            continue;
+        }
+        Check(false, "RealizationFidelity silently discarded a nonunitary operation from the ideal");
+    }
+}
+
 std::shared_ptr<Simulators::ISimulator> Simulator(Method method)
 {
     auto simulator = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
@@ -1035,6 +1062,7 @@ void TestMixedStateExecution()
 {
     CheckUnitaryPreparation();
     CheckPreparationGateAdjoints();
+    CheckRealizationFidelityIdeal();
     CheckpointMultinomialCounts();
     CheckpointTensorRouting(Method::kMatrixProductState, {1, 9, 8, 5, 10, 2, 3, 7, 4, 0, 11, 6});
     CheckpointTensorRouting(Method::kMatrixProductOperator, {4, 2, 1, 0, 5, 3});

@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "../../Circuit/UnitaryPreparation.h"
+#include "../Core/PauliString.h"
 #include "PathIntegral.h"
 
 namespace Simulators
@@ -58,6 +59,7 @@ class PathIntegralSimulator
     void Reset()
     {
         simulator.Reset();
+        circuitPhase_ = 1.;
     }
 
     bool SetCircuit(const std::shared_ptr<Circuits::Circuit<>> &circuit)
@@ -70,7 +72,8 @@ class PathIntegralSimulator
     {
         try
         {
-            simulator.SetCircuit(ConvertCircuit(circuit));
+            simulator.SetCircuit(ConvertPhysicalCircuit(circuit));
+            circuitPhase_ = circuit->GlobalPhaseFactor();
         }
         catch (const std::invalid_argument &ex)
         {
@@ -83,12 +86,12 @@ class PathIntegralSimulator
 
     std::complex<double> AmplitudeFromZero(const std::vector<bool> &endState)
     {
-        return simulator.Propagate(endState);
+        return circuitPhase_ * simulator.Propagate(endState);
     }
 
     std::complex<double> Amplitude(const std::vector<bool> &startState, const std::vector<bool> &endState)
     {
-        return simulator.Propagate(startState, endState);
+        return circuitPhase_ * simulator.Propagate(startState, endState);
     }
 
     std::optional<QC::Gates::AppliedGate<>> ConvertGate(const std::shared_ptr<Circuits::IQuantumGate<>> &gate)
@@ -201,6 +204,21 @@ class PathIntegralSimulator
 
     std::vector<QC::Gates::AppliedGate<>> ConvertCircuit(const std::shared_ptr<Circuits::Circuit<>> &circuit)
     {
+        auto result = ConvertPhysicalCircuit(circuit);
+        if (circuit->GetGlobalPhase() != 0.)
+        {
+            const auto qubits = circuit->AffectedQubits();
+            if (qubits.empty())
+                throw std::invalid_argument("A gate list cannot represent a global phase on zero qubits. Use SetCircuit for a phase-only circuit.");
+            ugate.SetParams(0., 0., 0., circuit->GetGlobalPhase());
+            result.emplace_back(ugate.getRawOperatorMatrix(), qubits.front());
+        }
+        return result;
+    }
+
+  private:
+    std::vector<QC::Gates::AppliedGate<>> ConvertPhysicalCircuit(const std::shared_ptr<Circuits::Circuit<>> &circuit)
+    {
         std::vector<QC::Gates::AppliedGate<>> result;
         if (circuit)
             result.reserve(circuit->GetOperations().size());
@@ -214,6 +232,7 @@ class PathIntegralSimulator
         return result;
     }
 
+  public:
     void PropagateStep(const QC::Gates::AppliedGate<> &gate, AmplitudeMap &currentAmplitudes)
     {
         simulator.PropagateStep(gate, currentAmplitudes);
@@ -302,6 +321,7 @@ class PathIntegralSimulator
     {
         auto clone = std::make_unique<PathIntegralSimulator>();
         clone->simulator = simulator.Clone();
+        clone->circuitPhase_ = circuitPhase_;
         return clone;
     }
 
@@ -321,6 +341,7 @@ class PathIntegralSimulator
 
     double ExpectationValue(const std::string &pauliStringOrig)
     {
+        ValidatePauliString(pauliStringOrig);
 #ifdef QC_PATH_INTEGRAL_DIRECT_EXPECTATION
         return simulator.ExpectationValue(pauliStringOrig);
 #else
@@ -388,6 +409,7 @@ class PathIntegralSimulator
 
   private:
     QC::PathIntegral::PathIntegralSimulator simulator;
+    std::complex<double> circuitPhase_{1., 0.};
 
     // These gates are never modified, and their matrix accessors return const
     // references. Sharing them avoids allocation on construction and cloning.

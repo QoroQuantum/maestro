@@ -76,6 +76,7 @@ int main()
             sim->AllocateQubits(2);
             sim->Initialize();
             sim->ApplyX(0);
+            Reject([&] { sim->ApplyX(2); });
             Require(sim->AllProbabilities()[1] == 1, "wrong simulator state");
         }
         Require(one->GetGpuDevice() == 1 && zero->GetGpuDevice() == 0, "configuration did not reach native GPU objects");

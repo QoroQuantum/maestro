@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <future>
 #include <iostream>
 #include <numeric>
@@ -2246,6 +2247,307 @@ void ExecuteTrajectoryPreservesState()
             }
 }
 
+void ExecuteRetainsGlobalPhase()
+{
+    const std::complex<double> i{0., 1.};
+    const auto phasedX = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0)});
+    phasedX->SetGlobalPhase(std::acos(0.));
+    const auto phaseOnly = CF::CreateCircuit();
+    phaseOnly->SetGlobalPhase(std::acos(0.));
+    for (const auto method : {Method::kStatevector, Method::kMatrixProductState})
+    {
+        auto network = MakeNetwork(Backend::kQCSim, method, 1, 1);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        // Execute continues on the full network register, including the entanglement qubit.
+        network->Execute(phasedX);
+        Check(std::abs(network->GetSimulator()->Amplitude(1) - i) < 1e-12, "Execute lost the global phase on the retained state");
+        network->Execute(phaseOnly);
+        Check(std::abs(network->GetSimulator()->Amplitude(1) + 1.) < 1e-12, "A phase-only Execute did not accumulate on the retained state");
+
+        // On a host each execution starts from zero. Match its compact register width so the state is retained.
+        network->CreateSimulator(Backend::kQCSim, method, 1);
+        for (int repeat = 0; repeat < 2; ++repeat)
+        {
+            network->ExecuteOnHost(phasedX, 0);
+            Check(std::abs(network->GetSimulator()->Amplitude(1) - i) < 1e-12, "ExecuteOnHost did not reset and retain the phased state");
+        }
+        network->ExecuteOnHost(phaseOnly, 1);
+        Check(std::abs(network->GetSimulator()->Amplitude(1) - i) < 1e-12, "Execution on a missing host phased the retained state");
+        const auto values = network->ExecuteOnHostAmplitudes(phasedX, 0);
+        Check(values.size() == 2 && std::abs(values[1] - i) < 1e-12, "ExecuteOnHostAmplitudes did not return the circuit phase exactly once");
+    }
+
+    const auto trajectory = CF::CreateCircuit({CF::CreateMeasurement({{0, 0}}), CF::CreateGate(Gate::kXGateType, 0)});
+    trajectory->SetGlobalPhase(std::acos(0.));
+    for (const bool onHost : {false, true})
+    {
+        for (const auto &circuit : {phasedX, trajectory})
+        {
+            // The singleton candidate prepares a replacement register. With a mid-circuit
+            // measurement, shot_v1 retains the worker's clone of that prepared register.
+            auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 1, 1);
+            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            if (onHost)
+                network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 1);
+            network->SetOptimizeSimulator(true);
+            network->Configure("trajectory_policy", "shot_v1");
+            const auto before = network->GetSimulator();
+            const auto width = before->GetNumberOfQubits();
+            if (onHost)
+                network->ExecuteOnHost(circuit, 0);
+            else
+                network->Execute(circuit);
+            const auto after = network->GetSimulator();
+            Check(after != before && after->GetSimulationType() == Method::kStatevector && after->GetNumberOfQubits() == width,
+                  "Backend selection did not retain the same-width replacement register");
+            Check(std::abs(after->Amplitude(1) - i) < 1e-12, "The replacement register lost the executed circuit phase");
+        }
+
+        // If execution used a different width, both wrappers restore a fresh template.
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 1, 1);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        if (!onHost)
+            network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 1);
+        const auto width = network->GetSimulator()->GetNumberOfQubits();
+        if (onHost)
+            network->ExecuteOnHost(phasedX, 0);
+        else
+            network->Execute(phasedX);
+        const auto restored = network->GetSimulator();
+        Check(restored->GetNumberOfQubits() == width && std::abs(restored->Amplitude(0) - 1.) < 1e-12,
+              "The executed phase reached a fresh template restored after a width change");
+    }
+
+    auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 1, 1);
+    network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 1);
+    network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kMatrixProductState);
+    network->SetOptimizeSimulator(true);
+    network->ExecuteOnHost(phasedX, 0);
+    Check(network->GetLastSimulationType() == Method::kMatrixProductState && network->GetSimulator()->GetSimulationType() == Method::kStatevector &&
+              std::abs(network->GetSimulator()->Amplitude(0) - 1.) < 1e-12,
+          "The executed phase reached a fresh template restored after a method change");
+}
+
+void ExtendedStabilizerCircuitPhase()
+{
+    const double angle = 0.37;
+    const auto method = Method::kExtendedStabilizer;
+    auto network = MakeNetwork(Backend::kQCSim, method, 1, 1);
+    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    const auto measuredX = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 0}})});
+    measuredX->SetGlobalPhase(angle);
+    Circuits::OperationState bits(1);
+    measuredX->Execute(network->GetSimulator(), bits);
+    Check(bits.GetBit(0) && std::abs(network->GetSimulator()->Probability(1) - 1.) < 1e-12, "Circuit phase changed the QCSim extended-stabilizer measurement");
+    network->Execute(measuredX);
+    Check(!network->GetState().GetBit(0) && std::abs(network->GetSimulator()->Probability(0) - 1.) < 1e-12,
+          "QCSim extended-stabilizer Execute lost the input of a phase-bearing circuit");
+    network->CreateSimulator(Backend::kQCSim, method, 1);
+    network->ExecuteOnHost(measuredX, 0);
+    Check(network->GetState().GetBit(0) && std::abs(network->GetSimulator()->Probability(1) - 1.) < 1e-12,
+          "Circuit phase changed the QCSim extended-stabilizer host measurement");
+
+#ifndef NO_QISKIT_AER
+    const auto checkPhase = [](Simulators::ISimulator &sim, const std::vector<std::complex<double>> &reference, double phase, const char *message) {
+        const auto values = sim.GetStateVector();
+        Check(values.size() == reference.size(), message);
+        for (size_t index = 0; index < values.size(); ++index)
+            Check(std::abs(values[index] - std::polar(1., phase) * reference[index]) < 1e-12, message);
+    };
+    // SX contributes its own global phase. Compare the entire coherent state with the same native gate on the same input.
+    auto aer = MakeNetwork(Backend::kQiskitAer, method, 1, 1);
+    aer->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    auto sim = aer->GetSimulator();
+    sim->ApplyX(0);
+    sim->ApplySx(0);
+    const auto fromOne = sim->GetStateVector();
+    sim->Reset();
+    sim->ApplyX(0);
+    const auto sx = CF::CreateCircuit({CF::CreateGate(Gate::kSxGateType, 0)});
+    sx->SetGlobalPhase(angle);
+    sx->Execute(sim, bits);
+    checkPhase(*sim, fromOne, angle, "Aer direct execution lost the SX or circuit phase");
+    sim->SaveState();
+    const auto phaseOnly = CF::CreateCircuit();
+    phaseOnly->SetGlobalPhase(-0.91);
+    aer->Execute(phaseOnly);
+    checkPhase(*aer->GetSimulator(), fromOne, angle - 0.91, "Aer phase-only Execute did not continue the caller's coherent state");
+    const auto clone = aer->GetSimulator()->Clone();
+    checkPhase(*clone, fromOne, angle - 0.91, "Aer clone lost the current circuit phase");
+    clone->RestoreState();
+    checkPhase(*clone, fromOne, angle, "Aer clone lost its separately saved circuit phase");
+    sim->RestoreState();
+    checkPhase(*sim, fromOne, angle, "Aer restore lost the checkpoint's circuit phase");
+
+    aer->CreateSimulator(Backend::kQiskitAer, method, 1);
+    sim = aer->GetSimulator();
+    sim->ApplySx(0);
+    const auto fromZero = sim->GetStateVector();
+    for (int repeat = 0; repeat < 2; ++repeat)
+    {
+        aer->ExecuteOnHost(sx, 0);
+        checkPhase(*aer->GetSimulator(), fromZero, angle, "Aer host execution failed to start from a fresh unphased register");
+    }
+    sim = aer->GetSimulator();
+    sim->Reset();
+    const double halfPi = std::acos(0.);
+    sim->ApplyU(0, halfPi, halfPi, 0., 0.31);
+    checkPhase(*sim, {std::sqrt(0.5), {0., std::sqrt(0.5)}}, 0.31, "Aer extended-stabilizer U lost its Euler-angle or explicit scalar");
+#endif
+}
+
+void CoherentHostQueriesRetainGlobalPhase()
+{
+    const auto prepare = CF::CreateCircuit({CF::CreateGate(Gate::kHadamardGateType, 0), CF::CreateGate(Gate::kZGateType, 1)});
+    prepare->SetGlobalPhase(0.37);
+    const auto phase = std::polar(1., 0.37);
+    const auto expected = phase * std::sqrt(0.5);
+    const auto unprepare = CF::CreateCircuit({CF::CreateGate(Gate::kHadamardGateType, 0)});
+    for (const bool project : {false, true})
+        for (const size_t hostWidth : {1, 2})
+        {
+            // The query runs on two wires. A one-data-qubit host and its entanglement wire
+            // match the full network register. A two-data-qubit host restores a three-wire template.
+            auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 1, hostWidth);
+            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            if (project)
+                Check(std::abs(network->ExecuteOnHostProjectOnZero(prepare, 0) - expected) < 1e-12, "The host projection lost the prepared phase");
+            else
+            {
+                const auto values = network->ExecuteOnHostAmplitudes(prepare, 0);
+                Check(values.size() == 4 && std::abs(values[0] - expected) < 1e-12 && std::abs(values[1] - expected) < 1e-12,
+                      "The host amplitudes lost the prepared phase");
+            }
+            const auto live = network->GetSimulator();
+            if (hostWidth == 1)
+            {
+                Check(std::abs(live->Amplitude(0) - expected) < 1e-12 && std::abs(live->Amplitude(1) - expected) < 1e-12,
+                      "The live simulator differs from its phase-sensitive host result");
+                network->Execute(unprepare);
+                Check(std::abs(network->GetSimulator()->Amplitude(0) - phase) < 1e-12, "A later Execute did not inherit the host query's phase");
+            }
+            else
+                Check(live->GetNumberOfQubits() == 3 && std::abs(live->Amplitude(0) - 1.) < 1e-12, "A host query phased the restored simulator template");
+        }
+}
+
+void EmptyRegisterPhasePreflight()
+{
+    const auto phaseOnly = CF::CreateCircuit();
+    phaseOnly->SetGlobalPhase(0.37);
+    auto noHosts = std::make_shared<Net>();
+    noHosts->CreateNetwork({}, {});
+    noHosts->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    noHosts->SetOptimizeSimulator(false);
+    noHosts->CreateSimulator(Backend::kQCSim, Method::kStatevector);
+    noHosts->GetState().AllocateBits(1);
+    noHosts->GetState().SetBit(0);
+    bool rejected = false;
+    try
+    {
+        noHosts->Execute(phaseOnly);
+    }
+    catch (const std::invalid_argument &)
+    {
+        rejected = true;
+    }
+    Check(rejected && noHosts->GetSimulator()->GetNumberOfQubits() == 0 && noHosts->GetState().GetBit(0),
+          "A zero-register Execute overwrote classical results before rejecting the phase");
+    noHosts->ExecuteOnHost(phaseOnly, 0);
+    Check(noHosts->GetState().GetBit(0), "A call with no such host changed classical results");
+    Check(noHosts->RepeatedExecute(phaseOnly, 1) == Counts{{{}, 1}}, "A phase-only count request rejected a zero-wire network");
+    noHosts->GetController()->SetRemapper(nullptr);
+    noHosts->Execute(phaseOnly); // Without a remapper the network performs no execution.
+
+    auto idleHost = MakeNetwork(Backend::kQCSim, Method::kStatevector, 1, 0);
+    idleHost->ExecuteOnHost(phaseOnly, 0);
+    Check(std::abs(idleHost->GetSimulator()->Amplitude(0) - std::polar(1., 0.37)) < 1e-12, "A phase-only host query lost its one idle wire");
+
+    // A caller can clear the attachment before selection. The positive-width MPS that executes is phase-capable.
+    const auto measured = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 0}})});
+    measured->SetGlobalPhase(0.37);
+    idleHost->GetSimulator()->Clear();
+    idleHost->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kMatrixProductState);
+    idleHost->SetOptimizeSimulator(true);
+    idleHost->ExecuteOnHost(measured, 0);
+    Check(idleHost->GetLastSimulationType() == Method::kMatrixProductState && idleHost->GetState().GetBit(0) &&
+              idleHost->GetSimulator()->GetSimulationType() == Method::kStatevector && std::abs(idleHost->GetSimulator()->Amplitude(0) - 1.) < 1e-12,
+          "An empty attachment prevented a supported candidate from running or corrupted the restored template");
+}
+
+#ifndef NO_QISKIT_AER
+void AerPropagatorPhasePreflight()
+{
+    const auto makePropagator = [](const char *method, size_t width) {
+        auto network = MakeNetwork(Backend::kQiskitAer, Method::kStatevector, 1, 1);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        const auto simulator = network->GetSimulator();
+        simulator->Clear();
+        simulator->Configure("method", method);
+        simulator->AllocateQubits(width);
+        simulator->Initialize();
+        Check(simulator->GetSimulationType() == Method::kOther, "Aer did not configure the requested propagator");
+        return network;
+    };
+    for (const char *method : {"unitary", "superop"})
+        for (const bool onHost : {false, true})
+            for (const size_t width : {1, 2}) // Host and whole-network execution use one and two wires, respectively.
+            {
+                auto network = makePropagator(method, width);
+                const auto simulator = network->GetSimulator();
+                network->GetState().SetBit(0);
+                std::shared_ptr<Simulators::ISimulator> observed;
+                const auto circuit = CF::CreateCircuit({std::make_shared<ObservedX>(observed)});
+                circuit->SetGlobalPhase(0.37);
+                bool rejected = false;
+                try
+                {
+                    if (onHost)
+                        network->ExecuteOnHost(circuit, 0);
+                    else
+                        network->Execute(circuit);
+                }
+                catch (const std::invalid_argument &)
+                {
+                    rejected = true;
+                }
+                Check(rejected && !observed && network->GetSimulator() == simulator && network->GetState().GetNumBits() > 0 && network->GetState().GetBit(0),
+                      "Aer propagator ran the gate or changed classical state before rejecting the phase");
+            }
+
+    auto network = makePropagator("unitary", 2);
+    const auto simulator = network->GetSimulator();
+    network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kStatevector);
+    network->SetOptimizeSimulator(true);
+    auto measured = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 0}})});
+    measured->SetGlobalPhase(0.37);
+    network->ExecuteOnHost(measured, 0);
+    Check(network->GetLastSimulatorType() == Backend::kQCSim && network->GetLastSimulationType() == Method::kStatevector && network->GetState().GetBit(0),
+          "The custom Aer template prevented the selected statevector from running the phased circuit");
+    const auto checkTemplate = [&] {
+        Check(network->GetSimulator() == simulator && simulator->GetSimulationType() == Method::kOther && simulator->GetNumberOfQubits() == 2,
+              "A supported candidate failed to restore the configured Aer propagator");
+    };
+    checkTemplate();
+
+    auto superposition = CF::CreateCircuit({CF::CreateGate(Gate::kHadamardGateType, 0)});
+    superposition->SetGlobalPhase(0.37);
+    const auto expected = std::polar(std::sqrt(0.5), 0.37);
+    for (const bool project : {false, true})
+    {
+        if (project)
+            Check(std::abs(network->ExecuteOnHostProjectOnZero(superposition, 0) - expected) < 1e-12, "The selected statevector lost the projection's phase");
+        else
+        {
+            const auto values = network->ExecuteOnHostAmplitudes(superposition, 0);
+            Check(values.size() == 2 && std::abs(values[0] - expected) < 1e-12 && std::abs(values[1] - expected) < 1e-12,
+                  "The selected statevector lost the coherent readout's phase");
+        }
+        checkTemplate();
+    }
+}
+#endif
+
 // A single-shot trajectory on an unseeded network seeds only its execution.
 // Neither the simulator Execute keeps nor the configuration the next run
 // captures from it may turn the network's later executions deterministic.
@@ -3357,6 +3659,13 @@ try
     ConditionalBitHelpers();
     HostSimulatorReuse();
     ExecuteTrajectoryPreservesState();
+    ExecuteRetainsGlobalPhase();
+    ExtendedStabilizerCircuitPhase();
+    CoherentHostQueriesRetainGlobalPhase();
+    EmptyRegisterPhasePreflight();
+#ifndef NO_QISKIT_AER
+    AerPropagatorPhasePreflight();
+#endif
     UnseededExecuteStaysUnseeded();
     TransientExecutionCloneStreams();
     DistributedSimulatorReuse();

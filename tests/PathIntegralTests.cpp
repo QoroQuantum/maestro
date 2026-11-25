@@ -326,6 +326,13 @@ struct PathIntegralFixture
 
 BOOST_AUTO_TEST_SUITE(path_integral_tests)
 
+BOOST_AUTO_TEST_CASE(RejectsInvalidPauliBeyondTheRegister)
+{
+    Simulators::PathIntegralSimulator pi;
+    pi.SetStartZeroState(1);
+    BOOST_CHECK_THROW(pi.ExpectationValue("IXA"), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(RejectedAmplitudeCircuitPreservesPreviousCircuit)
 {
     struct UnsupportedGate : Circuits::XGate<>

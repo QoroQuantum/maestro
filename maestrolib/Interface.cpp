@@ -1230,7 +1230,15 @@ extern "C"
         }
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
+        std::vector<double> expectations;
+        try
+        {
+            expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
+        }
+        catch (const std::exception &)
+        {
+            return nullptr;
+        }
         auto end = std::chrono::high_resolution_clock::now();
 
         std::chrono::duration<double> duration = end - start;

@@ -289,6 +289,7 @@ struct QoperationStatement : public AbstractSyntaxTree
         Uop,
         CondUop,
         Delay,
+        GlobalPhase,
     };
 
     OperationType opType = OperationType::Comment;

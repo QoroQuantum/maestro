@@ -249,13 +249,9 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        DontNotify();
-        {
-            for (size_t qubit : qubits)
-                if (tn->Measure(static_cast<unsigned int>(qubit)))
-                    tn->ApplyX(static_cast<unsigned int>(qubit));
-        }
-        Notify();
+        for (size_t qubit : qubits)
+            if (tn->Measure(static_cast<unsigned int>(qubit)))
+                RequireGateSuccess(tn->ApplyX(static_cast<unsigned int>(qubit)), "X");
         NotifyObservers(qubits);
     }
 
@@ -360,6 +356,7 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = tn->ExpectationValue(pauliString);
         return result;
@@ -389,181 +386,181 @@ class GpuTensorNetworkSimulator : public ImmediateGpuSimulator
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
-        tn->ApplyP(qubit, lambda);
+        RequireGateSuccess(tn->ApplyP(qubit, lambda), "P");
         NotifyObservers({qubit});
     }
 
     void ApplyX(Types::qubit_t qubit) override
     {
-        tn->ApplyX(qubit);
+        RequireGateSuccess(tn->ApplyX(qubit), "X");
         NotifyObservers({qubit});
     }
 
     void ApplyY(Types::qubit_t qubit) override
     {
-        tn->ApplyY(qubit);
+        RequireGateSuccess(tn->ApplyY(qubit), "Y");
         NotifyObservers({qubit});
     }
 
     void ApplyZ(Types::qubit_t qubit) override
     {
-        tn->ApplyZ(qubit);
+        RequireGateSuccess(tn->ApplyZ(qubit), "Z");
         NotifyObservers({qubit});
     }
 
     void ApplyH(Types::qubit_t qubit) override
     {
-        tn->ApplyH(qubit);
+        RequireGateSuccess(tn->ApplyH(qubit), "H");
         NotifyObservers({qubit});
     }
 
     void ApplyS(Types::qubit_t qubit) override
     {
-        tn->ApplyS(qubit);
+        RequireGateSuccess(tn->ApplyS(qubit), "S");
         NotifyObservers({qubit});
     }
 
     void ApplySDG(Types::qubit_t qubit) override
     {
-        tn->ApplySDG(qubit);
+        RequireGateSuccess(tn->ApplySDG(qubit), "SDG");
         NotifyObservers({qubit});
     }
 
     void ApplyT(Types::qubit_t qubit) override
     {
-        tn->ApplyT(qubit);
+        RequireGateSuccess(tn->ApplyT(qubit), "T");
         NotifyObservers({qubit});
     }
 
     void ApplyTDG(Types::qubit_t qubit) override
     {
-        tn->ApplyTDG(qubit);
+        RequireGateSuccess(tn->ApplyTDG(qubit), "TDG");
         NotifyObservers({qubit});
     }
 
     void ApplySx(Types::qubit_t qubit) override
     {
-        tn->ApplySX(qubit);
+        RequireGateSuccess(tn->ApplySX(qubit), "SX");
         NotifyObservers({qubit});
     }
 
     void ApplySxDAG(Types::qubit_t qubit) override
     {
-        tn->ApplySXDG(qubit);
+        RequireGateSuccess(tn->ApplySXDG(qubit), "SXDG");
         NotifyObservers({qubit});
     }
 
     void ApplyK(Types::qubit_t qubit) override
     {
-        tn->ApplyK(qubit);
+        RequireGateSuccess(tn->ApplyK(qubit), "K");
         NotifyObservers({qubit});
     }
 
     void ApplyRx(Types::qubit_t qubit, double theta) override
     {
-        tn->ApplyRx(qubit, theta);
+        RequireGateSuccess(tn->ApplyRx(qubit, theta), "Rx");
         NotifyObservers({qubit});
     }
 
     void ApplyRy(Types::qubit_t qubit, double theta) override
     {
-        tn->ApplyRy(qubit, theta);
+        RequireGateSuccess(tn->ApplyRy(qubit, theta), "Ry");
         NotifyObservers({qubit});
     }
 
     void ApplyRz(Types::qubit_t qubit, double theta) override
     {
-        tn->ApplyRz(qubit, theta);
+        RequireGateSuccess(tn->ApplyRz(qubit, theta), "Rz");
         NotifyObservers({qubit});
     }
 
     void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
     {
-        tn->ApplyU(qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(tn->ApplyU(qubit, theta, phi, lambda, gamma), "U");
         NotifyObservers({qubit});
     }
 
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCX(ctrl_qubit, tgt_qubit), "CX");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCY(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCY(ctrl_qubit, tgt_qubit), "CY");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCZ(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCZ(ctrl_qubit, tgt_qubit), "CZ");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
     {
-        tn->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+        RequireGateSuccess(tn->ApplyCP(ctrl_qubit, tgt_qubit, lambda), "CP");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        tn->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(tn->ApplyCRx(ctrl_qubit, tgt_qubit, theta), "CRx");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        tn->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(tn->ApplyCRy(ctrl_qubit, tgt_qubit, theta), "CRy");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        tn->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(tn->ApplyCRz(ctrl_qubit, tgt_qubit, theta), "CRz");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCH(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCH(ctrl_qubit, tgt_qubit), "CH");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCSX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCSX(ctrl_qubit, tgt_qubit), "CSX");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        tn->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(tn->ApplyCSXDG(ctrl_qubit, tgt_qubit), "CSXDG");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        tn->ApplySwap(qubit0, qubit1);
+        RequireGateSuccess(tn->ApplySwap(qubit0, qubit1), "Swap");
         NotifyObservers({qubit1, qubit0});
     }
 
     void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
     {
-        tn->ApplyCCX(qubit0, qubit1, qubit2);
+        RequireGateSuccess(tn->ApplyCCX(qubit0, qubit1, qubit2), "CCX");
         NotifyObservers({qubit0, qubit1, qubit2});
     }
 
     void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
+        RequireGateSuccess(tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1), "CSwap");
         NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
-        tn->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(tn->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma), "CU");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 

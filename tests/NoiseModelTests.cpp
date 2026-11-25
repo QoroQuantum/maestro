@@ -1032,7 +1032,7 @@ BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveEnsureProperOrder)
     BOOST_CHECK_EQUAL(seen, 2u);
 }
 
-BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates)
+BOOST_AUTO_TEST_CASE(RepeatedClassicalWritesPreserveBothMeasurementsAndTheirReadout)
 {
     Circuits::Circuit<double> circuit;
     auto noisy = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
@@ -1042,8 +1042,12 @@ BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates)
 
     circuit.EnsureProperOrderForMeasurements();
 
-    BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 1u);
-    auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[0]);
+    BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 2u);
+    const auto first = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[0]);
+    BOOST_CHECK_EQUAL(first->GetQubits()[0], 0u);
+    BOOST_REQUIRE(first->HasReadout());
+    BOOST_CHECK_EQUAL(first->GetReadout()[0].p_meas1_prep0, 1.);
+    auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit.GetOperations()[1]);
     BOOST_CHECK_EQUAL(rebuilt->GetQubits()[0], 1u);
     BOOST_CHECK(!rebuilt->HasReadout());
     auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);
@@ -1475,6 +1479,24 @@ BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
     const auto noisy = noise::inject_noise(flipped, noNoise, rng);
     BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 1u);
     BOOST_CHECK(std::dynamic_pointer_cast<Circuits::XGate<>>(noisy->GetOperations()[0]));
+}
+
+BOOST_AUTO_TEST_CASE(NoiseInjectionPreservesCircuitGlobalPhase)
+{
+    auto circuit = HadamardCircuit();
+    circuit->SetGlobalPhase(0.75);
+    noise::NoiseModel model;
+    model.set_qubit_noise(0, 1., 0., 0.);
+    std::mt19937 rng(1);
+    for (const auto &realization :
+         {noise::inject_noise(circuit, model, rng), noise::inject_exact_noise(circuit, model), noise::inject_combined_noise(circuit, model, rng),
+          noise::inject_coherent_noise(circuit, model, rng), noise::inject_correlated_noise(circuit, model, rng)})
+        BOOST_CHECK_EQUAL(realization->GetGlobalPhase(), 0.75);
+
+    circuit->AddOperation(std::make_shared<Circuits::RzGate<>>(3, 0.5));
+    const auto kept = noise::drop_outside_spectator_phases(circuit, 1);
+    BOOST_CHECK_EQUAL(kept->GetGlobalPhase(), 0.5);
+    BOOST_CHECK_EQUAL(kept->GetOperations().size(), 1u);
 }
 
 /**

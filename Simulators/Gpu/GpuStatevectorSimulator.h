@@ -223,13 +223,9 @@ class GpuStatevectorSimulator : public ImmediateGpuSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        DontNotify();
-        {
-            for (size_t qubit : qubits)
-                if (state->MeasureQubitCollapse(static_cast<int>(qubit)))
-                    state->ApplyX(static_cast<int>(qubit));
-        }
-        Notify();
+        for (size_t qubit : qubits)
+            if (state->MeasureQubitCollapse(static_cast<int>(qubit)))
+                RequireGateSuccess(state->ApplyX(static_cast<int>(qubit)), "X");
         NotifyObservers(qubits);
     }
 
@@ -316,6 +312,7 @@ class GpuStatevectorSimulator : public ImmediateGpuSimulator
 
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         double result = 0.0;
         result = state->ExpectationValue(pauliString);
         return result;
@@ -408,181 +405,181 @@ class GpuStatevectorSimulator : public ImmediateGpuSimulator
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
-        state->ApplyP(qubit, lambda);
+        RequireGateSuccess(state->ApplyP(qubit, lambda), "P");
         NotifyObservers({qubit});
     }
 
     void ApplyX(Types::qubit_t qubit) override
     {
-        state->ApplyX(qubit);
+        RequireGateSuccess(state->ApplyX(qubit), "X");
         NotifyObservers({qubit});
     }
 
     void ApplyY(Types::qubit_t qubit) override
     {
-        state->ApplyY(qubit);
+        RequireGateSuccess(state->ApplyY(qubit), "Y");
         NotifyObservers({qubit});
     }
 
     void ApplyZ(Types::qubit_t qubit) override
     {
-        state->ApplyZ(qubit);
+        RequireGateSuccess(state->ApplyZ(qubit), "Z");
         NotifyObservers({qubit});
     }
 
     void ApplyH(Types::qubit_t qubit) override
     {
-        state->ApplyH(qubit);
+        RequireGateSuccess(state->ApplyH(qubit), "H");
         NotifyObservers({qubit});
     }
 
     void ApplyS(Types::qubit_t qubit) override
     {
-        state->ApplyS(qubit);
+        RequireGateSuccess(state->ApplyS(qubit), "S");
         NotifyObservers({qubit});
     }
 
     void ApplySDG(Types::qubit_t qubit) override
     {
-        state->ApplySDG(qubit);
+        RequireGateSuccess(state->ApplySDG(qubit), "SDG");
         NotifyObservers({qubit});
     }
 
     void ApplyT(Types::qubit_t qubit) override
     {
-        state->ApplyT(qubit);
+        RequireGateSuccess(state->ApplyT(qubit), "T");
         NotifyObservers({qubit});
     }
 
     void ApplyTDG(Types::qubit_t qubit) override
     {
-        state->ApplyTDG(qubit);
+        RequireGateSuccess(state->ApplyTDG(qubit), "TDG");
         NotifyObservers({qubit});
     }
 
     void ApplySx(Types::qubit_t qubit) override
     {
-        state->ApplySX(qubit);
+        RequireGateSuccess(state->ApplySX(qubit), "SX");
         NotifyObservers({qubit});
     }
 
     void ApplySxDAG(Types::qubit_t qubit) override
     {
-        state->ApplySXDG(qubit);
+        RequireGateSuccess(state->ApplySXDG(qubit), "SXDG");
         NotifyObservers({qubit});
     }
 
     void ApplyK(Types::qubit_t qubit) override
     {
-        state->ApplyK(qubit);
+        RequireGateSuccess(state->ApplyK(qubit), "K");
         NotifyObservers({qubit});
     }
 
     void ApplyRx(Types::qubit_t qubit, double theta) override
     {
-        state->ApplyRx(qubit, theta);
+        RequireGateSuccess(state->ApplyRx(qubit, theta), "Rx");
         NotifyObservers({qubit});
     }
 
     void ApplyRy(Types::qubit_t qubit, double theta) override
     {
-        state->ApplyRy(qubit, theta);
+        RequireGateSuccess(state->ApplyRy(qubit, theta), "Ry");
         NotifyObservers({qubit});
     }
 
     void ApplyRz(Types::qubit_t qubit, double theta) override
     {
-        state->ApplyRz(qubit, theta);
+        RequireGateSuccess(state->ApplyRz(qubit, theta), "Rz");
         NotifyObservers({qubit});
     }
 
     void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
     {
-        state->ApplyU(qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(state->ApplyU(qubit, theta, phi, lambda, gamma), "U");
         NotifyObservers({qubit});
     }
 
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCX(ctrl_qubit, tgt_qubit), "CX");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCY(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCY(ctrl_qubit, tgt_qubit), "CY");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCZ(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCZ(ctrl_qubit, tgt_qubit), "CZ");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
     {
-        state->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+        RequireGateSuccess(state->ApplyCP(ctrl_qubit, tgt_qubit, lambda), "CP");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        state->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(state->ApplyCRx(ctrl_qubit, tgt_qubit, theta), "CRx");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        state->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(state->ApplyCRy(ctrl_qubit, tgt_qubit, theta), "CRy");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        state->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+        RequireGateSuccess(state->ApplyCRz(ctrl_qubit, tgt_qubit, theta), "CRz");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCH(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCH(ctrl_qubit, tgt_qubit), "CH");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCSX(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCSX(ctrl_qubit, tgt_qubit), "CSX");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        state->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+        RequireGateSuccess(state->ApplyCSXDG(ctrl_qubit, tgt_qubit), "CSXDG");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        state->ApplySwap(qubit0, qubit1);
+        RequireGateSuccess(state->ApplySwap(qubit0, qubit1), "Swap");
         NotifyObservers({qubit1, qubit0});
     }
 
     void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
     {
-        state->ApplyCCX(qubit0, qubit1, qubit2);
+        RequireGateSuccess(state->ApplyCCX(qubit0, qubit1, qubit2), "CCX");
         NotifyObservers({qubit0, qubit1, qubit2});
     }
 
     void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        state->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
+        RequireGateSuccess(state->ApplyCSwap(ctrl_qubit, qubit0, qubit1), "CSwap");
         NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
-        state->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+        RequireGateSuccess(state->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma), "CU");
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 

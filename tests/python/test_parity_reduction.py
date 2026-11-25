@@ -1,6 +1,7 @@
 """Exact check-subspace reduction versus independent full-register execution."""
 import copy
 import itertools
+import math
 import random
 
 import pytest
@@ -34,6 +35,140 @@ def cfg(enabled, **kwargs):
     return maestro.SimulatorConfig(
         auto_reduce=enabled, enable_causal_cone_reduction=False, **kwargs
     )
+
+
+def stabilizer_options(selection):
+    backend = maestro.SimulatorType.QCSim
+    method = maestro.SimulationType.Stabilizer
+    if selection == "fixed":
+        return dict(simulator_type=backend, simulation_type=method, fixed_backend=True)
+    candidates = [(backend, method)]
+    if selection == "mixed":
+        candidates.append((backend, maestro.SimulationType.Statevector))
+    return dict(simulator_type=backend, simulation_type=maestro.SimulationType.Statevector,
+                fixed_backend=False, optimization_candidates=candidates)
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate", "mixed"])
+@pytest.mark.parametrize("with_cx,observable", [(True, "ZI"), (False, "ZZ")])
+def test_reduced_pauli_gate_runs_on_selected_stabilizer(selection, with_cx, observable):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.x(0)
+    if with_cx:
+        circuit.cx(0, 1)
+    full = circuit.estimate(observable, cfg(False, **stabilizer_options(selection)))
+    assert full["expectation_values"] == pytest.approx([-1.0])
+    reduced = circuit.estimate(observable, cfg(True, **stabilizer_options(selection)))
+    assert reduced["auto_reduced"] and (reduced["qubits_before"], reduced["qubits_after"]) == (2, 1)
+    assert reduced["method"] == maestro.SimulationType.Stabilizer
+    assert reduced["expectation_values"] == pytest.approx(full["expectation_values"])
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate", "mixed"])
+def test_reduced_cz_preserves_named_clifford_rotations(selection):
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(3):
+        circuit.h(q)
+    circuit.cz(0, 1)
+    observables = ["XZI", "ZXI", "YYI", "IIX"]
+    full = circuit.estimate(observables, cfg(False, **stabilizer_options(selection)))
+    assert full["expectation_values"] == pytest.approx([1.0] * len(observables))
+    reduced = circuit.estimate(observables, cfg(True, **stabilizer_options(selection)))
+    assert reduced["auto_reduced"] and (reduced["qubits_before"], reduced["qubits_after"]) == (3, 2)
+    assert reduced["method"] == maestro.SimulationType.Stabilizer
+    assert reduced["expectation_values"] == pytest.approx(full["expectation_values"])
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate"])
+def test_noisy_estimate_uses_stabilizer_for_reduced_ideal(selection):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.x(0)
+    model = maestro.NoiseModel()
+    model.set_bit_flip(0, 0.01)
+    full = circuit.noisy_estimate(["ZZ"], model, cfg(False, **stabilizer_options(selection)))
+    assert full["ideal_expectation_values"] == pytest.approx([-1.0])
+    assert full["expectation_values"] == pytest.approx([-0.98])
+    reduced = circuit.noisy_estimate(["ZZ"], model, cfg(True, **stabilizer_options(selection)))
+    assert reduced["auto_reduced"] and (reduced["qubits_before"], reduced["qubits_after"]) == (2, 1)
+    assert reduced["method"] == maestro.SimulationType.Stabilizer
+    for key in ("ideal_expectation_values", "expectation_values"):
+        assert reduced[key] == pytest.approx(full[key])
+
+
+@pytest.mark.parametrize("angle", [math.pi, math.pi + 5e-13])
+def test_parameterized_input_rotation_preserves_method_and_angle(angle):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.rx(0, angle)
+    for enabled in (False, True):
+        result = circuit.estimate("YZ", cfg(enabled, **stabilizer_options("mixed")))
+        assert result["method"] == maestro.SimulationType.Statevector
+        assert result["auto_reduced"] == enabled
+        assert result["qubits_after"] == (1 if enabled else 2)
+        assert result["expectation_values"] == pytest.approx([-math.sin(angle)], abs=1e-14)
+    for selection in ("fixed", "candidate"):
+        with pytest.raises((RuntimeError, ValueError), match="(?i)stabilizer|clifford"):
+            circuit.estimate("YZ", cfg(True, **stabilizer_options(selection)))
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate"])
+@pytest.mark.parametrize("disjoint_t", [False, True], ids=["two-t-gates", "t-outside-cone"])
+def test_parity_preserves_estimates_simplified_to_clifford(selection, disjoint_t):
+    circuit = maestro.circuits.QuantumCircuit()
+    observable = "YII" if disjoint_t else "YI"
+    for q in range(len(observable)):
+        circuit.h(q)
+    if disjoint_t:
+        circuit.s(0)
+        circuit.t(1)
+    else:
+        circuit.t(0)
+        circuit.t(0)
+    result = circuit.estimate(observable, maestro.SimulatorConfig(**stabilizer_options(selection)))
+    assert result["method"] == maestro.SimulationType.Stabilizer
+    assert result["expectation_values"] == pytest.approx([1.0])
+
+
+@pytest.mark.parametrize("gate,angle", [("T", math.pi / 4), ("P", math.pi / 4), ("P", -math.pi)])
+def test_stabilizer_estimate_diagnostic_names_unsupported_source_gate(gate, angle):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.h(1)
+    if gate == "T":
+        circuit.t(0)
+    else:
+        circuit.p(0, angle)
+    with pytest.raises((RuntimeError, ValueError), match=rf"(?i)\b(?:apply)?{gate}\b"):
+        circuit.estimate("YI", maestro.SimulatorConfig(**stabilizer_options("fixed")))
+    with pytest.raises((RuntimeError, ValueError), match="(?i)stabilizer|clifford"):
+        circuit.estimate("YI", maestro.SimulatorConfig(**stabilizer_options("candidate")))
+    mixed = circuit.estimate("YI", maestro.SimulatorConfig(**stabilizer_options("mixed")))
+    assert mixed["method"] == maestro.SimulationType.Statevector
+    assert mixed["expectation_values"] == pytest.approx([math.sin(angle)])
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate"])
+@pytest.mark.parametrize("causal_cones", [False, True])
+def test_out_of_span_zero_in_nonclifford_circuit_on_stabilizer(selection, causal_cones):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.h(1)
+    circuit.t(0)
+    config = maestro.SimulatorConfig(enable_causal_cone_reduction=causal_cones, **stabilizer_options(selection))
+    result = circuit.estimate("XZ", config)
+    assert result["auto_reduced"] and result["qubits_after"] == 0
+    assert result["expectation_values"] == [0.0]
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate"])
+def test_mixed_batch_resolves_parity_zero_and_runs_only_clifford_cone(selection):
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(3):
+        circuit.h(q)
+    circuit.t(0)
+    circuit.s(1)
+    result = circuit.estimate(["XIZ", "IYI"], maestro.SimulatorConfig(**stabilizer_options(selection)))
+    assert result["expectation_values"] == pytest.approx([0.0, 1.0])
+    assert result["method"] == maestro.SimulationType.Stabilizer
 
 
 @pytest.mark.parametrize("dual", [False, True])

@@ -142,7 +142,7 @@ class RawSamplingSession
                 simulator->Reset();
             simulator->SetGatesCounter(0);
             state.Reset();
-            suffix->ExecuteBD(simulator, state, &maxBondDimension);
+            suffix->ExecutePhysicalOperations(simulator, state, &maxBondDimension);
             const auto &bits = state.GetAllBits();
             for (size_t bit = 0; bit < width; ++bit)
                 output[shot * width + bit] = bit < bits.size() && bits[bit];

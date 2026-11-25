@@ -706,6 +706,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     double ExpectationValue(const std::string &pauliString) override
     {
+        ValidatePauliString(pauliString);
         std::unordered_map<size_t, std::string> pauliStrings;
 
         for (size_t q = 0; q < pauliString.size(); ++q)

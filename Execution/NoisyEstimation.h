@@ -76,6 +76,8 @@ MAESTRO_TRANSFORM_API NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circui
 
 // |<ideal|noisy>|^2 of one realization: the noisy circuit without its terminal
 // measurements followed by the ideal circuit's adjoint, read as P(|0...0>).
+// The ideal may include terminal readout and resets that initialize a fresh wire.
+// An ideal with channels or intermediate measurement/control is rejected.
 MAESTRO_TRANSFORM_API double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config);
 
 struct NoisyFidelityResult

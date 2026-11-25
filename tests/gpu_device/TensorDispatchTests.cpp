@@ -41,6 +41,14 @@ int main(int argc, char **)
         sim->Configure("gate_fusion", "false");
         sim->AllocateQubits(2);
         sim->Initialize();
+        auto tn = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kTensorNetwork);
+        tn->Configure("gate_fusion", "false");
+        tn->AllocateQubits(2);
+        tn->Initialize();
+        setenv("MAESTRO_TEST_TENSOR_FAILURE", "gate", 1);
+        Reject([&] { sim->ApplyX(0); });
+        Reject([&] { tn->ApplyX(0); });
+        unsetenv("MAESTRO_TEST_TENSOR_FAILURE");
         Check(lib->HasMPSExpectationValues() != old);
         Check(calls(4) == (old ? 0 : 1) && calls(5) == (old ? 1 : 0));
         Check(sim->GetCurrentMaxBondDimension() == 3); // callback, not getter (one)

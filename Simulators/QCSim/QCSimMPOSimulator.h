@@ -753,27 +753,15 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         {
             if (paulis[i].empty())
                 continue;
-            bool zero = false;
-            for (size_t q = n; q < paulis[i].size(); ++q)
-            {
-                const auto p = toupper(static_cast<unsigned char>(paulis[i][q]));
-                if (p != 'I' && p != 'Z')
-                {
-                    zero = true;
-                    break;
-                }
-            }
-            if (zero)
+            std::string pauli = paulis[i];
+            if (!RestrictPauliToRegister(pauli, n))
             {
                 result[i] = 0.;
                 continue;
             }
-            std::string pauli = paulis[i];
             pauli.resize(n, 'I');
             for (char &p : pauli)
-            {
                 p = static_cast<char>(toupper(static_cast<unsigned char>(p)));
-            }
             indices.push_back(i);
             selected.push_back(std::move(pauli));
         }
@@ -790,16 +778,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if (pauliStringOrig.empty())
             return 1.0;
         std::string pauliString = pauliStringOrig;
-        if (pauliString.size() > GetNumberOfQubits())
-        {
-            for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i)
-            {
-                const auto pauliOp = toupper(pauliString[i]);
-                if (pauliOp != 'I' && pauliOp != 'Z')
-                    return 0.0;
-            }
-            pauliString.resize(GetNumberOfQubits());
-        }
+        if (!RestrictPauliToRegister(pauliString, GetNumberOfQubits()))
+            return 0.0;
         {
             pauliString.resize(GetNumberOfQubits(), 'I');
             return mpoSimulator->ExpectationValue(pauliString).real();

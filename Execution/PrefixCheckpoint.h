@@ -21,7 +21,8 @@ class PrefixCheckpoint
     // The prefix runs without its end measurements (ExecutedCheckpointPrefix):
     // only suffixes are sampled, and those measurements would collapse the
     // saved state once for every suffix shot. A measurement that later
-    // operations of the prefix follow or read runs, and collapses once.
+    // operations of the prefix follow or read runs and collapses once. Every
+    // suffix shot starts with that quantum state and its classical results.
     // prefix_noise, when it has noise, is injected into the prefix as exact
     // channels: it evolves only once, so it must be deterministic there (a
     // density-matrix/MPO backend, or the QCSim Pauli propagator for noise it
@@ -88,6 +89,7 @@ class PrefixCheckpoint
     SimulatorConfig config_;
     std::shared_ptr<Network::INetwork<double>> network_;
     std::shared_ptr<Simulators::ISimulator> simulator_;
+    Circuits::OperationState prefix_state_;
     size_t max_bond_dim_ = 0;
     uint64_t calls_ = 0; // ExecuteSuffix calls, for per-call seeds
     // The ideal gate-only prefix of an extended_stabilizer checkpoint, which

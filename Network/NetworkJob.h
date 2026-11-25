@@ -285,7 +285,8 @@ template <typename Time = Types::time_type> class ExecuteJob
             }
             else
             {
-                dcirc->ExecuteBD(optSim, state, &curMaxBondDimLocal);
+                state.Reset();
+                dcirc->ExecutePhysicalOperations(optSim, state, &curMaxBondDimLocal);
                 if (i < curCnt1)
                 {
                     optSim->Reset();
@@ -494,7 +495,8 @@ template <typename Time = Types::time_type> class ExecuteJob
             }
             else
             {
-                dcirc->ExecuteBD(optSim, state, curMaxBondDim);
+                state.Reset();
+                dcirc->ExecutePhysicalOperations(optSim, state, curMaxBondDim);
                 if (i < curCnt1)
                 {
                     optSim->Reset(); // leave the simulator state for the last iteration

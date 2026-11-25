@@ -218,13 +218,17 @@ bool SampleSharedHead(const Circuits::Circuit<double> &input, const std::shared_
     auto executed = circuit.ExecuteNonMeasurements(head, state, maxBondDimension);
     const auto rest = circuit.RemoveExecutedOperations(executed);
     head->SaveState();
+    const Circuits::OperationState savedBits(state);
     for (size_t shot = 0; shot < shots; ++shot)
     {
         if (shot > 0)
+        {
             head->RestoreState();
+            state = savedBits;
+        }
         head->SetGatesCounter(0);
         head->SetUpcomingGates(rest->GetOperations());
-        rest->ExecuteBD(head, state, maxBondDimension);
+        rest->ExecutePhysicalOperations(head, state, maxBondDimension);
         write(shot, state);
     }
     return true;

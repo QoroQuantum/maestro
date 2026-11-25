@@ -161,54 +161,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     void Execute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override
     {
-        const auto recreate = recreateIfNeeded;
-
-        auto simType = Simulators::SimulatorType::kQCSim;
-        auto method = Simulators::SimulationType::kMatrixProductState;
-        size_t numQubits = 2;
-        if (simulator)
-        {
-            simType = simulator->GetType();
-            method = simulator->GetSimulationType();
-            numQubits = simulator->GetNumberOfQubits();
-        }
-        const size_t templateQubits = simulatorQubits;
-        // Without a simulator the network does not simulate (a derived one may
-        // only translate the circuit): executing must not create one.
-        const bool hadSimulator = simulator != nullptr;
-
-        // Execute continues from the caller's prepared quantum state. Repeated
-        // shots and expectation queries still start from zero, even for one shot.
-        const auto reset = resetBeforeExecution;
-        recreateIfNeeded = false;
-        resetBeforeExecution = false;
-
-        ExecuteResults res;
-        try
-        {
-            res = RepeatedExecute(circuit, 1);
-        }
-        catch (...)
-        {
-            recreateIfNeeded = recreate;
-            resetBeforeExecution = reset;
-            throw;
-        }
-
-        recreateIfNeeded = recreate;
-        resetBeforeExecution = reset;
-
-        // put the results in the state
-        if (!res.empty())
-        {
-            const auto &first = *res.begin();
-            GetState().SetResultsInOrder(first.first);
-        }
-
-        if (recreate && hadSimulator &&
-            (!simulator ||
-             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
-            RecreateSimulatorKeepingResults(simType, method, templateQubits);
+        ExecuteAndRetainState(circuit, std::nullopt);
     }
 
     /**
@@ -225,57 +178,81 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     void ExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
     {
-        const auto recreate = recreateIfNeeded;
+        ExecuteAndRetainState(circuit, hostId);
+    }
 
-        auto simType = Simulators::SimulatorType::kQCSim;
-        auto method = Simulators::SimulationType::kMatrixProductState;
-        size_t numQubits = 2;
-        if (simulator)
+  private:
+    struct RetainedExecution
+    {
+        const Circuits::Circuit<Time> *circuit;
+        Simulators::SimulatorType type;
+        Simulators::SimulationType method;
+        size_t width;
+        bool restoreTemplate;
+
+        bool Keeps(Simulators::SimulatorType actualType, Simulators::SimulationType actualMethod, size_t actualWidth) const
         {
-            simType = simulator->GetType();
-            method = simulator->GetSimulationType();
-            numQubits = simulator->GetNumberOfQubits();
+            return !restoreTemplate || (type == actualType && method == actualMethod && width == actualWidth);
         }
-        const size_t templateQubits = simulatorQubits;
-        // Without a simulator the network does not simulate (a derived one may
-        // only translate the circuit): executing must not create one.
+    };
+
+    const RetainedExecution *retainedExecution = nullptr;
+
+    void ValidateRetainedPhase(Simulators::SimulatorType type, Simulators::SimulationType method, size_t width) const
+    {
+        if (retainedExecution && (method == Simulators::SimulationType::kOther || (width == 0 && retainedExecution->Keeps(type, method, width))))
+            retainedExecution->circuit->PhaseForSimulator(type, method, width);
+    }
+
+    void ExecuteAndRetainState(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, std::optional<size_t> hostId)
+    {
+        // Selection may replace the simulator, and a trajectory job can return a clone.
         const bool hadSimulator = simulator != nullptr;
-
-        // RAII: restore recreateIfNeeded on any exit path (including exceptions).
-        struct ScopedRestoreFlag
-        {
-            bool &flag, saved;
-
-            ScopedRestoreFlag(bool &f) : flag(f), saved(f)
-            {
-                flag = false;
-            }
-
-            ~ScopedRestoreFlag()
-            {
-                flag = saved;
-            }
-        };
+        const auto simType = simulator ? simulator->GetType() : Simulators::SimulatorType::kQCSim;
+        const auto method = simulator ? simulator->GetSimulationType() : Simulators::SimulationType::kMatrixProductState;
+        const size_t numQubits = simulator ? simulator->GetNumberOfQubits() : 0;
+        const size_t templateQubits = simulatorQubits;
+        const RetainedExecution execution{circuit.get(), simType, method, numQubits, recreateIfNeeded && hadSimulator};
+        // A custom Aer method cannot be recreated from its kOther enum. Keep its
+        // configured object for restoration if a different backend runs the shot.
+        const auto customTemplate = method == Simulators::SimulationType::kOther ? simulator : nullptr;
 
         ExecuteResults res;
         {
-            ScopedRestoreFlag restoreGuard(recreateIfNeeded);
-            res = RepeatedExecuteOnHost(circuit, hostId, 1);
+            struct RestoreFlags
+            {
+                bool &recreate, &reset;
+                const RetainedExecution *&pending;
+                const bool savedRecreate = recreate, savedReset = reset;
+                const RetainedExecution *savedPending = pending;
+
+                ~RestoreFlags()
+                {
+                    recreate = savedRecreate;
+                    reset = savedReset;
+                    pending = savedPending;
+                }
+            } restore{recreateIfNeeded, resetBeforeExecution, retainedExecution};
+
+            // Only a retained empty register or a custom method can reject a phase.
+            // Dispatch can choose a different backend or width, or skip the shot.
+            retainedExecution = circuit && (!execution.restoreTemplate || !numQubits || method == Simulators::SimulationType::kOther) ? &execution : nullptr;
+            recreateIfNeeded = false;
+            if (!hostId)
+                resetBeforeExecution = false; // Whole-network Execute continues the caller's state.
+            res = hostId ? RepeatedExecuteOnHost(circuit, *hostId, 1) : RepeatedExecute(circuit, 1);
         }
 
-        // put the results in the state
         if (!res.empty())
-        {
-            const auto &first = *res.begin();
-            GetState().SetResultsInOrder(first.first);
-        }
+            GetState().SetResultsInOrder(res.begin()->first);
 
-        if (recreate && hadSimulator &&
-            (!simulator ||
-             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
-            RecreateSimulatorKeepingResults(simType, method, templateQubits);
+        if (execution.restoreTemplate && (!simulator || !execution.Keeps(simulator->GetType(), simulator->GetSimulationType(), simulator->GetNumberOfQubits())))
+            RecreateSimulatorKeepingResults(simType, method, templateQubits, customTemplate);
+        else if (!res.empty() && simulator && circuit)
+            circuit->ApplyGlobalPhase(*simulator);
     }
 
+  public:
     /**
      * @brief Execute the circuit on the network and return the expectation values
      * for the specified Pauli strings.
@@ -293,6 +270,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, const std::vector<std::string> &paulis) override
     {
+        Simulators::ValidatePauliStrings(paulis);
         if constexpr (std::is_same_v<Time, double>)
             if (GetNumHosts() == 1 && recreateIfNeeded && resetBeforeExecution && configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
                 if (auto values = MaestroExecution::TryNetworkTerminalExpectation(
@@ -419,6 +397,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
                                                   const std::vector<std::string> &paulis) override
     {
+        Simulators::ValidatePauliStrings(paulis);
         if constexpr (std::is_same_v<Time, double>)
             if (hostId < GetNumHosts() && recreateIfNeeded && resetBeforeExecution &&
                 configuration.GetConfiguration("terminal_channel_policy") != "trajectories")
@@ -545,7 +524,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<std::complex<double>> ExecuteOnHostAmplitudes(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
     {
-        return ExecuteOnHostBasisValues(circuit, hostId, "ExecuteOnHostAmplitudes", [](Simulators::ISimulator &state) { return state.GetStateVector(); });
+        const auto phase = circuit && hostId < GetNumHosts() ? circuit->GlobalPhaseFactor() : std::complex<double>{1., 0.};
+        const bool hasPhase = phase != std::complex<double>{1., 0.};
+        auto values = ExecuteOnHostBasisValues(
+            circuit, hostId, "ExecuteOnHostAmplitudes", [](Simulators::ISimulator &state) { return state.GetStateVector(); }, hasPhase);
+        if (hasPhase)
+            for (auto &value : values)
+                value *= phase;
+        return values;
     }
 
     /**
@@ -621,11 +607,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      * @param hostId The id of the host to execute the circuit on.
      * @param caller The name of the calling function, for its error message.
      * @param read Returns the 2^n values of the executed simulator.
+     * @param retainPhase Complete the retained register after a coherent query with a nontrivial phase.
      * @return The values, with the retained qubits in ascending original order.
      */
     template <typename Read>
-    auto ExecuteOnHostBasisValues(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId, const char *caller, Read &&read)
-        -> decltype(read(std::declval<Simulators::ISimulator &>()))
+    auto ExecuteOnHostBasisValues(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId, const char *caller, Read &&read,
+                                  bool retainPhase = false) -> decltype(read(std::declval<Simulators::ISimulator &>()))
     {
         const auto recreate = recreateIfNeeded;
 
@@ -642,6 +629,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // Without a simulator the network does not simulate (a derived one may
         // only translate the circuit): executing must not create one.
         const bool hadSimulator = simulator != nullptr;
+
+        const auto customTemplate = method == Simulators::SimulationType::kOther ? simulator : nullptr;
 
         // RAII: restore recreateIfNeeded on any exit path (including exceptions).
         struct ScopedRestoreFlag
@@ -709,7 +698,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         if (recreate && hadSimulator &&
             (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
-            RecreateSimulatorKeepingResults(simType, method, templateQubits);
+            RecreateSimulatorKeepingResults(simType, method, templateQubits, customTemplate);
+        else if (retainPhase && circuit && !res.empty())
+            RetainCoherentReadoutPhase(*circuit);
 
         return values;
     }
@@ -745,6 +736,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // only translate the circuit): executing must not create one.
         const bool hadSimulator = simulator != nullptr;
 
+        const auto customTemplate = method == Simulators::SimulationType::kOther ? simulator : nullptr;
+
         // RAII: restore recreateIfNeeded on any exit path (including exceptions).
         struct ScopedRestoreFlag
         {
@@ -773,15 +766,29 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             throw std::runtime_error("ExecuteOnHostProjectOnZero: no simulator available after "
                                      "execution.");
 
-        const std::complex<double> result = simulator->ProjectOnZero();
+        auto result = simulator->ProjectOnZero();
+        const auto phase = circuit && hostId < GetNumHosts() ? circuit->GlobalPhaseFactor() : std::complex<double>{1., 0.};
+        result *= phase;
 
         if (recreate && hadSimulator &&
             (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
-            RecreateSimulatorKeepingResults(simType, method, templateQubits);
+            RecreateSimulatorKeepingResults(simType, method, templateQubits, customTemplate);
+        else if (phase != std::complex<double>{1., 0.} && !res.empty())
+            RetainCoherentReadoutPhase(*circuit);
 
         return result;
     }
 
+  private:
+    void RetainCoherentReadoutPhase(const Circuits::Circuit<Time> &circuit)
+    {
+        // The returned amplitudes also cover zero wires and custom methods that can only export a state.
+        // Apply the scalar to the executed register when it has a physical wire and supports the phase gate.
+        if (simulator->GetNumberOfQubits() && simulator->GetSimulationType() != Simulators::SimulationType::kOther)
+            circuit.ApplyGlobalPhase(*simulator);
+    }
+
+  public:
     /**
      * @brief Execute the circuit on the network, repeatedly.
      *
@@ -861,18 +868,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         CaptureSimulatorConfiguration();
 
-        // do that only if the optimization for simulator is on and the estimator is
-        // available, ortherwise an 'optimal' simulator won't be created
-        if (optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized())
-        {
-            simulator->Clear();
-            GetState().Clear();
-        }
-
         curMaxBondDim = 0;
 
         std::vector<bool> executed;
-        auto optSim = ChooseBestSimulator(distCirc, shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed);
+        const bool release = optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized();
+        auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed, release, release);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1116,16 +1116,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // network's simulator with the backend and width it had.
         const SimulatorRestoreOnFailure restoreOnFailure(*this, saveSimType, saveMethod, saveQubits);
 
-        // Backend selection can allocate a replacement. Fixed single-worker jobs
-        // retain the existing simulator; release it below if workers are needed.
-        if (GetOptimizeSimulator() && !distributed)
-            simulator->Clear();
-        GetState().Clear();
-
         curMaxBondDim = 0;
 
         std::vector<bool> executed;
-        auto optSim = ChooseBestSimulator(distCirc, shots, nrQubits, nrCbits, nrCbits, simType, method, executed);
+        auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbits, simType, method, executed, GetOptimizeSimulator() && !distributed, true);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1344,7 +1338,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         classicalState.Clear();
         classicalState.AllocateBits(GetNumClassicalBits() + GetNumNetworkEntangledQubits());
 
-        simulator = Simulators::SimulatorsFactory::CreateSimulator(simType, simExecType);
+        // kOther represents several Aer methods. Only the configured simulator knows which one to initialize.
+        if (simExecType == Simulators::SimulationType::kOther && simulator && simulator->GetType() == simType && simulator->GetSimulationType() == simExecType)
+            simulator->Clear();
+        else
+            simulator = Simulators::SimulatorsFactory::CreateSimulator(simType, simExecType);
 
         if (simulator)
         {
@@ -2583,18 +2581,42 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         }
     }
 
+  private:
+    std::shared_ptr<Simulators::ISimulator> ChooseShotSimulator(size_t &shots, size_t qubits, size_t cbits, size_t resultBits, Simulators::SimulatorType &type,
+                                                                Simulators::SimulationType &method, std::vector<bool> &executed, bool releaseRegister,
+                                                                bool clearClassical)
+    {
+        // Normally release the template before allocating a candidate. When a retained
+        // phase needs validation, keep the caller's registers intact until selection succeeds.
+        if (releaseRegister && !retainedExecution)
+            simulator->Clear();
+        auto chosen = ChooseBestSimulator(distCirc, shots, qubits, cbits, resultBits, type, method, executed);
+        // A derived selector may supply its own candidate or change the fallback.
+        if (retainedExecution)
+            ValidateRetainedPhase(chosen ? chosen->GetType() : type, chosen ? chosen->GetSimulationType() : method, qubits);
+        if (releaseRegister && retainedExecution && chosen != simulator)
+            simulator->Clear();
+        if (clearClassical)
+            GetState().Clear();
+        return chosen;
+    }
+
   public:
     std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts, size_t nrQubits,
                                                                 size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType &simType,
                                                                 Simulators::SimulationType &method, std::vector<bool> &executed, bool multithreading = false,
                                                                 bool dontRunCircuitStart = false) override
     {
+        const auto useCurrent = [&]() -> std::shared_ptr<Simulators::ISimulator> {
+            ValidateRetainedPhase(simType, method, nrQubits);
+            return nullptr;
+        };
         // Distribution is an explicit execution choice. Timing-based backend
         // selection must not replace it or diverge between MPI ranks.
         if (Simulators::IsDistributedGpuSimulator(simType))
-            return nullptr;
+            return useCurrent();
         if (!optimizeSimulator)
-            return nullptr;
+            return useCurrent();
 
         // Mixed-state candidates are never ranked by the estimator, so a set made
         // only of them is resolved below without it.
@@ -2608,7 +2630,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool configuredList = simulatorsForOptimizations.configured && simulatorsForOptimizations.size() > 1;
         const bool listDecides = !costModel && configuredList;
         if (!costModel && simulatorsForOptimizations.size() != 1 && !onlyMixedStateCandidates && !listDecides)
-            return nullptr;
+            return useCurrent();
 
         // when multithreading is set to true it means it needs a multithreaded
         // simulator
@@ -2764,7 +2786,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // would pass, the shots would fail, and a later candidate that runs the
         // circuit would never be tried.
         const bool hasChannels = dcirc->HasQuantumChannels();
-        const auto requireChannels = [hasChannels](const std::shared_ptr<Simulators::ISimulator> &candidate) {
+        const auto validateCandidate = [&](const std::shared_ptr<Simulators::ISimulator> &candidate) {
+            ValidateRetainedPhase(candidate->GetType(), candidate->GetSimulationType(), nrQubits);
             if (hasChannels && !candidate->SupportsQuantumChannels() && !candidate->SamplesQuantumChannels())
                 throw std::runtime_error("This backend neither holds nor samples quantum channels: use density_matrix or matrix_product_operator, "
                                          "which apply them, or statevector or matrix_product_state, which sample them");
@@ -2796,7 +2819,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 configuration.ApplyConfigurationToSimulator(sim);
                 try
                 {
-                    requireChannels(sim);
+                    validateCandidate(sim);
                     sim->AllocateQubits(nrQubits);
                     sim->Initialize();
                 }
@@ -2855,7 +2878,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             // run to the network simulator, which may be outside the list.
             if (report && failure)
                 std::rethrow_exception(failure);
-            return nullptr;
+            return report ? useCurrent() : nullptr;
         };
 
         // The configured candidates other than one the cost model already
@@ -2906,7 +2929,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 // the chosen simulator before it allocates and runs the prefix,
                 // as for the unranked candidates above.
                 configuration.ApplyConfigurationToSimulator(sim);
-                requireChannels(sim);
+                validateCandidate(sim);
                 sim->AllocateQubits(nrQubits);
                 sim->Initialize();
 
@@ -2948,7 +2971,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         method = requested.second;
         if (configuredList)
             return prepare(ordered(true));
-        return nullptr;
+        return useCurrent();
     }
 
     void SetInitialQubitsMapOptimization(bool optimize = true) override
@@ -3194,7 +3217,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 return;
             try
             {
-                network.CreateSimulator(type, method, qubits);
+                network.RestoreSimulatorTemplate(type, method, qubits, method == Simulators::SimulationType::kOther ? original.lock() : nullptr);
             }
             catch (...)
             {
@@ -3216,11 +3239,25 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // the classical results that execution stored in the network state. It
     // gets the width it had before the execution (a derived execution loop may
     // create simulators of other widths meanwhile).
-    void RecreateSimulatorKeepingResults(Simulators::SimulatorType simType, Simulators::SimulationType method, size_t qubits)
+    void RecreateSimulatorKeepingResults(Simulators::SimulatorType simType, Simulators::SimulationType method, size_t qubits,
+                                         const std::shared_ptr<Simulators::ISimulator> &customTemplate = nullptr)
     {
         const auto results = GetState().GetAllBits();
-        CreateSimulator(simType, method, qubits);
+        RestoreSimulatorTemplate(simType, method, qubits, customTemplate);
         GetState().SetResultsInOrder(results);
+    }
+
+    void RestoreSimulatorTemplate(Simulators::SimulatorType simType, Simulators::SimulationType method, size_t qubits,
+                                  const std::shared_ptr<Simulators::ISimulator> &customTemplate)
+    {
+        if (customTemplate && simulator != customTemplate)
+        {
+            if (simulator)
+                simulator->Clear();
+            simulator = customTemplate;
+        }
+        // Derived networks also rebind their executors in CreateSimulator.
+        CreateSimulator(simType, method, qubits);
     }
 
     // Nested circuits read and write the enclosing classical state, so inlining

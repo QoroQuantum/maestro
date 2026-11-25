@@ -23,6 +23,12 @@ class ImmediateGpuSimulator : public ISimulator
     virtual const char *MethodName() const = 0;
 
   protected:
+    void RequireGateSuccess(bool applied, const char *gate) const
+    {
+        if (!applied)
+            throw std::runtime_error(std::string("GPU ") + MethodName() + " failed to apply " + gate);
+    }
+
     void ValidateMethod(const char *value) const
     {
         if (std::string(value) != MethodName())

@@ -69,8 +69,7 @@ BOOST_FIXTURE_TEST_CASE(PhaseAndCphaseMatchPAndCpProbabilities, QasmTestFixture)
 
 BOOST_AUTO_TEST_CASE(GphaseRejectsMultipleParameters)
 {
-    // 'gphase' takes a single angle argument; it belongs only in
-    // allowedOneParamGates, so a two-parameter call must be rejected.
+    // A global phase has exactly one angle.
     const std::string qasmStr = "OPENQASM 3.0;\n"
                                 "qreg q[1];\n"
                                 "gphase(0.5, 0.6);\n";

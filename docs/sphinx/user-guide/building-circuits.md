@@ -120,3 +120,9 @@ To run an existing OpenQASM 2.0 program, pass the string to
 {ref}`py_quick`. OpenQASM is also the way to write classical feed-forward
 (`if (c==1) x q[1];`), which `QuantumCircuit` has no method for; see
 {ref}`py_mid_circuit`.
+
+In OpenQASM 3, `gphase(angle)` multiplies every amplitude by
+`exp(i * angle)`. It contributes to statevectors and complex inner products.
+Counts and expectation values are invariant under this phase. A classically
+guarded or quantum-controlled `gphase` raises a parse error. Use OpenQASM 3
+when exporting a circuit that carries a global phase.

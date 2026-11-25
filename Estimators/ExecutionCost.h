@@ -726,7 +726,10 @@ class ExecutionCost
         Circuits::OperationState dummyState(nrQubits);
         auto start = std::chrono::high_resolution_clock::now();
         for (size_t i = 0; i < nrReps; ++i)
-            circuit->Execute(sim, dummyState);
+        {
+            dummyState.Reset();
+            circuit->ExecutePhysicalOperations(sim, dummyState);
+        }
         auto end = std::chrono::high_resolution_clock::now();
         return std::chrono::duration<double>(end - start).count();
     }
@@ -764,7 +767,8 @@ class ExecutionCost
         {
             for (size_t i = 0; i < nrReps; ++i)
             {
-                circuit->Execute(sim, dummyState); // execute the circuit first
+                dummyState.Reset();
+                circuit->ExecutePhysicalOperations(sim, dummyState);
                 sim->SampleCountsMany(qubitsSampled, nrSamples);
             }
         }
@@ -782,7 +786,8 @@ class ExecutionCost
         auto start = std::chrono::high_resolution_clock::now();
         for (size_t i = 0; i < nrReps; ++i)
         {
-            circuit->Execute(sim, dummyState); // execute the circuit first
+            dummyState.Reset();
+            circuit->ExecutePhysicalOperations(sim, dummyState);
             sim->ExpectationValue(pauliString);
         }
         auto end = std::chrono::high_resolution_clock::now();
