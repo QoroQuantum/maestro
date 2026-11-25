@@ -950,6 +950,7 @@ class TestStateProbability:
         qc = QuantumCircuit()
         qc.h(0)
         qc.cx(0, 1)
+        qc.measure_all()
 
         result = qc.prob('11')
         assert result['probability'] == pytest.approx(0.5, abs=1e-10)
@@ -962,6 +963,70 @@ class TestStateProbability:
 
         result_01 = qc.prob('01')
         assert result_01['probability'] == pytest.approx(0.0, abs=1e-10)
+
+    def test_prob_rejects_mid_circuit_measurement(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(0)
+        qc.measure([(0, 0)])
+        qc.h(0)
+        with pytest.raises(ValueError, match=r"mid-circuit measurement.*execute\(\).*estimate\(\).*SimulationType\.PathIntegral"):
+            qc.prob("0")
+
+    def test_prob_rejects_measured_qubit_used_as_control(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(1)
+        qc.measure([(0, 3), (1, 4)])
+        qc.cx(1, 2)
+        with pytest.raises(ValueError, match="(?i)measure"):
+            qc.prob("000")
+
+    def test_state_probability_rejects_reset(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(0)
+        qc.reset(0)
+        qc.x(0)
+        qc.h(0)
+        with pytest.raises(ValueError, match="(?i)reset"):
+            maestro.state_probability(qc, "0")
+
+    def test_noisy_prob_rejects_circuit_channel(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.x(0)
+        qc.pauli_channel([0], [0.5, 0.5, 0.0, 0.0])
+        noise = maestro.NoiseModel()
+        noise.set_readout_error_symmetric(0, 0.1)
+        with pytest.raises(ValueError, match=r"quantum channels.*SimulationType\.DensityMatrix"):
+            qc.noisy_prob("1", noise)
+
+    @pytest.mark.parametrize("operation", ["x q[1]", "measure q[1] -> c[0]"])
+    def test_state_probability_rejects_qasm_conditional(self, operation):
+        qasm = f"""
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if(c==1) {operation};
+        """
+        with pytest.raises(ValueError, match="(?i)condition"):
+            maestro.state_probability(qasm, "11")
+
+    def test_terminal_measurement_allows_later_gate_on_other_qubit(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure([(0, 0)])
+        qc.x(1)
+        qc.measure([(1, 1)])
+        assert qc.prob("01")["amplitude"] == pytest.approx(1 / math.sqrt(2))
+        assert qc.prob("00")["probability"] == pytest.approx(0.0)
+
+    def test_measurement_only_circuit_preserves_zero_state(self):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.measure([(0, 0), (1, 1)])
+        assert qc.prob("00")["amplitude"] == pytest.approx(1.0)
+        assert qc.prob("10")["amplitude"] == pytest.approx(0.0)
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -3,6 +3,11 @@
 #include "Execution/SampleRecords.h"
 #include "common.h"
 
+#define MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC                                                                                                                   \
+    "Delays, no-ops and unconditional measurements after the last gate on each measured qubit are ignored. "                                                   \
+    "All other operations must be supported gates. A mid-circuit measurement, reset, classically controlled operation, "                                       \
+    "random bit generator, quantum channel, composite operation or unsupported gate raises ValueError."
+
 // Shared tail of the noisy execute docstrings (functions and methods).
 #define MAESTRO_NOISY_EXECUTE_DOC                                                                                                                              \
     "\n\nnoise_realizations=None selects one realization for deterministic exact channels (density matrix, "                                                   \
@@ -48,6 +53,7 @@ void warn_thermal_approximation(const noise::NoiseModel &noise_model, bool exact
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool return_samples = false);
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
                        MaestroExecution::EstimationCache *cache = nullptr);
+nb::dict state_probability_core(const CircuitPtr &circuit, const std::string &target_state);
 std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
 std::vector<double> probabilities_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
 nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude,

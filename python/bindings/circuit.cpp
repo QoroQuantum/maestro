@@ -1,3 +1,4 @@
+#include "Simulators/PathIntegral/PathIntegralSimulator.h"
 #include "core.h"
 #include "module.h"
 
@@ -163,7 +164,49 @@ void bind_quantum_channel(nb::module_ &m)
             return "QuantumChannel(num_qubits=" + std::to_string(self.GetNumberOfQubits()) + ", factors=[" + parts + "])";
         });
 }
+
+void SetAmplitudeCircuit(Simulators::PathIntegralSimulator &sim, const CircuitPtr &circuit)
+{
+    std::string error;
+    bool ok;
+    {
+        nb::gil_scoped_release release;
+        ok = sim.SetCircuit(circuit, error);
+    }
+    if (!ok)
+        throw nb::value_error(error.c_str());
+}
+
 } // namespace
+
+nb::dict state_probability_core(const CircuitPtr &circuit, const std::string &target_state)
+{
+    require_circuit(circuit);
+    if (target_state.empty())
+        throw nb::value_error("target_state must be a non-empty bitstring.");
+
+    std::vector<bool> end_state(target_state.size());
+    for (size_t i = 0; i < target_state.size(); ++i)
+    {
+        if (target_state[i] != '0' && target_state[i] != '1')
+            throw nb::value_error("target_state must contain only '0' and '1' characters.");
+        end_state[i] = target_state[i] == '1';
+    }
+
+    Simulators::PathIntegralSimulator sim;
+    sim.SetStartZeroState(target_state.size());
+    const auto start = std::chrono::high_resolution_clock::now();
+    SetAmplitudeCircuit(sim, circuit);
+    const auto amplitude = sim.AmplitudeFromZero(end_state);
+    const auto end = std::chrono::high_resolution_clock::now();
+
+    nb::dict result;
+    result["amplitude"] = amplitude;
+    result["probability"] = std::norm(amplitude);
+    result["target_state"] = target_state;
+    result["time_taken"] = std::chrono::duration<double>(end - start).count();
+    return result;
+}
 
 void bind_circuit(nb::module_ &m)
 {
@@ -372,52 +415,9 @@ void bind_circuit(nb::module_ &m)
             "U_other|0>`` between this circuit's state and another circuit's "
             "state, using ProjectOnZero.")
         .def(
-            "prob",
-            [](std::shared_ptr<Circuits::Circuit<double>> self,
-               const std::string &target_state) -> nb::
-                                                    dict {
-                                                        if (!self)
-                                                            throw nb::value_error("Circuit is null.");
-                                                        if (target_state.empty())
-                                                            throw nb::value_error("target_state must be a non-empty bitstring.");
-
-                                                        std::vector<bool> end_state(target_state.size());
-                                                        for (size_t i = 0; i < target_state.size(); ++i)
-                                                        {
-                                                            if (target_state[i] == '1')
-                                                                end_state[i] = true;
-                                                            else if (target_state[i] == '0')
-                                                                end_state[i] = false;
-                                                            else
-                                                                throw nb::value_error("target_state must contain only '0' and '1' characters.");
-                                                        }
-
-                                                        Simulators::PathIntegralSimulator sim;
-                                                        sim.SetStartZeroState(target_state.size());
-
-                                                        auto start = std::chrono::high_resolution_clock::now();
-                                                        bool ok;
-                                                        {
-                                                            nb::gil_scoped_release release;
-                                                            ok = sim.SetCircuit(self);
-                                                        }
-                                                        if (!ok)
-                                                            throw std::runtime_error("Circuit contains operations not supported by the path "
-                                                                                     "integral simulator.");
-
-                                                        auto amplitude = sim.AmplitudeFromZero(end_state);
-                                                        auto end = std::chrono::high_resolution_clock::now();
-
-                                                        nb::dict result;
-                                                        result["amplitude"] = amplitude;
-                                                        result["probability"] = std::norm(amplitude);
-                                                        result["target_state"] = target_state;
-                                                        result["time_taken"] = std::chrono::duration<double>(end - start).count();
-                                                        return result;
-                                                    },
-            "target_state"_a,
+            "prob", &state_probability_core, "target_state"_a,
             "Compute the probability of a specific output state using the "
-            "Pauli path integral simulator.\n\n"
+            "Pauli path integral simulator. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
             "Example: qc.prob('111') returns the probability of ``|111>``.\n\n"
             "Args:\n"
             "    target_state: Bitstring like '10001001' (qubit 0 leftmost).\n\n"
@@ -451,14 +451,7 @@ void bind_circuit(nb::module_ &m)
 
                     Simulators::PathIntegralSimulator sim;
                     sim.SetStartZeroState(bs.size());
-                    bool ok;
-                    {
-                        nb::gil_scoped_release release;
-                        ok = sim.SetCircuit(self);
-                    }
-                    if (!ok)
-                        throw std::runtime_error("Circuit contains operations not supported by the path "
-                                                 "integral simulator.");
+                    SetAmplitudeCircuit(sim, self);
                     auto amplitude = sim.AmplitudeFromZero(end_state);
                     return std::norm(amplitude);
                 };
@@ -523,7 +516,7 @@ void bind_circuit(nb::module_ &m)
                 return result;
             },
             "target_state"_a, "noise_model"_a,
-            "Compute readout-corrected probability using path integral.\n\n"
+            "Compute readout-corrected probability using path integral. " MAESTRO_PATH_INTEGRAL_OPERATIONS_DOC "\n\n"
             "When the noise model has readout error, uses first-order expansion:\n"
             "P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕eᵢ)\n"
             "where a_i = P(read ¬b_i | prepared b_i) and "

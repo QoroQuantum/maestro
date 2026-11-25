@@ -326,6 +326,69 @@ struct PathIntegralFixture
 
 BOOST_AUTO_TEST_SUITE(path_integral_tests)
 
+BOOST_AUTO_TEST_CASE(RejectedAmplitudeCircuitPreservesPreviousCircuit)
+{
+    struct UnsupportedGate : Circuits::XGate<>
+    {
+        Circuits::QuantumGateType GetGateType() const override
+        {
+            return Circuits::QuantumGateType::kNone;
+        }
+    };
+
+    Simulators::PathIntegralSimulator pi;
+    auto previous = Circuits::CircuitFactory<>::CreateCircuit();
+    previous->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    BOOST_REQUIRE(pi.SetCircuit(previous));
+
+    auto candidate = Circuits::CircuitFactory<>::CreateCircuit();
+    candidate->AddOperation(std::make_shared<Circuits::ZGate<>>(0));
+    candidate->AddOperation(std::make_shared<UnsupportedGate>());
+    BOOST_TEST(!pi.SetCircuit(candidate));
+    BOOST_CHECK_SMALL(std::abs(pi.AmplitudeFromZero({true}) - 1.0), 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(AmplitudeCircuitRejectsNestedCircuit)
+{
+    auto nested = Circuits::CircuitFactory<>::CreateCircuit();
+    nested->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(nested);
+
+    Simulators::PathIntegralSimulator pi;
+    BOOST_TEST(!pi.SetCircuit(circuit));
+}
+
+BOOST_AUTO_TEST_CASE(AmplitudeCircuitRejectsNullOperation)
+{
+    auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+    circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    circuit->AddOperation(nullptr);
+
+    Simulators::PathIntegralSimulator pi;
+    BOOST_TEST(!pi.SetCircuit(circuit));
+}
+
+BOOST_AUTO_TEST_CASE(DelayAndNoOpAfterMeasurementPreserveAmplitude)
+{
+    using Factory = Circuits::CircuitFactory<>;
+    Simulators::PathIntegralSimulator pi;
+    for (const bool flip : {false, true})
+    {
+        auto circuit = Factory::CreateCircuit();
+        if (flip)
+            circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+        circuit->AddOperation(Factory::CreateMeasurement({{0, 0}}));
+        circuit->AddOperation(Factory::CreateDelay(0, 1.0));
+        circuit->AddOperation(Factory::CreateNoOp());
+
+        BOOST_REQUIRE(pi.SetCircuit(circuit));
+        BOOST_CHECK_SMALL(std::abs(pi.AmplitudeFromZero({flip}) - 1.0), 1e-12);
+        BOOST_CHECK_SMALL(std::abs(pi.AmplitudeFromZero({!flip})), 1e-12);
+    }
+}
+
 // Generate several random Maestro circuits and check that the per basis-state
 // amplitudes computed by the path integral wrapper match those of the Qiskit
 // Aer statevector simulator.
