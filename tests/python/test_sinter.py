@@ -368,8 +368,46 @@ def test_non_clifford_reference_preserves_deterministic_measurements(preparation
     dets, obs = sampler.sample_detection_events(8)
     assert not dets.any() and not obs.any()
     assert sampler.sample(8).errors == 0
-    with pytest.raises(ValueError, match="detector_error_model"):
-        circuit.detector_error_model()
+
+
+def test_collect_extended_vacuous_without_prior():
+    circuit = NonCliffordTaskCircuit("T 0\nM(1) 0\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]")
+    task = sinter.Task(circuit=circuit)
+    stats, = sinter.collect(num_workers=1, max_shots=8, tasks=[task], decoders=["maestro"],
+                            custom_decoders={"maestro": MaestroSinterSampler(decoder="vacuous")})
+    assert stats.shots == stats.errors == 8
+    # A missing prior can identify a task but cannot be parsed as a physical DEM.
+    with pytest.raises((ValueError, IndexError), match="instruction"):
+        stim.DetectorErrorModel(str(circuit.detector_error_model()))
+    with pytest.raises(RuntimeError, match="detector_error_model"):
+        sinter.collect(num_workers=1, max_shots=1, tasks=[task], decoders=["maestro"],
+                       custom_decoders={"maestro": MaestroSinterSampler(decoder="pymatching")})
+    with pytest.raises(RuntimeError, match="DetectorErrorModel|non-Clifford"):
+        sinter.collect(num_workers=1, max_shots=1, tasks=[task], decoders=["pymatching"])
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
+                                    maestro.SimulationType.MatrixProductState])
+def test_extended_reference_uses_requested_exact_backend(method, monkeypatch):
+    config = maestro.SimulatorConfig(simulation_type=method, max_bond_dimension=1,
+                                    singular_value_threshold=0.2, seed=71)
+    original = maestro.SimulatorConfig
+    used = []
+
+    def record_config(**kwargs):
+        used.append(original(**kwargs))
+        return used[-1]
+
+    monkeypatch.setattr(maestro, "SimulatorConfig", record_config)
+    # The entangled intermediate state needs bond dimension two.
+    circuit = NonCliffordTaskCircuit("H 0\nCX 0 1\nT 1\nT_DAG 1\nCX 0 1\nH 0\nX 0\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]")
+    converter = circuit.compile_m2d_converter(config=config)
+    _, obs = converter.convert(measurements=np.array([[True]]), separate_observables=True)
+    assert not obs.any()
+    reference, = used
+    assert reference.simulation_type == method
+    assert reference.max_bond_dimension is None and reference.singular_value_threshold == 0
+    assert (config.max_bond_dimension, config.singular_value_threshold, config.seed) == (1, 0.2, 71)
 
 
 def test_non_clifford_reference_excludes_noise_and_preserves_record_offsets():
@@ -379,10 +417,39 @@ def test_non_clifford_reference_excludes_noise_and_preserves_record_offsets():
     assert sampler.sample_detection_events(16)[0].all()
 
 
+def test_extended_raw_sampling_skips_reference(monkeypatch):
+    circuit = NonCliffordTaskCircuit("T 0\nM 0\nDETECTOR rec[-1]")
+    compile_reference = circuit.compile_m2d_converter
+    calls = []
+
+    def track_reference(**kwargs):
+        calls.append(kwargs["config"].simulation_type)
+        return compile_reference(**kwargs)
+
+    monkeypatch.setattr(circuit, "compile_m2d_converter", track_reference)
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+    sampler = MaestroCompiledSampler(circuit, config=config, seed=5)
+    sampler.sample_measurements(8)
+    assert not calls
+    for _ in range(2):
+        sampler.sample_detection_events(8)
+    assert calls == [maestro.SimulationType.Statevector]
+
+
 def test_non_clifford_decoder_uses_supplied_error_model():
     circuit = NonCliffordTaskCircuit("T 0\nX_ERROR(1) 0\nM 0\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]")
     with pytest.raises(ValueError, match="detector_error_model"):
         MaestroCompiledSampler(circuit, decoder="pymatching")
+
+    class CustomDecoder(sinter.Decoder):
+        def compile_decoder_for_dem(self, *, dem):
+            pytest.fail("An inferred prior reached a custom decoder")
+
+        def decode_via_files(self, **kwargs):
+            pytest.fail("An inferred prior reached a custom decoder")
+
+    with pytest.raises(ValueError, match="detector_error_model"):
+        MaestroCompiledSampler(circuit, decoder=CustomDecoder())
     prior = stim.DetectorErrorModel("error(0.25) D0 L0")
     task = sinter.Task(circuit=circuit, detector_error_model=prior)
     sampler = MaestroCompiledSampler(task, decoder="pymatching")

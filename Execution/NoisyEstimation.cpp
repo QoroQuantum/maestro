@@ -742,7 +742,7 @@ double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitP
     if (config.seed)
         simulator->SetSeed(*config.seed);
     Circuits::OperationState state(std::max(register_qubits, combined->GetMaxCbitIndex() + 1));
-    combined->ExecuteBD(simulator, state);
+    combined->ExecutePhysicalOperations(simulator, state);
     return simulator->Probability(0);
 }
 } // namespace

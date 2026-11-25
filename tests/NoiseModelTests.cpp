@@ -1481,6 +1481,24 @@ BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
     BOOST_CHECK(std::dynamic_pointer_cast<Circuits::XGate<>>(noisy->GetOperations()[0]));
 }
 
+BOOST_AUTO_TEST_CASE(NoiseInjectionPreservesCircuitGlobalPhase)
+{
+    auto circuit = HadamardCircuit();
+    circuit->SetGlobalPhase(0.75);
+    noise::NoiseModel model;
+    model.set_qubit_noise(0, 1., 0., 0.);
+    std::mt19937 rng(1);
+    for (const auto &realization :
+         {noise::inject_noise(circuit, model, rng), noise::inject_exact_noise(circuit, model), noise::inject_combined_noise(circuit, model, rng),
+          noise::inject_coherent_noise(circuit, model, rng), noise::inject_correlated_noise(circuit, model, rng)})
+        BOOST_CHECK_EQUAL(realization->GetGlobalPhase(), 0.75);
+
+    circuit->AddOperation(std::make_shared<Circuits::RzGate<>>(3, 0.5));
+    const auto kept = noise::drop_outside_spectator_phases(circuit, 1);
+    BOOST_CHECK_EQUAL(kept->GetGlobalPhase(), 0.5);
+    BOOST_CHECK_EQUAL(kept->GetOperations().size(), 1u);
+}
+
 /**
  * Coherent injection samples its rotation signs on every backend but, like the
  * other injectors, keeps circuit-level channels exact for density-matrix/MPO

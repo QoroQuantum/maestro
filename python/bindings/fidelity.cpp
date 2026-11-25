@@ -9,6 +9,7 @@ namespace maestro_bindings
 static CircuitPtr build_overlap_circuit(const CircuitPtr &bra, const CircuitPtr &ket)
 {
     auto combined = std::static_pointer_cast<Circuits::Circuit<double>>(ket->Clone());
+    combined->SetGlobalPhase(ket->GetGlobalPhase() - bra->GetGlobalPhase());
     const auto &ops = bra->GetOperations();
     for (auto it = ops.rbegin(); it != ops.rend(); ++it)
         combined->AddOperation(MaestroExecution::adjoint_gate(*it));

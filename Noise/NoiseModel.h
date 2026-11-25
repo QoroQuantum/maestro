@@ -2461,6 +2461,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
                                     "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    out->SetGlobalPhase(circ->GetGlobalPhase());
     ExactChannelMemo memo;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     const auto &operations = circ->GetOperations();
@@ -2750,6 +2751,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise_impl_(co
                                                                               const InjectionCircuitInfo *info = nullptr, bool runtime_channels = false)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    out->SetGlobalPhase(circ->GetGlobalPhase());
     CoherentSigns signs(rng);
     const auto &operations = circ->GetOperations();
     Types::qubits_vector scratch;
@@ -2814,6 +2816,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(const 
                                                                           std::mt19937 &rng)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    out->SetGlobalPhase(circ->GetGlobalPhase());
     std::normal_distribution<double> normal(0.0, 1.0);
 
     // Per-qubit multi-band AR(1) state: current y value per band
@@ -2943,6 +2946,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
                                     "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    out->SetGlobalPhase(circ->GetGlobalPhase());
     ExactChannelMemo memo;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     std::normal_distribution<double> normal_dist(0.0, 1.0);
@@ -3281,6 +3285,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> drop_spectator_phases_if(const
                                                                            const Message &message)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
+    out->SetGlobalPhase(noisy->GetGlobalPhase());
     for (const auto &op : noisy->GetOperations())
     {
         const auto qubits = op->AffectedQubits();
@@ -3294,6 +3299,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> drop_spectator_phases_if(const
                            std::static_pointer_cast<Circuits::IQuantumGate<double>>(op)->GetGateType() == Circuits::QuantumGateType::kRzGateType;
         if (!phase)
             throw std::invalid_argument(message(*dropped));
+        out->SetGlobalPhase(out->GetGlobalPhase() - 0.5 * std::static_pointer_cast<Circuits::RzGate<>>(op)->GetTheta());
     }
     return out;
 }

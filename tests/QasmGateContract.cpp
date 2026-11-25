@@ -301,9 +301,10 @@ BOOST_AUTO_TEST_CASE(DaggerSpellingsAcceptTheSameModifiersAsTheirTwin)
                            2);
 }
 
-BOOST_AUTO_TEST_CASE(RejectUnrepresentablePhaseAndGuardedDelays)
+BOOST_AUTO_TEST_CASE(RejectMalformedPhaseAndUnsupportedGuardedOperations)
 {
-    CheckRejectedWithMessage("OPENQASM 3.0; qubit[1] q; gphase(pi); x q[0];", "gphase");
+    CheckRejectedWithMessage("OPENQASM 3.0; qubit[1] q; gphase(pi) q[0];", "no qubit operands");
+    CheckRejectedWithMessage("OPENQASM 3.0; bit c; if (c[0]) { gphase(pi); }", "conditioned gphase");
     CheckRejectedWithMessage("OPENQASM 3.0; qubit[1] q; bit[1] c; if (!c[0]) { delay[1us] q[0]; }", "Conditional delay");
     CheckRejectedWithMessage("OPENQASM 2.0; qreg q[1]; creg c[1]; if(c==0) delay(1e-6) q[0];", "Conditional delay");
 }

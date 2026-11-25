@@ -320,7 +320,12 @@ struct AddGateExpr : public AbstractSyntaxTree
                         }
                     }
                     else if (gateName == "gphase")
-                        throw std::invalid_argument("OpenQASM gphase is unsupported: the circuit cannot represent a global phase.");
+                    {
+                        if (stmt.parameters.size() != 1 || !args.empty())
+                            throw std::invalid_argument("gphase requires one angle and no qubit operands.");
+                        stmt.opType = QoperationStatement::OperationType::GlobalPhase;
+                        return stmt;
+                    }
                     else if (gateName == "u2")
                     {
                         // Only names absent from the allowed-gate sets reach this chain:
@@ -985,7 +990,7 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree
   private:
     // Gates whose single parameter is an angle they are linear in, so that
     // g(theta)^s == g(s * theta) for any real s.
-    static inline std::unordered_set<std::string> rotationGates = {"rx", "ry", "rz", "p", "cp", "crx", "cry", "crz", "rxx", "rzz"};
+    static inline std::unordered_set<std::string> rotationGates = {"rx", "ry", "rz", "p", "cp", "crx", "cry", "crz", "rxx", "rzz", "gphase"};
 
     // The largest number of copies pow(k) may expand a gate into.
     static constexpr int kMaxRepetitions = 1024;
@@ -1116,6 +1121,8 @@ inline std::vector<bool> DecodeRegisterCondition(const std::string &registerName
 // in condBits; everything else becomes a CondUop conditioned via cbits.
 inline void ApplyCondition(StatementType &stmt, const std::vector<int> &conditionBits, const std::vector<bool> &expectedValues)
 {
+    if (stmt.opType == QoperationStatement::OperationType::GlobalPhase)
+        throw std::invalid_argument("Classically conditioned gphase is unsupported.");
     if (stmt.opType == QoperationStatement::OperationType::Delay)
         throw std::invalid_argument("Conditional delay is unsupported: the circuit cannot represent a classically guarded idle period.");
     stmt.condExpected = expectedValues;
@@ -1443,6 +1450,9 @@ struct Program
             }
         }
         break;
+        case QoperationStatement::OperationType::GlobalPhase:
+            circuit->SetGlobalPhase(circuit->GetGlobalPhase() + stmt.parameters.at(0));
+            break;
         case QoperationStatement::OperationType::CondUop: {
             // Same guard as the Uop case above: without it a no-op statement -
             // "id", or a modifier that lowers to nothing such as `pow(0) @` or
@@ -1517,9 +1527,7 @@ struct Program
                         StatementType gateStmt = addGate(op, qubitMap, opaqueGates, definedGates, variables);
 
                         // make each of them conditioned on the original condition
-                        gateStmt.opType = QoperationStatement::OperationType::CondUop;
-                        gateStmt.condExpected = stmt.condExpected;
-                        gateStmt.cbits = stmt.cbits;
+                        ApplyCondition(gateStmt, stmt.cbits, stmt.condExpected);
 
                         AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
                     }

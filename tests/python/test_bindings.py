@@ -854,6 +854,35 @@ class TestPathIntegralSimulation:
 class TestStateProbability:
     """Test the state_probability path integral function."""
 
+    def test_qasm_global_phase_in_coherent_queries(self):
+        header = "OPENQASM 3.0; qubit q; "
+        source = header + "gphase(pi/2); x q;"
+        parse = maestro.QasmToCirc().parse_and_translate
+        circuit = parse(source)
+        plain = parse(header + "x q;")
+        config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim,
+                                        simulation_type=maestro.SimulationType.Statevector, fixed_backend=True)
+        for prepared in (source, circuit):
+            result = maestro.state_probability(prepared, "1")
+            assert result["amplitude"] == pytest.approx(1j)
+            assert result["probability"] == pytest.approx(1.)
+        assert circuit.get_statevector(config) == pytest.approx([0., 1j])
+        assert plain.inner_product(circuit, config) == pytest.approx(1j)
+        assert circuit.inner_product(plain, config) == pytest.approx(-1j)
+        readout = parse(source + " bit c; c = measure q;")
+        assert readout.execute(config, shots=8)["counts"] == {"1": 8}
+        assert circuit.estimate("Z", config)["expectation_values"] == pytest.approx([-1.])
+        assert maestro.state_probability("OPENQASM 3.0; gphase(pi/2);", "0")["amplitude"] == pytest.approx(1j)
+
+        noise = maestro.NoiseModel()
+        assert circuit.noisy_prob("1", noise)["probability"] == pytest.approx(1.)
+        noise.set_readout_error(0, 0., 0.25)
+        assert circuit.noisy_prob("1", noise)["probability"] == pytest.approx(0.75)
+
+        flip = maestro.NoiseModel()
+        flip.set_qubit_noise(0, 1., 0., 0.)
+        assert readout.full_noise_execute(flip, config, shots=8, noise_seed=13)["counts"] == {"0": 8}
+
     def test_state_probability_zero_state(self):
         """P(|00>) for identity circuit should be 1.0."""
         from maestro.circuits import QuantumCircuit
@@ -5813,6 +5842,67 @@ class TestCorrelatedNoisePhysics:
 
 class TestIncrementalEvolve:
     """Test the incremental_evolve function for time evolution."""
+
+    def test_reset_of_untouched_wire_stays_deterministic_across_steps(self):
+        initial = maestro.circuits.QuantumCircuit()
+        step = maestro.circuits.QuantumCircuit()
+        step.reset(0)
+        result = maestro.incremental_evolve(initial, step, [0, 1, 2], ["Z"])
+        assert [row[0] for row in result["expectation_values"]] == pytest.approx([1., 1., 1.])
+        assert result["estimate_evaluation"] == "deterministic"
+
+    @pytest.mark.parametrize("steps", [[1, 2, 3], [2]])
+    def test_repeated_terminal_readout_preserves_rotations(self, steps):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit q; bit c; "
+        step = parse(header + "rx(0.3) q; c = measure q;")
+        result = maestro.incremental_evolve(parse(header), step, steps, ["Z"])
+        assert [row[0] for row in result["expectation_values"]] == pytest.approx([math.cos(0.3 * n) for n in steps])
+
+    @pytest.mark.parametrize("steps", [[0], [0, 1], [0, 1, 2]])
+    def test_observation_precedes_feedback_readout(self, steps):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit q; bit[1] c; "
+        initial = parse(header + "h q; c[0] = measure q;")
+        step = parse(header + "if (c[0]) { z q; }")
+        values = maestro.incremental_evolve(initial, step, steps, ["X"])["expectation_values"]
+        assert [row[0] for row in values] == pytest.approx([1.] + [0.] * (len(steps) - 1))
+
+    def test_only_live_pairs_of_terminal_measurement_collapse(self):
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.h(0)
+        circuit.x(1)
+        circuit.measure([(0, 0), (1, 1)])
+        step = maestro.QasmToCirc().parse_and_translate("OPENQASM 3.0; qubit[3] q; bit[2] c; if (c[1]) { x q[2]; } z q[0];")
+        values = maestro.incremental_evolve(circuit, step, [0, 1], ["XII", "IIZ"])["expectation_values"]
+        assert values[0] == pytest.approx([1., 1.])
+        assert values[1] == pytest.approx([-1., -1.])
+
+    def test_overwrite_before_next_step_reads_drops_initial_measurement(self):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit[2] q; bit[1] c; "
+        initial = parse(header + "h q[0]; c[0] = measure q[0];")
+        step = parse(header + "x q[1]; c[0] = measure q[1]; if (c[0]) { z q[0]; }")
+        values = maestro.incremental_evolve(initial, step, [0, 1], ["XI"])["expectation_values"]
+        assert [row[0] for row in values] == pytest.approx([1., -1.])
+
+    def test_deferred_conditional_uses_original_classical_values(self):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit[4] q; bit[2] c; "
+        initial = parse(header + "x q[0]; x q[1]; c[0] = measure q[0]; if (c[0]) { c[1] = measure q[1]; } "
+                        "c[0] = measure q[2]; x q[2];")
+        step = parse(header + "if (c[1]) { x q[3]; } if (c[0]) { x q[3]; }")
+        values = maestro.incremental_evolve(initial, step, [0, 1], ["IIIZ"])["expectation_values"]
+        assert [row[0] for row in values] == pytest.approx([1., -1.])
+
+    def test_deferred_predicate_can_read_a_high_zero_bit(self):
+        parse = maestro.QasmToCirc().parse_and_translate
+        header = "OPENQASM 3.0; qubit[2] q; bit[8] c; "
+        initial = parse(header + "h q[0]; if (!c[7]) { c[0] = measure q[0]; }")
+        step = parse(header + "if (c[0]) { x q[1]; }")
+        result = maestro.incremental_evolve(initial, step, [0, 1], ["XI"])
+        assert [row[0] for row in result["expectation_values"]] == pytest.approx([1., 0.])
+        assert result["stochastic_execution"]
 
     @pytest.mark.parametrize("init_body,step_body,expected", [
         ("x q; c[3] = measure q;", "if (c[3]) { x q; }", [1, -1, 1]),

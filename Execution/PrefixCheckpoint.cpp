@@ -105,7 +105,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
         if (route_prefix)
             simulator_->SetUpcomingGates(executed_prefix->GetOperations());
         if (executed_prefix && !executed_prefix->GetOperations().empty())
-            executed_prefix->ExecuteBD(simulator_, prefix_state_, &max_bond_dim_);
+            executed_prefix->ExecutePhysicalOperations(simulator_, prefix_state_, &max_bond_dim_);
         // Saves and worker clones need the final site map, but every suffix
         // provides its own gates. Drop the finished prefix's routing window.
         if (route_prefix)
@@ -259,7 +259,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
             }
             simulator->SetGatesCounter(0);
             simulator->SetUpcomingGates(circuit->GetOperations());
-            circuit->ExecuteContinuation(simulator, state, &max_bond);
+            circuit->ExecutePhysicalOperations(simulator, state, &max_bond);
             record(state, first_shot + shot, counts);
         }
         return false;

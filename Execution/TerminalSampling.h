@@ -228,7 +228,7 @@ bool SampleSharedHead(const Circuits::Circuit<double> &input, const std::shared_
         }
         head->SetGatesCounter(0);
         head->SetUpcomingGates(rest->GetOperations());
-        rest->ExecuteContinuation(head, state, maxBondDimension);
+        rest->ExecutePhysicalOperations(head, state, maxBondDimension);
         write(shot, state);
     }
     return true;

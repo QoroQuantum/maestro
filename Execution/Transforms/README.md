@@ -93,9 +93,17 @@ basis is `|b> = product_j Z(B_j)^b_j |+>^N`. Its dimension is `2^rank(B)`:
 The rank here counts check generators, **not** conserved symmetry generators
 (which would leave `N - rank` qubits). Rank alone does not establish invariance:
 the preparation and all operations must also pass the detector. Effective
-rotations are emitted as ordinary Maestro gates. `TransformContext` carries
-observable factors and `auto_reduced`; callers must apply both. The pipeline
-resets these outputs on each run, and never mutates the source circuit.
+rotations are emitted as ordinary Maestro gates. When stabilizer execution is
+requested or listed as a candidate, the pass checks the source circuit for
+Clifford gates before emitting the reduced circuit. A Clifford source keeps
+named gates such as X, SX, S and Sdg so the backend selector can still choose
+the stabilizer. When every permitted backend uses the stabilizer method, an
+estimate keeps any expectations resolved by parity. If a remaining group
+requires an unsupported rotation, the estimator replans its observables on the
+source circuit so causal-cone pruning and gate optimization can simplify it.
+`TransformContext` carries observable factors and `auto_reduced`. Callers
+must apply both. Each pipeline run resets these outputs and leaves the source
+circuit intact.
 
 This implementation supports up to 64 physical qubits and rank 1 through 22,
 strictly below the physical width. Larger registers/ranks fall back, matching

@@ -62,7 +62,7 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     network->GetController()->SetOptimizeCircuit(false);
 
     Circuits::OperationState opState(std::max(init_circuit->GetMaxCbitIndex(), trotter_step->GetMaxCbitIndex()) + 1);
-    const MaestroExecution::IncrementalEvolution evolution(init_circuit, trotter_step, std::max(0, sorted_steps.back()));
+    MaestroExecution::IncrementalEvolution evolution(init_circuit, trotter_step, std::max(0, sorted_steps.back()));
 
     size_t current_max_bond_dim = 0;
 
@@ -112,6 +112,10 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     nb::dict py_result;
     py_result["expectation_values"] = all_expectations;
     py_result["steps"] = steps_measured;
+    const bool stochastic = evolution.IsStochastic(simulator->SupportsQuantumChannels());
+    py_result["stochastic_execution"] = stochastic;
+    py_result["measurement_trajectories"] = stochastic ? 1 : 0;
+    py_result["estimate_evaluation"] = stochastic ? "single_trajectory" : "deterministic";
     py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
     py_result["time_per_step"] = times_per_step;
     // The backend evolution drove, which a candidate list may have chosen.

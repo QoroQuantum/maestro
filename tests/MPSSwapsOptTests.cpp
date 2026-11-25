@@ -998,6 +998,51 @@ BOOST_AUTO_TEST_CASE(LayersKeepConditionalMeasurementDestination)
     }
 }
 
+BOOST_AUTO_TEST_CASE(LayersRejectNullOperations)
+{
+    const auto circuit = Circuits::CircuitFactory<>::CreateCircuit({nullptr});
+    BOOST_CHECK_THROW(circuit->ToLayers(), std::invalid_argument);
+    BOOST_CHECK_THROW(circuit->ToLayersNoClone(), std::invalid_argument);
+    BOOST_CHECK_THROW(circuit->ToMultipleQubitsLayers(), std::invalid_argument);
+    BOOST_CHECK_THROW(circuit->ToMultipleQubitsLayersNoClone(), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(CircuitPartitionsKeepGlobalPhaseOnce)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+    auto nested = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 2)});
+    nested->SetGlobalPhase(0.25);
+    auto circuit = CF::CreateCircuit({nested, CF::CreateGate(Gate::kXGateType, 4)});
+    circuit->SetGlobalPhase(0.5);
+    const auto expected = std::polar(1., 0.75);
+    const auto phase = [&](const auto &parts) { return Circuits::Circuit<>::LayersToCircuit(parts)->GlobalPhaseFactor(); };
+    BOOST_CHECK_SMALL(std::abs(phase(circuit->ToLayers()) - expected), 1.e-12);
+    BOOST_CHECK_SMALL(std::abs(phase(circuit->SplitCircuit()) - expected), 1.e-12);
+    BOOST_CHECK_SMALL(std::abs(circuit->GetCircuitCut(0, 2)->GlobalPhaseFactor() * circuit->GetCircuitCut(3, 4)->GlobalPhaseFactor() - expected), 1.e-12);
+    std::vector<bool> executed{true, false};
+    BOOST_CHECK_SMALL(std::abs(circuit->RemoveExecutedOperations(executed)->GlobalPhaseFactor() - expected), 1.e-12);
+}
+
+BOOST_AUTO_TEST_CASE(DelayFollowsItsOwnWire)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+    const auto pair = CF::CreateGate(Gate::kCXGateType, 0, 1);
+    const auto delay = CF::CreateDelay(2, 1.e-9);
+    const auto other = CF::CreateGate(Gate::kCXGateType, 2, 3);
+    const auto circuit = CF::CreateCircuit({pair, pair, delay, other, delay});
+    for (const auto &layers : {circuit->ToLayers(), circuit->ToLayersNoClone(), circuit->ToMultipleQubitsLayers(), circuit->ToMultipleQubitsLayersNoClone()})
+    {
+        BOOST_REQUIRE_EQUAL(layers.size(), 2u);
+        const auto &first = layers.front()->GetOperations();
+        BOOST_REQUIRE_EQUAL(first.size(), 4u);
+        BOOST_CHECK(first[1]->GetType() == Circuits::OperationType::kDelay);
+        BOOST_CHECK(first[2]->AffectedQubits() == other->AffectedQubits());
+        BOOST_CHECK(first[3]->GetType() == Circuits::OperationType::kDelay);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(LayersKeepClassicalBitOrder)
 {
     using CF = Circuits::CircuitFactory<>;

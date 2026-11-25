@@ -74,10 +74,18 @@ print(records.shape, "bits always agree:", bool((records[:, 0] == records[:, 1])
 
 For extended gate strings containing `T`, `T_DAG` or parameterized rotations,
 wrap the string in `maestro.sinter.NonCliffordTaskCircuit`. Maestro runs the
-full noiseless circuit once to establish the detector and observable reference.
-Pass `detector_error_model=` on the `sinter.Task` for `sinter.collect` or a
-decoder that needs a prior. When you use `MaestroCompiledSampler` directly,
-raw samples and the `vacuous` decoder work without a prior.
+full noiseless circuit once when you first request detector or observable data.
+Raw measurement sampling skips this reference shot.
+It uses the configured statevector or density-matrix backend, or QCSim MPS/MPO
+with the bond cap and truncation cutoff removed. Other methods use an uncapped
+QCSim MPS for this reference shot. Sampling keeps your configured accuracy settings.
+
+Both direct sampling and `sinter.collect` support `decoder="vacuous"` without
+a detector error model. For a decoder that infers corrections, such as
+`pymatching`, supply the physical prior as `sinter.Task(detector_error_model=...)`.
+For extended circuits, `NonCliffordTaskCircuit.detector_error_model()` supplies
+the detector and observable counts Sinter uses to identify a task. It contains
+no error probabilities.
 
 :::{admonition} Requires GPU access
 :class: note

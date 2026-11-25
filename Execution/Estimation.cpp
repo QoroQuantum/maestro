@@ -70,8 +70,9 @@ bool SameUnitaryCircuit(const EstimationGroup &a, const EstimationGroup &b)
     return true;
 }
 
-void FinishGroup(EstimationGroup group, const SimulatorConfig &config, EstimationPlan &plan)
+bool ResolveConstants(EstimationGroup &group, const SimulatorConfig &config, EstimationPlan &plan)
 {
+    const auto count = group.indices.size();
     for (size_t i = group.indices.size(); i-- > 0;)
         if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
             (group.factors[i] == 0 || group.observables[i].find_first_not_of("Ii") == std::string::npos))
@@ -81,6 +82,11 @@ void FinishGroup(EstimationGroup group, const SimulatorConfig &config, Estimatio
             group.factors.erase(group.factors.begin() + i);
             group.observables.erase(group.observables.begin() + i);
         }
+    return group.indices.size() != count;
+}
+
+void FinishGroup(EstimationGroup group, EstimationPlan &plan)
+{
     if (group.indices.empty())
         return;
     group.qubits = Width(group.circuit, group.observables);
@@ -171,7 +177,8 @@ bool PrepareCached(const std::shared_ptr<Circuits::Circuit<double>> &circuit, co
         }
         TransformContext local{group.circuit, group.observables, config.simulator_type, config};
         TransformPipeline::Tighten(local, group.qubits, false);
-        FinishGroup(std::move(group), config, plan);
+        ResolveConstants(group, config, plan);
+        FinishGroup(std::move(group), plan);
     }
     return true;
 }
@@ -236,8 +243,6 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
     TransformContext global{prepared, paulis, config.simulator_type, config};
     global.expectation_factors.assign(paulis.size(), 1.0);
     TransformPipeline::ApplyParity(global);
-    plan.auto_reduced = global.auto_reduced;
-
     std::vector<std::vector<size_t>> groups;
     if (config.enable_causal_cone_reduction && config.enable_observable_clustering && paulis.size() > 1 &&
         !Simulators::IsDistributedGpuSimulator(config.simulator_type) && BenefitsFromObservableClustering(config.simulator_type, config.simulation_type))
@@ -249,6 +254,11 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
         std::iota(groups.back().begin(), groups.back().end(), size_t{0});
     }
 
+    const bool stabilizerOnly = HasCandidateList(config)
+                                    ? std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                                                  [](const auto &candidate) { return candidate.second == Simulators::SimulationType::kStabilizer; })
+                                    : config.simulation_type == Simulators::SimulationType::kStabilizer;
+    std::vector<size_t> sourceRetry;
     for (auto &indices : groups)
     {
         EstimationGroup group;
@@ -264,9 +274,42 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
         TransformPipeline::Tighten(local, Width(prepared, paulis), !global.auto_reduced);
         for (size_t i = 0; i < group.factors.size(); ++i)
             group.factors[i] *= local.expectation_factors[i];
-        group.qubits = Width(group.circuit, group.observables);
-        plan.auto_reduced = plan.auto_reduced || local.auto_reduced;
-        FinishGroup(std::move(group), config, plan);
+        const bool reduced = global.auto_reduced || local.auto_reduced;
+        const bool resolved = ResolveConstants(group, config, plan);
+        // A surviving generic parity rotation cannot run on a stabilizer.
+        // Keep projected constants and runnable groups. For the rest, the
+        // physical cone and optimizer may remove the source gate or fold T;T to S.
+        if (reduced && stabilizerOnly && !group.indices.empty() && !group.circuit->IsClifford())
+        {
+            sourceRetry.insert(sourceRetry.end(), group.indices.begin(), group.indices.end());
+            plan.auto_reduced |= resolved;
+        }
+        else
+        {
+            plan.auto_reduced |= reduced;
+            FinishGroup(std::move(group), plan);
+        }
+    }
+    if (!sourceRetry.empty())
+    {
+        std::vector<std::string> physicalObservables;
+        for (const auto index : sourceRetry)
+            physicalObservables.push_back(observables[index]);
+        auto physicalConfig = config;
+        physicalConfig.auto_reduce = false;
+        auto physical = PrepareEstimation(circuit, physicalObservables, physicalConfig, cache);
+        for (size_t i = 0; i < sourceRetry.size(); ++i)
+        {
+            plan.resolved_values[sourceRetry[i]] = physical.resolved_values[i];
+            plan.error_bounds[sourceRetry[i]] = physical.error_bounds[i];
+        }
+        plan.bounded_observables += physical.bounded_observables;
+        for (auto &group : physical.groups)
+        {
+            for (auto &index : group.indices)
+                index = sourceRetry[index];
+            FinishGroup(std::move(group), plan);
+        }
     }
     plan.reduction_time = std::chrono::duration<double>(Clock::now() - start).count();
     return plan;

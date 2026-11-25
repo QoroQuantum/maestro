@@ -21,6 +21,7 @@
 
 #define _USE_MATH_DEFINES
 #include <algorithm>
+#include <complex>
 #include <math.h>
 #include <numeric>
 #include <set>
@@ -81,8 +82,26 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @param ops The operations to add to the circuit.
      * @sa IOperation
      */
-    Circuit(const OperationsVector &ops = {}) : Operation(), operations(ops)
+    Circuit(const OperationsVector &ops = {}, double globalPhase = 0.) : Operation(), operations(ops), globalPhase_(globalPhase)
     {
+    }
+
+    // A scalar exp(i*angle) multiplies every amplitude and has no wire, duration
+    // or noise channel. Coherent readout applies this factor once; counts and
+    // observable estimates can execute just the physical operations.
+    double GetGlobalPhase() const
+    {
+        return globalPhase_;
+    }
+
+    void SetGlobalPhase(double radians)
+    {
+        globalPhase_ = radians;
+    }
+
+    std::complex<double> GlobalPhaseFactor() const
+    {
+        return std::polar(1., TotalGlobalPhase());
     }
 
     /**
@@ -112,12 +131,18 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     void ExecuteBD(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
     {
-        state.Reset();
-        ExecuteContinuation(sim, state, curMaxBondDim);
+        ExecuteWithPhase(sim, state, curMaxBondDim, true);
     }
 
     // Apply a fragment of an already running shot, preserving its classical register.
     void ExecuteContinuation(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
+    {
+        ExecuteWithPhase(sim, state, curMaxBondDim, false);
+    }
+
+    // Preserve the existing classical register and evolve up to a global phase.
+    // Readouts insensitive to the phase, or applying it separately, use this path.
+    void ExecutePhysicalOperations(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
     {
         if (!sim)
             return;
@@ -212,6 +237,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     void AddCircuit(const std::shared_ptr<Circuit<Time>> &circuit)
     {
         AddOperations(circuit->GetOperations());
+        globalPhase_ += circuit->globalPhase_;
     }
 
     /**
@@ -234,6 +260,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     void Clear()
     {
         operations.clear();
+        globalPhase_ = 0.;
     }
 
     /**
@@ -249,7 +276,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         for (auto &op : operations)
             newops.emplace_back(op->Clone());
 
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, globalPhase_);
     }
 
     /**
@@ -304,7 +331,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 break;
             }
         }
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, globalPhase_);
     }
 
     /**
@@ -321,7 +348,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         for (auto &op : operations)
             newops.push_back(op);
 
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, globalPhase_);
     }
 
     /**
@@ -339,15 +366,51 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     std::shared_ptr<Circuit<Time>> RemoveEndMeasurements() const
     {
-        std::unordered_set<Types::qubit_t> activeQubits;
         std::unordered_set<size_t> neededBits;
-        return RemoveEndMeasurementsBefore(activeQubits, neededBits);
+        return RemoveEndMeasurementsBefore(neededBits);
     }
 
-    // Continue the backwards scan across circuit fragments. The incoming sets
-    // describe the following operations; on return they describe this fragment too.
-    std::shared_ptr<Circuit<Time>> RemoveEndMeasurementsBefore(std::unordered_set<Types::qubit_t> &activeQubits, std::unordered_set<size_t> &neededBits) const
+    using MeasurementMasks = std::vector<std::vector<bool>>;
+
+    static OperationPtr SelectMeasurementPairs(const OperationPtr &op, const std::vector<bool> &keep)
     {
+        if (std::none_of(keep.begin(), keep.end(), [](bool k) { return k; }))
+            return nullptr;
+        if (std::all_of(keep.begin(), keep.end(), [](bool k) { return k; }))
+            return op;
+        const auto conditional = op->IsConditional() ? std::static_pointer_cast<ConditionalMeasurement<Time>>(op) : nullptr;
+        const auto measurement = std::static_pointer_cast<MeasurementOperation<Time>>(conditional ? conditional->GetOperation() : op);
+        std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+        std::vector<ReadoutRates> rates;
+        const auto &sourceRates = measurement->GetReadout();
+        for (size_t i = 0; i < keep.size(); ++i)
+            if (keep[i])
+            {
+                pairs.emplace_back(measurement->GetQubits()[i], measurement->GetBitsIndices()[i]);
+                if (!sourceRates.empty())
+                    rates.push_back(i < sourceRates.size() ? sourceRates[i] : ReadoutRates{});
+            }
+        auto subset = std::make_shared<MeasurementOperation<Time>>(pairs, measurement->GetDelay());
+        subset->SetReadout(std::move(rates));
+        subset->SetNoiseless(measurement->IsNoiseless());
+        if (conditional)
+        {
+            auto guarded = std::make_shared<ConditionalMeasurement<Time>>(subset, conditional->GetCondition(), conditional->GetDelay());
+            guarded->SetNoiseless(conditional->IsNoiseless());
+            return guarded;
+        }
+        return subset;
+    }
+
+    // Start with the classical bits required after this fragment and return the
+    // bits it can read before overwriting them. Quantum liveness is fragment-local.
+    // The optional per-pair mask lets incremental evolution identify the readout
+    // used only by a following fragment, including only part of a register measurement.
+    std::shared_ptr<Circuit<Time>> RemoveEndMeasurementsBefore(std::unordered_set<size_t> &neededBits, MeasurementMasks *masks = nullptr) const
+    {
+        if (masks)
+            masks->assign(operations.size(), {});
+        std::unordered_set<Types::qubit_t> activeQubits;
         OperationsVector retained;
         retained.reserve(operations.size());
 
@@ -384,12 +447,16 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
                 std::vector<bool> keepFlags(count, false);
                 size_t keptCount = 0;
+                std::unordered_set<size_t> conditionalWrites;
 
                 for (size_t idx = count; idx-- > 0;)
                 {
                     const auto q = qubits[idx];
                     const auto b = bits[idx];
-                    if (activeQubits.count(q) > 0 || neededBits.count(b) > 0)
+                    // All pairs in a guarded register measurement share one
+                    // predicate. When it fires, only the last write to b survives.
+                    const bool lastWrite = !condMeas || count == 1 || conditionalWrites.insert(b).second;
+                    if (activeQubits.count(q) > 0 || (lastWrite && neededBits.count(b) > 0))
                     {
                         keepFlags[idx] = true;
                         ++keptCount;
@@ -398,6 +465,8 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                     }
                 }
 
+                if (masks)
+                    (*masks)[static_cast<size_t>(operations.rend() - it - 1)] = keepFlags;
                 if (keptCount == 0)
                     continue;
 
@@ -407,43 +476,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                     neededBits.insert(condBits.begin(), condBits.end());
                 }
 
-                if (keptCount == count)
-                {
-                    retained.push_back(op);
-                }
-                else
-                {
-                    std::vector<std::pair<Types::qubit_t, size_t>> keptPairs;
-                    keptPairs.reserve(keptCount);
-                    for (size_t i = 0; i < count; ++i)
-                    {
-                        if (keepFlags[i])
-                            keptPairs.emplace_back(qubits[i], bits[i]);
-                    }
-
-                    auto filteredMeas = std::make_shared<MeasurementOperation<Time>>(keptPairs, meas->GetDelay());
-                    if (meas->HasReadout())
-                    {
-                        const auto &rates = meas->GetReadout();
-                        std::vector<ReadoutRates> keptRates;
-                        keptRates.reserve(keptCount);
-                        for (size_t i = 0; i < count; ++i)
-                        {
-                            if (keepFlags[i])
-                                keptRates.push_back(i < rates.size() ? rates[i] : ReadoutRates{});
-                        }
-                        filteredMeas->SetReadout(std::move(keptRates));
-                    }
-
-                    if (type == OperationType::kConditionalMeasurement)
-                    {
-                        retained.push_back(std::make_shared<ConditionalMeasurement<Time>>(filteredMeas, condMeas->GetCondition(), condMeas->GetDelay()));
-                    }
-                    else
-                    {
-                        retained.push_back(std::move(filteredMeas));
-                    }
-                }
+                retained.push_back(keptCount == count ? op : SelectMeasurementPairs(op, keepFlags));
             }
             else
             {
@@ -492,7 +525,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         }
 
         std::reverse(retained.begin(), retained.end());
-        return std::make_shared<Circuit<Time>>(retained);
+        return std::make_shared<Circuit<Time>>(retained, globalPhase_);
     }
 
     /**
@@ -512,7 +545,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         for (const auto &op : operations)
             newops.emplace_back(op->Remap(qubitsMap, bitsMap));
 
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, globalPhase_);
     }
 
     /**
@@ -569,7 +602,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
             newops.emplace_back(op->Remap(newQubitsMap, newBitsMap));
         }
 
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, globalPhase_);
     }
 
     /**
@@ -1905,14 +1938,19 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     {
         OperationsVector newops;
         newops.reserve(operations.size());
+        size_t firstWire = std::numeric_limits<size_t>::max();
+        double wirelessPhase = globalPhase_;
 
         for (const auto &op : operations)
         {
             const auto qubits = op->AffectedQubits();
+            if (qubits.empty() && op->GetType() == OperationType::kComposite)
+                wirelessPhase += std::static_pointer_cast<Circuit<Time>>(op)->TotalGlobalPhase();
             bool containsOutsideQubits = false;
             bool containsInsideQubits = false;
             for (const auto q : qubits)
             {
+                firstWire = std::min(firstWire, static_cast<size_t>(q));
                 if (q < startQubit || q > endQubit)
                 {
                     containsOutsideQubits = true;
@@ -1935,7 +1973,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
             }
         }
 
-        return std::make_shared<Circuit<Time>>(newops);
+        // Place a wireless phase on one cut so disjoint cuts compose to the
+        // original state. An empty circuit assigns its phase to wire zero.
+        if (firstWire == std::numeric_limits<size_t>::max())
+            firstWire = 0;
+        return std::make_shared<Circuit<Time>>(newops, startQubit <= firstWire && firstWire <= endQubit ? wirelessPhase : 0.);
     }
 
     bool HasCompositeOperations() const
@@ -1957,7 +1999,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         OperationsVector flat;
         flat.reserve(operations.size());
         AppendInlined(flat);
-        return std::make_shared<Circuit<Time>>(flat);
+        return std::make_shared<Circuit<Time>>(flat, TotalGlobalPhase());
     }
 
     // A channel whose branch a pure-state backend can only draw from its
@@ -2497,21 +2539,26 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         if (executedOps.empty())
         {
             executedOps.resize(size(), false);
-            return std::make_shared<Circuit<Time>>(operations);
+            return std::make_shared<Circuit<Time>>(operations, globalPhase_);
         }
 
         OperationsVector newops;
         newops.reserve(operations.size());
 
         const size_t dif = operations.size() - executedOps.size();
-        for (size_t i = dif; i < operations.size(); ++i)
-            if (!executedOps[i - dif])
+        // The shared prefix runs only physical operations. Leave its scalar
+        // phase in the residual circuit, including phases of executed composites.
+        double residualPhase = globalPhase_;
+        for (size_t i = 0; i < operations.size(); ++i)
+            if (i >= dif && !executedOps[i - dif])
                 newops.emplace_back(operations[i]);
+            else if (operations[i] && operations[i]->GetType() == OperationType::kComposite)
+                residualPhase += std::static_pointer_cast<Circuit<Time>>(operations[i])->TotalGlobalPhase();
 
         std::vector<bool> newExecutedOps(newops.size(), false);
         executedOps.swap(newExecutedOps);
 
-        return std::make_shared<Circuit<Time>>(newops);
+        return std::make_shared<Circuit<Time>>(newops, residualPhase);
     }
 
     // used internally to optimize measurements in the case of having measurements
@@ -2853,6 +2900,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
         for (size_t i = 0; i < circuits.size(); ++i)
             circuits[i] = std::make_shared<Circuit<Time>>();
+        circuits.front()->SetGlobalPhase(globalPhase_);
 
         std::unordered_map<Types::qubit_t, size_t> qubitsSetsToCircuit;
 
@@ -2953,7 +3001,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         auto circuit{std::make_shared<Circuits::Circuit<Time>>()};
 
         for (const auto &layer : layers)
-            circuit->AddOperations(layer->GetOperations());
+            circuit->AddCircuit(layer);
 
         return circuit;
     }
@@ -3148,15 +3196,21 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     std::vector<std::shared_ptr<Circuit<Time>>> BuildLayers(bool multiQubitLayers, bool clone) const
     {
         std::vector<std::shared_ptr<Circuit<Time>>> layers{std::make_shared<Circuit<Time>>()};
+        layers.front()->SetGlobalPhase(globalPhase_);
         std::unordered_map<Types::qubit_t, size_t> qubitLevel;
         std::unordered_map<size_t, size_t> lastRead;
         std::unordered_map<size_t, size_t> lastWrite;
 
         for (const auto &op : operations)
         {
+            if (!op)
+                throw std::invalid_argument("Circuit contains a null operation.");
             const auto qubits = op->AffectedQubits();
-            size_t level = op->CanAffectQuantumState() ? 0 : layers.size();
-            const bool advance = op->CanAffectQuantumState() && (!multiQubitLayers || qubits.size() > 1);
+            const bool quantum = op->CanAffectQuantumState();
+            // An idle period follows activity on its own wire. Unrelated
+            // wires may already have advanced several layers beyond it.
+            size_t level = quantum || op->GetType() == OperationType::kDelay ? 0 : layers.size();
+            const bool advance = quantum && (!multiQubitLayers || qubits.size() > 1);
             for (const auto q : qubits)
                 level = std::max(level, qubitLevel[q] + advance);
 
@@ -3206,6 +3260,43 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
             }
         }
         return bits;
+    }
+
+    void ExecuteWithPhase(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim, bool resetBits) const
+    {
+        double phase = TotalGlobalPhase();
+        if (sim && phase != 0.)
+        {
+            using Method = Simulators::SimulationType;
+            switch (sim->GetSimulationType())
+            {
+            case Method::kDensityMatrix:
+            case Method::kMatrixProductOperator:
+            case Method::kPauliPropagator:
+            case Method::kStabilizer:
+                phase = 0.; // These methods do not expose complex state amplitudes.
+                break;
+            case Method::kExtendedStabilizer:
+            case Method::kOther:
+                throw std::invalid_argument("This simulator cannot apply a circuit global phase directly. Use ExecutePhysicalOperations and multiply its "
+                                            "complex amplitudes by GlobalPhaseFactor().");
+            default:
+                if (sim->GetNumberOfQubits() == 0)
+                    throw std::invalid_argument("For an empty register the only amplitude is the circuit's GlobalPhaseFactor().");
+                break;
+            }
+        }
+        if (resetBits)
+            state.Reset();
+        ExecutePhysicalOperations(sim, state, curMaxBondDim);
+        if (sim && phase != 0.)
+        {
+            const auto sourcePosition = sim->GetGatesCounter();
+            sim->ApplyU(0, 0., 0., 0., phase); // Scalar times identity on the full register.
+            if (sim->IsGateFusionEnabled())
+                sim->FlushPendingGates();
+            sim->SetGatesCounter(sourcePosition); // The phase has no position in the routing window.
+        }
     }
 
     static void ExecuteOperation(const OperationPtr &op, const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim)
@@ -3411,7 +3502,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return newops;
     }
 
+    double TotalGlobalPhase() const
+    {
+        double phase = globalPhase_;
+        for (const auto &op : operations)
+            if (op && op->GetType() == OperationType::kComposite)
+                phase += std::static_pointer_cast<Circuit<Time>>(op)->TotalGlobalPhase();
+        return phase;
+    }
+
     OperationsVector operations; /**< The operations in the circuit. */
+    double globalPhase_;
 };
 
 /**
@@ -3455,7 +3556,7 @@ template <typename Time = Types::time_type> class ComparableCircuit : public Cir
      * comparable circuit.
      * @sa Circuit
      */
-    ComparableCircuit(const BaseClass &circ) : BaseClass(circ.GetOperations())
+    ComparableCircuit(const BaseClass &circ) : BaseClass(circ.GetOperations(), circ.GetGlobalPhase())
     {
     }
 
@@ -3469,6 +3570,7 @@ template <typename Time = Types::time_type> class ComparableCircuit : public Cir
     ComparableCircuit &operator=(const BaseClass &circ)
     {
         BaseClass::SetOperations(circ.GetOperations());
+        BaseClass::SetGlobalPhase(circ.GetGlobalPhase());
 
         return *this;
     }
@@ -3481,7 +3583,7 @@ template <typename Time = Types::time_type> class ComparableCircuit : public Cir
      */
     bool operator==(const BaseClass &rhs) const
     {
-        if (BaseClass::GetOperations().size() != rhs.GetOperations().size())
+        if (BaseClass::GetGlobalPhase() != rhs.GetGlobalPhase() || BaseClass::GetOperations().size() != rhs.GetOperations().size())
             return false;
 
         for (size_t i = 0; i < BaseClass::GetOperations().size(); ++i)

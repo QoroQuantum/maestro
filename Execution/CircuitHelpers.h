@@ -66,6 +66,7 @@ inline std::shared_ptr<Circuits::Circuit<>> UnitaryPreparation(const std::shared
             throw std::invalid_argument(query + " does not support gate type " + std::to_string(static_cast<int>(gate->GetGateType())) + " (unknown adjoint).");
         result->AddOperation(gate);
     });
+    result->SetGlobalPhase(circuit->GetGlobalPhase());
     return result;
 }
 
@@ -78,6 +79,7 @@ inline OperationPtr adjoint_gate(const OperationPtr &op)
     {
         const auto &nested = std::static_pointer_cast<Circuits::Circuit<double>>(op)->GetOperations();
         auto adjoint = std::make_shared<Circuits::Circuit<double>>();
+        adjoint->SetGlobalPhase(-std::static_pointer_cast<Circuits::Circuit<double>>(op)->GetGlobalPhase());
         for (auto it = nested.rbegin(); it != nested.rend(); ++it)
             if (auto inverse = adjoint_gate(*it))
                 adjoint->AddOperation(inverse);

@@ -17,6 +17,7 @@
 
 #include "../Circuit/Circuit.h"
 #include <charconv>
+#include <system_error>
 
 namespace qasm
 {
@@ -94,9 +95,21 @@ template <typename Time = Types::time_type> class CircToQasm
     }
 
   private:
+    template <typename Number> static std::string FormatNumber(Number value)
+    {
+        char buffer[64];
+        const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), value);
+        if (converted.ec != std::errc{})
+            throw std::runtime_error("Cannot format number for OpenQASM.");
+        return {buffer, converted.ptr};
+    }
+
     static std::string GenerateFromCircuit(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, bool clone, QasmVersion version = QasmVersion::V2)
     {
-        if (circuit->empty())
+        const auto phase = circuit->GetGlobalPhase();
+        if (phase != 0. && version == QasmVersion::V2)
+            throw std::invalid_argument("OpenQASM 2 cannot represent a circuit global phase. Export as OpenQASM 3.");
+        if (phase == 0. && circuit->empty())
             return "";
 
         const auto circ = (clone ? std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone()) : circuit);
@@ -105,7 +118,10 @@ template <typename Time = Types::time_type> class CircToQasm
 
         std::string qasm = QasmHeader(version);
 
-        qasm += QasmGatesAndRegsDefinitions(circ, version);
+        if (!circ->empty())
+            qasm += QasmGatesAndRegsDefinitions(circ, version);
+        if (phase != 0.)
+            qasm += "gphase(" + FormatNumber(phase) + ");\n";
 
         // iterate over the circuit and generate the qasm
         for (const auto &gate : circ->GetOperations())
@@ -201,11 +217,7 @@ template <typename Time = Types::time_type> class CircToQasm
         case Circuits::OperationType::kDelay: {
             auto delayOp = std::static_pointer_cast<Circuits::Delay<Time>>(operation);
             auto qbit = delayOp->GetQubit();
-            char buffer[64];
-            const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), delayOp->GetDuration());
-            if (converted.ec != std::errc{})
-                throw std::runtime_error("Cannot format delay duration for OpenQASM.");
-            const std::string duration(buffer, converted.ptr);
+            const auto duration = FormatNumber(delayOp->GetDuration());
             if (version == QasmVersion::V3)
             {
                 qasm += "delay[" + duration + "s] q[" + std::to_string(qbit) + "];\n";

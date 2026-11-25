@@ -69,7 +69,7 @@ BOOST_FIXTURE_TEST_CASE(PhaseAndCphaseMatchPAndCpProbabilities, QasmTestFixture)
 
 BOOST_AUTO_TEST_CASE(GphaseRejectsMultipleParameters)
 {
-    // Invalid arity for the unsupported global phase instruction.
+    // A global phase has exactly one angle.
     const std::string qasmStr = "OPENQASM 3.0;\n"
                                 "qreg q[1];\n"
                                 "gphase(0.5, 0.6);\n";

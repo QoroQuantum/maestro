@@ -298,6 +298,20 @@ print("|<+|->|     =", abs(maestro.inner_product(plus, minus)))
 simulator and records expectation values at chosen steps, instead of
 re-simulating from step 0 for each time point.
 
+Each observation uses the state before the fragment's terminal measurements.
+For example, a step containing `rx(0.3)` followed by a measurement gives
+Z expectations of `cos(0.3)`, `cos(0.6)`, and `cos(0.9)` at steps 1, 2,
+and 3 when the measurement result is unused. If a later step reads that bit,
+the measurement runs after the preceding observation. Classical results from
+mid-circuit measurements carry across steps.
+
+When a measurement, reset, or channel can sample a branch, all time points
+follow the same trajectory. The result reports `estimate_evaluation="single_trajectory"`,
+`stochastic_execution=True`, and `measurement_trajectories=1`. For deterministic
+evolution these values are `"deterministic"`, `False`, and `0`. Density-matrix
+and MPO backends can evaluate channels exactly. Set `config.seed` to replay a
+sampled trajectory.
+
 ```{code-cell} python
 init = QuantumCircuit()
 init.x(0)

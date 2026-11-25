@@ -297,9 +297,10 @@ void bind_api(nb::module_ &m)
         "init_circuit"_a, "trotter_step"_a, "measure_at_steps"_a, "observables"_a, "config"_a = SimulatorConfig{},
         "Incremental time evolution with persistent simulator state.\n\n"
         "Creates a single simulator, executes init_circuit once, then applies\n"
-        "trotter_step incrementally, carrying classical bits across steps. Mid-circuit\n"
-        "measurements and sampled channels select one trajectory. Only terminal\n"
-        "readout of the entire evolution is removed. At each requested step, computes\n"
+        "trotter_step incrementally, carrying classical bits across steps. Each\n"
+        "observation precedes the fragment's terminal readout. A later step executes\n"
+        "that readout only if it consumes the classical result. Mid-circuit\n"
+        "measurements and sampled channels select one trajectory. At each requested step, computes\n"
         "expectation values for the given observables without re-simulating\n"
         "from scratch. Cost: O(total_steps) instead of O(sum of step "
         "indices).\n\n"
@@ -311,7 +312,8 @@ void bind_api(nb::module_ &m)
         "    config: SimulatorConfig for backend selection.\n\n"
         "Returns:\n"
         "    dict with 'expectation_values' (list of lists), 'steps', "
-        "'time_taken'.");
+        "'time_taken'. 'estimate_evaluation' is 'single_trajectory' when\n"
+        "    branches can be sampled, or 'deterministic' for deterministic evolution.");
 
     // --- QuEST Library Management ---
     m.def(

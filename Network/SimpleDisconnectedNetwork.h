@@ -547,7 +547,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     std::vector<std::complex<double>> ExecuteOnHostAmplitudes(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId) override
     {
-        return ExecuteOnHostBasisValues(circuit, hostId, "ExecuteOnHostAmplitudes", [](Simulators::ISimulator &state) { return state.GetStateVector(); });
+        auto values =
+            ExecuteOnHostBasisValues(circuit, hostId, "ExecuteOnHostAmplitudes", [](Simulators::ISimulator &state) { return state.GetStateVector(); });
+        const auto phase = circuit && hostId < GetNumHosts() ? circuit->GlobalPhaseFactor() : std::complex<double>{1., 0.};
+        if (phase != std::complex<double>{1., 0.})
+            for (auto &value : values)
+                value *= phase;
+        return values;
     }
 
     /**
@@ -775,7 +781,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             throw std::runtime_error("ExecuteOnHostProjectOnZero: no simulator available after "
                                      "execution.");
 
-        const std::complex<double> result = simulator->ProjectOnZero();
+        auto result = simulator->ProjectOnZero();
+        if (circuit && hostId < GetNumHosts())
+            result *= circuit->GlobalPhaseFactor();
 
         if (recreate && hadSimulator &&
             (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))

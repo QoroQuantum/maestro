@@ -755,7 +755,8 @@ Circuits::OperationState Prepare(Context &context, const CircuitPtr &circuit, si
     simulator->SetGatesCounter(0);
     simulator->SetUpcomingGates(circuit->GetOperations());
     size_t bond = 0;
-    circuit->ExecuteBD(simulator, state, &bond);
+    // Coherent query results include the input phase when they are read.
+    circuit->ExecutePhysicalOperations(simulator, state, &bond);
     if (routed)
         simulator->SetUpcomingGates({});
     return state;
@@ -2066,6 +2067,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
     bool frame_suffixes = false;
+    bool stochastic_evolution = false;
     // As in the non-distributed estimate, a dynamic estimate without sampled
     // noise still averages measurement branches.
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
@@ -2331,12 +2333,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         else
         {
             json::array values;
+            const auto phase = amplitudes ? input.circuit->GlobalPhaseFactor() : std::complex<double>{1., 0.};
             if (!request.contains("basis_states"))
             {
                 if (amplitudes)
                 {
                     for (const auto &value : simulator->GetStateVector())
-                        values.emplace_back(Complex(value));
+                        values.emplace_back(Complex(phase * value));
                 }
                 else
                 {
@@ -2351,7 +2354,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             {
                 for (const auto &index : basis)
                     if (amplitudes)
-                        values.emplace_back(Complex(simulator->Amplitude(UInt(index))));
+                        values.emplace_back(Complex(phase * simulator->Amplitude(UInt(index))));
                     else
                         values.emplace_back(simulator->Probability(UInt(index)));
             }
@@ -2362,7 +2365,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     else if (operation == "incremental_evolve")
     {
         const auto &steps = Array(Field(request, "steps"));
-        const IncrementalEvolution evolution(circuit, additional[0].circuit, UInt(steps.back()));
+        IncrementalEvolution evolution(circuit, additional[0].circuit, UInt(steps.back()));
+        stochastic_evolution = evolution.IsStochastic(simulator->SupportsQuantumChannels());
         simulator->Reset();
         Circuits::OperationState state(input.clbits);
         json::array values;
@@ -2499,7 +2503,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     simulator->SetGatesCounter(0);
                     simulator->SetUpcomingGates(noisy->GetOperations());
                     Circuits::OperationState state(prefixState);
-                    noisy->ExecuteContinuation(simulator, state, &bond);
+                    noisy->ExecutePhysicalOperations(simulator, state, &bond);
                     ++counts[Bits(state.GetAllBits(), input.clbits)];
                 }
             }
@@ -2577,7 +2581,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             squares += fidelity * fidelity;
         }
         if (operation == "inner_product")
-            result["inner_product"] = Complex(overlap);
+            result["inner_product"] = Complex(std::conj(input.circuit->GlobalPhaseFactor()) * additional[0].circuit->GlobalPhaseFactor() * overlap);
         else if (!mirrorObservables)
         {
             const auto mean = sum / realizations;
@@ -2614,6 +2618,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // the branch this execution drew.
     if (oneState && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config)))
         result["execution_metadata"].as_object()["stochastic_execution"] = true;
+    if (operation == "incremental_evolve")
+    {
+        auto &metadata = result["execution_metadata"].as_object();
+        metadata["stochastic_execution"] = stochastic_evolution;
+        metadata["measurement_trajectories"] = stochastic_evolution ? 1 : 0;
+        metadata["estimate_evaluation"] = stochastic_evolution ? "single_trajectory" : "deterministic";
+    }
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.

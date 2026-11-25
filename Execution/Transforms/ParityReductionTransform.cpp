@@ -21,6 +21,7 @@ using Circuit = Circuits::Circuit<double>;
 // Keep the detector bounded and exact allocations modest (64 MiB at rank 22).
 constexpr size_t MaxPhysicalQubits = 64;
 constexpr size_t MaxEffectiveQubits = 22;
+constexpr double Pi = 3.14159265358979323846;
 
 // Portable C++17 bit operations; inputs to FirstBit/LastBit are nonzero.
 int Popcount(Mask value)
@@ -108,16 +109,34 @@ struct Rotation
     bool check;
 };
 
-void EmitRotation(Circuit &circuit, Mask support, double angle, bool x)
+bool EmitRotation(Circuit &circuit, Mask support, double angle, bool x, bool preserveClifford)
 {
     // Empty support contributes only a global phase, irrelevant to expectations.
     if (!support || angle == 0)
-        return;
+        return true;
     const auto target = FirstBit(support);
-    if (!(support & (support - 1)))
+    const bool single = !(support & (support - 1));
+    // The CX ladder always rotates about Z. A single logical X needs no ladder.
+    const bool rotateX = single && x;
+    auto type = rotateX ? Gate::kRxGateType : Gate::kRzGateType;
+    if (preserveClifford)
     {
-        circuit.AddOperation(Factory::CreateGate(x ? Gate::kRxGateType : Gate::kRzGateType, target, 0, 0, angle));
-        return;
+        // These named gates differ from the Pauli rotations only by a global
+        // phase. An approximately Clifford input angle must never be rounded.
+        if (angle == Pi)
+            type = rotateX ? Gate::kXGateType : Gate::kZGateType;
+        else if (angle == Pi / 2)
+            type = rotateX ? Gate::kSxGateType : Gate::kSGateType;
+        else if (angle == -Pi / 2)
+            type = rotateX ? Gate::kSxDagGateType : Gate::kSdgGateType;
+        else
+            return false;
+    }
+    const auto center = Factory::CreateGate(type, target, 0, 0, angle);
+    if (single)
+    {
+        circuit.AddOperation(center);
+        return true;
     }
     std::vector<size_t> qubits;
     for (auto bits = support; bits; bits &= bits - 1)
@@ -127,12 +146,13 @@ void EmitRotation(Circuit &circuit, Mask support, double angle, bool x)
             circuit.AddOperation(Factory::CreateGate(Gate::kHadamardGateType, q));
     for (size_t j = 1; j < qubits.size(); ++j)
         circuit.AddOperation(Factory::CreateGate(Gate::kCXGateType, qubits[j], target));
-    circuit.AddOperation(Factory::CreateGate(Gate::kRzGateType, target, 0, 0, angle));
+    circuit.AddOperation(center);
     for (size_t j = qubits.size(); j-- > 1;)
         circuit.AddOperation(Factory::CreateGate(Gate::kCXGateType, qubits[j], target));
     if (x)
         for (auto q : qubits)
             circuit.AddOperation(Factory::CreateGate(Gate::kHadamardGateType, q));
+    return true;
 }
 } // namespace
 
@@ -219,7 +239,6 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             rotations.push_back({support, angle, check});
             return true;
         };
-        constexpr double pi = 3.14159265358979323846;
         if (type == Gate::kCZGateType)
         {
             const auto target = gate->GetQubit(1);
@@ -229,7 +248,7 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             const auto b = plus ? frame[target] : x_frame[target];
             // CZ = phase * Rz(a,pi/2) Rz(b,pi/2) Rzz(a,b,-pi/2).
             // Its global-H dual has the same decomposition about X.
-            if (!append(a, pi / 2, plus) || !append(b, pi / 2, plus) || !append(a ^ b, -pi / 2, plus))
+            if (!append(a, Pi / 2, plus) || !append(b, Pi / 2, plus) || !append(a ^ b, -Pi / 2, plus))
                 return;
             continue;
         }
@@ -239,30 +258,30 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
         {
         case Gate::kXGateType:
             z = false;
-            angle = pi;
+            angle = Pi;
             break;
         case Gate::kSxGateType:
             z = false;
-            angle = pi / 2;
+            angle = Pi / 2;
             break;
         case Gate::kSxDagGateType:
             z = false;
-            angle = -pi / 2;
+            angle = -Pi / 2;
             break;
         case Gate::kZGateType:
-            angle = pi;
+            angle = Pi;
             break;
         case Gate::kSGateType:
-            angle = pi / 2;
+            angle = Pi / 2;
             break;
         case Gate::kSdgGateType:
-            angle = -pi / 2;
+            angle = -Pi / 2;
             break;
         case Gate::kTGateType:
-            angle = pi / 4;
+            angle = Pi / 4;
             break;
         case Gate::kTdgGateType:
-            angle = -pi / 4;
+            angle = -Pi / 4;
             break;
         case Gate::kRxGateType:
         case Gate::kRzGateType:
@@ -285,6 +304,13 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
     if (rank == 0 || rank >= width)
         return;
 
+    // Backend selection sees the projected circuit. Check the source first
+    // so reduction preserves a stabilizer candidate's eligibility.
+    const bool mayRunStabilizer = HasCandidateList(ctx.config)
+                                      ? std::any_of(ctx.config.optimization_candidates.begin(), ctx.config.optimization_candidates.end(),
+                                                    [](const auto &candidate) { return candidate.second == Simulators::SimulationType::kStabilizer; })
+                                      : ctx.config.simulation_type == Simulators::SimulationType::kStabilizer;
+    const bool preserveClifford = mayRunStabilizer && ctx.circuit->IsClifford();
     auto reduced = std::make_shared<Circuit>();
     for (const auto &rotation : rotations)
     {
@@ -293,7 +319,8 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             basis.Encode(rotation.support, support);
         else
             support = basis.Dual(rotation.support);
-        EmitRotation(*reduced, support, rotation.angle, rotation.check);
+        if (!EmitRotation(*reduced, support, rotation.angle, rotation.check, preserveClifford))
+            return;
     }
 
     std::vector<std::string> observables;

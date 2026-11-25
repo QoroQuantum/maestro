@@ -380,6 +380,92 @@ void Near(double actual, double expected)
     Check(std::abs(actual - expected) < 1e-9, "Numerical mismatch");
 }
 
+j::object StabilizerEstimate(const std::string &selection, const std::string &body, const std::string &observable)
+{
+    const bool fixed = selection == "fixed";
+    auto request = Request("estimate", observable.size(), body, fixed ? "stabilizer" : "statevector");
+    request["observables"] = j::array{observable};
+    auto &simulator = request["simulator"].as_object();
+    simulator["selection"] = fixed ? "fixed" : "automatic";
+    if (!fixed)
+        simulator["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}};
+    if (selection == "mixed")
+        simulator["candidates"].as_array().emplace_back(j::object{{"backend", "qcsim"}, {"method", "statevector"}});
+    return request;
+}
+
+void TestCliffordParityEstimation()
+{
+    for (const std::string selection : {"fixed", "candidate", "mixed"})
+        for (const auto &[body, observable] : {std::pair{"x q[0]; cx q[0],q[1];", "ZI"}, std::pair{"x q[0];", "ZZ"}})
+        {
+            auto request = StabilizerEstimate(selection, body, observable);
+            auto &simulator = request["simulator"].as_object();
+            for (bool reduce : {false, true})
+            {
+                simulator["options"] = j::object{{"auto_reduce", reduce}, {"enable_causal_cone_reduction", false}};
+                const auto result = Call(request);
+                Near(Real(result.at("expectation_values").at(0)), -1.);
+                Check(result.at("auto_reduced").as_bool() == reduce && result.at("qubits_after").to_number<int>() == (reduce ? 1 : 2),
+                      "Stabilizer parity estimate used the wrong register");
+                Check(result.at("execution_metadata").at("method") == "stabilizer", "Parity reduction changed the selected stabilizer backend");
+            }
+        }
+
+    // Even Rx(pi) is a parameterized source gate, unlike a named X.
+    for (const auto &[angle, value] : {std::pair{"pi", std::acos(-1.)}, std::pair{"3.141592653590293", 3.141592653590293}})
+    {
+        auto rotation = StabilizerEstimate("mixed", std::string("rx(") + angle + ") q[0];", "YZ");
+        auto &simulator = rotation["simulator"].as_object();
+        for (bool reduce : {false, true})
+        {
+            simulator["options"] = j::object{{"auto_reduce", reduce}, {"enable_causal_cone_reduction", false}};
+            const auto result = Call(rotation);
+            Check(result.at("execution_metadata").at("method") == "statevector", "Mixed candidates selected a stabilizer for a parameterized rotation");
+            Check(result.at("auto_reduced").as_bool() == reduce, "Mixed candidates skipped parity reduction for a statevector rotation");
+            Check(std::abs(Real(result.at("expectation_values").at(0)) + std::sin(value)) < 1e-14, "Parity reduction rounded a near-Clifford rotation");
+        }
+    }
+}
+
+void TestNonCliffordParityEstimation()
+{
+    for (const auto &selection : {"fixed", "candidate"})
+    {
+        for (const auto &[body, observable] : {std::pair{"h q; t q[0]; t q[0];", "YI"}, std::pair{"h q; s q[0]; t q[1];", "YII"}})
+        {
+            const auto result = Call(StabilizerEstimate(selection, body, observable));
+            Check(result.at("execution_metadata").at("method") == "stabilizer", "A simplified Clifford did not run on the available stabilizer");
+            Near(Real(result.at("expectation_values").at(0)), 1.);
+        }
+
+        auto unmerged = StabilizerEstimate(selection, "h q; t q[0]; t q[0];", "YI");
+        unmerged["simulator"].as_object()["options"] = j::object{{"optimize_circuit", false}};
+        Call(unmerged, false);
+
+        auto zero = StabilizerEstimate(selection, "h q; t q[0];", "XZ");
+        for (const bool causalCones : {false, true})
+        {
+            zero["simulator"].as_object()["options"] = j::object{{"enable_causal_cone_reduction", causalCones}};
+            const auto result = Call(zero);
+            Check(result.at("auto_reduced").as_bool() && result.at("qubits_after").to_number<int>() == 0,
+                  "Parity reduction did not resolve an out-of-span observable");
+            Near(Real(result.at("expectation_values").at(0)), 0.);
+        }
+    }
+
+    for (const auto &[gate, diagnostic] : {std::pair{"t", "ApplyT"}, std::pair{"p(pi/4)", "ApplyP"}})
+    {
+        const std::string body = std::string("h q; ") + gate + " q[0];";
+        const auto fixed = Call(StabilizerEstimate("fixed", body, "YI"), false);
+        Check(fixed.at("error").at("message").as_string().find(diagnostic) != j::string::npos, "Fixed stabilizer error did not identify the original gate");
+        Call(StabilizerEstimate("candidate", body, "YI"), false);
+        const auto mixed = Call(StabilizerEstimate("mixed", body, "YI"));
+        Check(mixed.at("execution_metadata").at("method") == "statevector", "Mixed candidates did not select a statevector for a non-Clifford estimate");
+        Near(Real(mixed.at("expectation_values").at(0)), std::sqrt(0.5));
+    }
+}
+
 void TestLightconeEstimation()
 {
     auto request = Request("estimate", 80, "x q[0]; h q[79];");
@@ -771,11 +857,35 @@ void TestStabilizerNonClifford()
     Check(Call(estimate, false).at("error").at("code") == "native_failure", "A stabilizer estimate accepted a T gate in the cone");
 }
 
+void TestGlobalPhaseQueries()
+{
+    auto request = Request("statevector", 1, "");
+    auto &first = request.at("circuit").as_object();
+    first["source"] = "OPENQASM 3.0; qubit q; gphase(pi/2); x q;";
+    const auto checkPhase = [](const j::value &value, double imaginary) {
+        Near(Real(value.at(0)), 0.);
+        Near(Real(value.at(1)), imaginary);
+    };
+    checkPhase(Call(request).at("amplitudes").at(1), 1.);
+    request["operation"] = "amplitudes";
+    request["basis_states"] = j::array{1};
+    checkPhase(Call(request).at("amplitudes").at(0), 1.);
+    request.erase("basis_states");
+    request["operation"] = "inner_product";
+    auto second = request.at("circuit").as_object();
+    second["source"] = "OPENQASM 3.0; qubit q; gphase(pi); x q;";
+    request["other_circuit"] = second;
+    checkPhase(Call(request).at("inner_product"), 1.);
+    std::swap(request.at("circuit"), request.at("other_circuit"));
+    checkPhase(Call(request).at("inner_product"), -1.);
+}
+
 int main()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
     TestStabilizerNonClifford();
+    TestGlobalPhaseQueries();
     TestFixedBackendShotReuse();
     TestNetworkSimulatorPlaceholders();
     TestCandidateWidthRequests();
@@ -943,6 +1053,21 @@ try
     request["steps"] = j::array{0};
     request["observables"] = j::array{"X"};
     Near(Real(Call(request).at("expectation_values").at(0).at(0)), 1);
+    request["steps"] = j::array{0, 1};
+    result = Call(request);
+    Near(Real(result.at("expectation_values").at(0).at(0)), 1);
+    Near(Real(result.at("expectation_values").at(1).at(0)), 0);
+
+    request = Request("incremental_evolve", 1, "");
+    request["step_circuit"] = Request("execute", 1, "rx(0.3) q[0]; measure q[0] -> c[0];").at("circuit");
+    request["observables"] = j::array{"Z"};
+    for (const auto &steps : {j::array{1, 2, 3}, j::array{2}})
+    {
+        request["steps"] = steps;
+        result = Call(request);
+        for (size_t i = 0; i < steps.size(); ++i)
+            Near(Real(result.at("expectation_values").at(i).at(0)), std::cos(0.3 * Real(steps[i])));
+    }
 
     request = Request("incremental_evolve", 1, "x q[0]; measure q[0] -> c[0];");
     request["step_circuit"] = Request("execute", 1, "if(c==1) x q[0]; x q[0]; measure q[0] -> c[0];").at("circuit");
@@ -1026,6 +1151,20 @@ try
     Call(request, true, true);
     result = Call(request);
     Near(Real(result.at("expectation_values").at(1).at(0)), -1);
+
+    request.at("step_circuit").as_object()["source"] =
+        j::array{j::object{{"name", "pauli_channel"}, {"qubits", j::array{0}}, {"probabilities", j::array{0.5, 0.5, 0, 0}}}};
+    for (const bool sampled : {true, false})
+    {
+        request["simulator"].as_object()["method"] = sampled ? "statevector" : "density_matrix";
+        result = Call(request);
+        const auto &metadata = result.at("execution_metadata").as_object();
+        Check(metadata.at("stochastic_execution").as_bool() == sampled &&
+                  metadata.at("estimate_evaluation") == (sampled ? "single_trajectory" : "deterministic"),
+              "Incremental evolution must distinguish a single trajectory from exact channel evolution");
+        Near(Real(metadata.at("measurement_trajectories")), sampled ? 1 : 0);
+        Near(std::abs(Real(result.at("expectation_values").at(1).at(0))), sampled ? 1 : 0);
+    }
 
     request = Request("checkpoint_batch", 1, "x q[0];", "density_matrix");
     request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit"), Request("execute", 1, "x q[0]; measure q->c;").at("circuit")};
@@ -1287,6 +1426,8 @@ try
     auto nested = j::object{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{request}}};
     Call(nested, false, true);
     TestLightconeEstimation();
+    TestCliffordParityEstimation();
+    TestNonCliffordParityEstimation();
     TestRequestNoiseAndOptions();
     TestMixedStateExecution();
     TestLegacySeeds();
