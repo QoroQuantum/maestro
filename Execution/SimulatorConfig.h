@@ -384,6 +384,17 @@ inline size_t ConfiguredBondCap(const SimulatorConfig &config)
     return value == config.native_options.end() ? 0 : static_cast<size_t>(std::stoull(value->second));
 }
 
+// Python sets the typed limits; native requests can supply the same settings
+// in native_options. Match ConfigureNetwork's precedence for dry-run planning.
+inline Simulators::ShotPrefixPolicy ConfiguredShotPrefix(const SimulatorConfig &config, Simulators::SimulatorType type, Simulators::SimulationType method,
+                                                        size_t qubits)
+{
+    if (type == Simulators::SimulatorType::kQCSim && method == Simulators::SimulationType::kPauliPropagator)
+        return {true, Simulators::ShotPrefixPolicy::TruncatesPauli(config.native_options, qubits, config.pp_coefficient_threshold, config.pp_max_pauli_weight)};
+    return Simulators::ShotPrefixPolicy::FromConfiguration(type, method, config.native_options, config.path_integral_threshold, qubits,
+                                                          config.max_bond_dimension, config.singular_value_threshold);
+}
+
 inline bool IsAerTrajectoryBackend(const SimulatorConfig &config);
 
 // The soft realization memory budget in MiB (trajectory_max_memory_mb). Unset,

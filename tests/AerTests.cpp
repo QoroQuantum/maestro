@@ -133,6 +133,25 @@ BOOST_AUTO_TEST_CASE(density_matrix_kraus_target_order_matches_maestro)
     BOOST_CHECK_CLOSE(statevector->Probability(1), 1.0, 1e-8);
 }
 
+BOOST_AUTO_TEST_CASE(density_matrix_diagnostics_preserve_filter_weight)
+{
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kDensityMatrix);
+    sim->AllocateQubits(1);
+    sim->Initialize();
+    sim->ApplyH(0);
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero();
+    projector(1, 1) = 1.;
+    sim->ApplyGenericOneQubitGate(0, projector);
+
+    BOOST_CHECK_SMALL(std::abs(sim->DensityMatrixTrace() - 0.5), 1e-9);
+    BOOST_CHECK_SMALL(sim->DensityMatrixPurity() - 0.25, 1e-9);
+    BOOST_CHECK_SMALL(std::abs(sim->DensityMatrixTraceOfSquare() - 0.25), 1e-9);
+    BOOST_CHECK_SMALL(std::abs(sim->PartialTrace({})(0, 0) - 0.5), 1e-9);
+    BOOST_CHECK_THROW(sim->PartialTrace({0, 0}), std::invalid_argument);
+    BOOST_CHECK_THROW(sim->PartialTrace({1}), std::invalid_argument);
+    BOOST_CHECK_SMALL(sim->Probability(1) - 0.5, 1e-9);
+}
+
 // Aer's statevector and matrix product state take a channel as one sampled
 // Kraus branch; averaged over trajectories they reproduce Aer's density matrix.
 BOOST_AUTO_TEST_CASE(statevector_and_matrix_product_state_sample_channels_as_trajectories)

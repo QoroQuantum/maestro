@@ -883,7 +883,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
                                     simulator->GetNumberOfQubits() != nrQubits;
         const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim);
@@ -1130,7 +1130,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
         const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
@@ -2583,10 +2583,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
   private:
     bool HasTerminalMeasurements(Simulators::SimulatorType type, Simulators::SimulationType method, const std::shared_ptr<Simulators::ISimulator> &chosen,
-                                 size_t &measuredWidth) const
+                                 size_t qubits, size_t &measuredWidth) const
     {
         const auto policy =
-            chosen ? chosen->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap());
+            chosen ? chosen->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
         return !distCirc->HasOpsAfterMeasurementsWithWidth(policy.exactChannels, measuredWidth, policy.contiguous);
     }
 
@@ -3745,7 +3745,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto result = configuration;
         if (type == Simulators::SimulatorType::kQCSim)
             result.SetConfiguration("reproducible_trajectory", distCirc && distCirc->HasOpsAfterMeasurementsOn(Simulators::ShotPrefixPolicy::FromConfiguration(
-                                                                               type, method, configuration.GetConfigMap()))
+                                                                               type, method, configuration.GetConfigMap(), {}, qubits))
                                                                    ? "true"
                                                                    : "false");
         const auto found = resolvedDistributedDevices.find(type);
@@ -3814,18 +3814,22 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     std::vector<long long int> line;
                     if (freshRegister)
                     {
-                        auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                        // Layers still guide the initial layout. They can become the
+                        // execution order only when commuting gates preserves the result.
+                        const bool preserveOrder = sim->GetShotPrefixPolicy().contiguous;
+                        auto ordered = preserveOrder ? dcirc : Circuits::Circuit<Time>::LayersToCircuit(layers);
                         // Place a path along the chain when this avoids all swaps.
                         if (placeQubits)
                             line = Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits());
-                        if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                        if (!preserveOrder && sim->GetType() == Simulators::SimulatorType::kQCSim)
                             ordered = Circuits::ChainOrdered(ordered,
                                                              sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
                                                                  ? Circuits::ChainOrder::kMixedState
                                                              : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
                                                                                              : Circuits::ChainOrder::kNone,
                                                              line.empty() ? nullptr : &line);
-                        dcirc->SetOperations(ordered->GetOperations());
+                        if (ordered != dcirc)
+                            dcirc->SetOperations(ordered->GetOperations());
                     }
                     // A suffix keeps its source order. The sampler installs the
                     // executed window after restore; only fusion needs a view now.
@@ -3940,7 +3944,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!line.empty())
                 {
                     sim->SetInitialQubitsMap(line);
-                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim && !sim->GetShotPrefixPolicy().contiguous)
                     {
                         const auto ordered = Circuits::ChainOrdered(dcirc,
                                                                     sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator

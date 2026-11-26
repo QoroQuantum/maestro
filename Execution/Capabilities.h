@@ -288,7 +288,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"noise", noise},
             {"estimate", estimate},
             {"noisy_fidelity", noisyFidelity},
-            {"noisy_prob", json::object{{"supported_configurations", json::array{json::object{{"backend", "qcsim"}, {"method", "path_integral"}}}},
+            {"noisy_prob", json::object{{"supported_configurations", Configurations([](const auto &config) { return SomeBackendHoldsQuantumChannels(config); })},
                                         {"modes", json::array{"combined", "pauli", "coherent"}},
                                         {"evaluations", json::array{"deterministic", "trajectory_average"}},
                                         {"readout_approximation", "first_order_readout"},

@@ -275,11 +275,11 @@ inline Circuits::Circuit<double>::ChannelDraws InjectedChannelDraws(bool runtime
 // form: when every backend the request may run is the QCSim matrix product
 // state, which samples channels, or the QCSim matrix product operator, which
 // applies them.
-inline Circuits::ChainOrder OrdersForChain(const SimulatorConfig &config, bool exact_channels)
+inline Circuits::ChainOrder OrdersForChain(const SimulatorConfig &config, bool exact_channels, size_t qubits = 0)
 {
     const auto all = [&](Simulators::SimulationType wanted) {
         const auto chain = [&](Simulators::SimulatorType type, Simulators::SimulationType method) {
-            return type == Simulators::SimulatorType::kQCSim && method == wanted;
+            return type == Simulators::SimulatorType::kQCSim && method == wanted && !ConfiguredShotPrefix(config, type, method, qubits).contiguous;
         };
         if (HasCandidateList(config))
             return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
@@ -310,14 +310,7 @@ inline bool MayRunPauliPropagator(const SimulatorConfig &config)
 // The method is not checked: a candidate list may run the propagator with them.
 inline bool SetsPauliTruncation(const SimulatorConfig &config, size_t qubits)
 {
-    const auto native = [&](const char *key) {
-        const auto it = config.native_options.find(key);
-        return it == config.native_options.end() ? std::optional<double>() : std::optional<double>(std::strtod(it->second.c_str(), nullptr));
-    };
-    const auto coefficient = config.pp_coefficient_threshold ? config.pp_coefficient_threshold : native("pauli_propagator_coefficient_threshold");
-    const auto weight = config.pp_max_pauli_weight ? std::optional<double>(static_cast<double>(*config.pp_max_pauli_weight))
-                                                   : native("pauli_propagator_pauli_weight_threshold");
-    return (coefficient && *coefficient > 0) || (weight && *weight < static_cast<double>(qubits));
+    return Simulators::ShotPrefixPolicy::TruncatesPauli(config.native_options, qubits, config.pp_coefficient_threshold, config.pp_max_pauli_weight);
 }
 
 // SetsPauliTruncation for a configuration whose method is the Pauli propagator.
@@ -459,7 +452,7 @@ struct NoiseRealizationPolicy
 inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> requested, const noise::NoiseModel &model, const SimulatorConfig &config,
                                                        NoiseLayer layer, size_t fallback, const std::shared_ptr<Circuits::Circuit<double>> &circuit = {},
                                                        bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true,
-                                                       bool runs_channels = true)
+                                                        bool runs_channels = true, size_t register_qubits = 0)
 {
     if ((requested && *requested == 0) || fallback == 0)
         throw std::invalid_argument("noise_realizations must be >= 1.");
@@ -472,7 +465,7 @@ inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> req
     else
         result.exact_channels = circuit ? InjectsExactChannels(config, model, *circuit) : InjectsExactChannels(config, model);
     result.runtime_channels = runs_channels && InjectsRuntimeChannels(config, result.exact_channels);
-    result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels) : Circuits::ChainOrder::kNone;
+    result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels, register_qubits) : Circuits::ChainOrder::kNone;
     result.stochastic_noise = (layer != NoiseLayer::kPauli && model.has_coherent()) || (layer == NoiseLayer::kCombined && model.has_correlated());
     if (!result.exact_channels)
         result.stochastic_noise = result.stochastic_noise || model.has_non_readout_noise() || (circuit && circuit->HasDrawnChannels());

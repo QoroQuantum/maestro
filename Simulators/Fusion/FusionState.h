@@ -71,7 +71,8 @@ class FusionState : public ISimulator
                 SeedAuxiliaryRng(*seed);
         }
         cache_.SetWidth(GetGateFusionMaxQubits());
-        if (oldWidth != GetGateFusionMaxQubits() || oldEnabled != IsGateFusionEnabled() || oldLookahead != IsRoutingLookaheadEnabled())
+        chainPolicyWidth_.reset();
+        if (RefreshChainFusionOrder() || oldWidth != GetGateFusionMaxQubits() || oldEnabled != IsGateFusionEnabled() || oldLookahead != IsRoutingLookaheadEnabled())
             RebuildPlan();
     }
 
@@ -121,7 +122,7 @@ class FusionState : public ISimulator
     void FlushPendingGates() override
     {
         cache_.Flush([this](const auto &block) { Emit(block); });
-        // Pending blocks never share a qubit, so their order is free.
+        // On a truncating MPO a pending channel has no independent blocks waiting beside it.
         for (const auto &block : channelBlocks_)
             EmitChannelBlock(block);
         channelBlocks_.clear();
@@ -303,7 +304,10 @@ class FusionState : public ISimulator
     size_t AllocateQubits(size_t n) override
     {
         Flush();
-        return immediate_->AllocateQubits(n);
+        const auto first = immediate_->AllocateQubits(n);
+        if (ready_ && RefreshChainFusionOrder())
+            RebuildPlan();
+        return first;
     }
 
     void SaveState() override
@@ -976,6 +980,8 @@ class FusionState : public ISimulator
         copy.destructiveSaved_ = destructiveSaved_;
         copy.readBlocksFirst_ = readBlocksFirst_;
         copy.normKnown_ = normKnown_;
+        copy.contiguousChainFusion_ = contiguousChainFusion_;
+        copy.chainPolicyWidth_ = chainPolicyWidth_;
         copy.cache_.SetWidth(copy.GetGateFusionMaxQubits());
         // An unseeded backend clone keeps its derived root as its sampling seed.
         auto seed = copy.immediate_->GetConfiguration("seed");
@@ -1127,6 +1133,10 @@ class FusionState : public ISimulator
 
     template <class EmitBlock> void SubmitToCache(Cache &cache, const FusionGate &gate, uint64_t source, EmitBlock &&emit)
     {
+        // A truncating chain keeps one contiguous block. Source planning uses this same
+        // cache path, so its routing window describes the blocks that actually execute.
+        if (contiguousChainFusion_ && !cache.Empty() && !Overlaps(cache.PendingBlocks().begin()->second.targets, gate.qubits))
+            cache.Flush(emit);
         cache.Submit(gate, source, std::forward<EmitBlock>(emit), PreserveStructuredGates() && gate.IsStructured(),
                      SwapGatesRelabelQubits() && gate.kind == FusionGate::Kind::kSwapGateType);
     }
@@ -1200,6 +1210,11 @@ class FusionState : public ISimulator
     // part of its block and the others are emitted.
     void SubmitSuperoperator(const Types::qubits_vector &order, const Eigen::MatrixXcd &superoperator)
     {
+        // A pending gate on other sites must precede this channel if an intervening SVD can truncate.
+        // Keep a single overlapping block eligible for the usual adjacent gate/channel fusion.
+        if (contiguousChainFusion_ && ((!cache_.Empty() && !Overlaps(cache_.PendingBlocks().begin()->second.targets, order)) ||
+                                       (!channelBlocks_.empty() && !Overlaps(channelBlocks_.front().targets, order))))
+            FlushPendingGates();
         Types::qubits_vector support = order;
         std::sort(support.begin(), support.end());
         std::vector<ChannelBlock> earlier;
@@ -1259,7 +1274,11 @@ class FusionState : public ISimulator
                 support = Union(std::move(support), block.targets);
             }
         if (!overlaps)
+        {
+            if (contiguousChainFusion_)
+                FlushPendingGates();
             return false;
+        }
         if (gate.qubits.size() <= 2 && Union(std::move(support), {}).size() <= 2)
         {
             SubmitSuperoperator(gate.Targets(), UnitarySuperoperator(gate.Matrix()));
@@ -1797,8 +1816,22 @@ class FusionState : public ISimulator
         }
     }
 
+    // Only configuration and register width change this policy. Gate submission reads the cached flag.
+    bool RefreshChainFusionOrder()
+    {
+        const auto width = immediate_->GetNumberOfQubits();
+        if (chainPolicyWidth_ == width)
+            return false;
+        chainPolicyWidth_ = width;
+        const auto method = immediate_->GetSimulationType();
+        const bool ordered = (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator) &&
+                             immediate_->GetShotPrefixPolicy().contiguous;
+        return std::exchange(contiguousChainFusion_, ordered) != ordered;
+    }
+
     void RebuildPlan()
     {
+        RefreshChainFusionOrder();
         routingPlan_.reset();
         planIndex_ = 0;
         planValid_ = false;
@@ -1895,6 +1928,8 @@ class FusionState : public ISimulator
     Cache cache_;
     // Pending fused maps of a mixed state; no qubit is in two pending blocks of either kind.
     std::vector<ChannelBlock> channelBlocks_;
+    bool contiguousChainFusion_ = false;
+    std::optional<size_t> chainPolicyWidth_;
     // Pending blocks of a backend that samples channels from its state.
     std::vector<TrajectoryBlock> trajectoryBlocks_;
     std::vector<double> weights_;

@@ -489,7 +489,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     double ProbabilityBits(const std::vector<bool> &bits) override
     {
         if (!mpo)
-            return IState::ProbabilityBits(bits);
+            throw std::runtime_error("GPU MPO state is not initialized");
         return mpo->ProbabilityBits(std::vector<unsigned char>(bits.begin(), bits.end()));
     }
 

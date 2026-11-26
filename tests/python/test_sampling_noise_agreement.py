@@ -1395,19 +1395,22 @@ def _native_request(request):
     return result
 
 
+@pytest.mark.parametrize("method,name", [(S.PathIntegral, "path_integral"), (S.Statevector, "statevector"),
+                                         (S.MatrixProductState, "matrix_product_state"), (S.DensityMatrix, "density_matrix")])
 @pytest.mark.parametrize("seed, noise_seed", [(None, 0), (0, None), (0, 19), ((1 << 46) + 7, 0)])
-def test_noisy_probability_replays_the_same_kraus_trajectories_in_python_and_json(seed, noise_seed):
+def test_noisy_probability_agrees_in_python_and_json(method, name, seed, noise_seed):
     circuit = QuantumCircuit()
     circuit.x(0)
     operators = [[[1, 0], [0, 0.8]], [[0, 0.6], [0, 0]]]
     model = maestro.NoiseModel()
     model.set_kraus_channel([0], operators)
     model.set_readout_error(0, 0.1, 0.3)
-    config = maestro.SimulatorConfig(simulation_type=S.PathIntegral, fixed_backend=True, seed=seed)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, seed=seed)
     bound = circuit.noisy_prob("1", model, 71, noise_seed, config)
     module = maestro.noisy_prob(circuit, "1", model, 71, noise_seed, config)
     request = {
         "schema_version": 2, "operation": "noisy_prob", "target_state": "1",
+        "simulator": {"backend": "qcsim", "method": name},
         "circuit": {"format": "instructions", "num_qubits": 1, "source": [{"name": "x", "qubits": [0]}]},
         "noise": {"realizations": 71, "channels": [
             {"kind": "kraus", "targets": [0], "operators": [[1, 0, 0, 0.8], [0, 0.6, 0, 0]]},
@@ -1418,7 +1421,12 @@ def test_noisy_probability_replays_the_same_kraus_trajectories_in_python_and_jso
         request["execution"] = {"seed": seed}
     native = _native_request(request)
     assert native["ok"], native
-    assert 0.1 < bound["probability"] < 0.7 and bound["std_error"] > 0
+    if method == S.DensityMatrix:
+        assert bound["probability"] == pytest.approx(.484) and bound["std_error"] == 0
+        assert bound["realizations_evaluated"] == 1
+    else:
+        assert 0.1 < bound["probability"] < 0.7 and bound["std_error"] > 0
+        assert bound["realizations_evaluated"] == 71
     for result in (module, native):
         assert bound["noise_realizations"] == result["noise_realizations"] == 71
         for key in ("probability", "std_error"):

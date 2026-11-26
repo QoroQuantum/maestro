@@ -748,11 +748,14 @@ json::array Expectations(const std::shared_ptr<Simulators::ISimulator> &simulato
     return result;
 }
 
-Circuits::OperationState Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool checkpoint = false)
+Circuits::OperationState Prepare(Context &context, const CircuitPtr &circuit, size_t bits, bool checkpoint = false,
+                                std::optional<uint64_t> seed = std::nullopt)
 {
     Circuits::OperationState state(bits);
     auto simulator = context.simulator();
     simulator->Reset();
+    if (seed)
+        simulator->SetSeed(*seed);
     const bool routed = checkpoint && context.network->PrepareCheckpointRouting(simulator, circuit, true);
     simulator->SetGatesCounter(0);
     simulator->SetUpcomingGates(circuit->GetOperations());
@@ -764,9 +767,12 @@ Circuits::OperationState Prepare(Context &context, const CircuitPtr &circuit, si
     return state;
 }
 
-json::array Basis(const json::object &request, size_t qubits, size_t limit)
+json::array Basis(const json::object &request, size_t qubits, size_t limit, const SimulatorConfig &config)
 {
-    Supported(qubits < 63, "Basis-index queries support fewer than 63 qubits");
+    // The selected Aer MPS amplitude reader contracts even the highest bit of a uint64_t.
+    // Listing the full distribution still needs a representable 2^qubits.
+    const bool selectedMPS = request.contains("basis_states") && IsAerTrajectoryBackend(config) && config.simulation_type == Method::kMatrixProductState;
+    Supported(qubits < 63 || (selectedMPS && qubits <= 64), "Basis-index queries require fewer than 63 qubits or selected indices on Aer MPS up to 64 qubits");
     json::array states;
     if (const auto *values = request.if_contains("basis_states"))
         states = Array(*values);
@@ -780,7 +786,10 @@ json::array Basis(const json::object &request, size_t qubits, size_t limit)
     }
     Require(states.size() <= limit, "Selected state output exceeds max_output_elements");
     for (const auto &value : states)
-        Require(UInt(value) < (uint64_t{1} << qubits), "Basis index out of range");
+    {
+        const auto index = UInt(value);
+        Require(qubits == 64 || index < (uint64_t{1} << qubits), "Basis index out of range");
+    }
     return states;
 }
 
@@ -1134,8 +1143,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     const bool noisyProbability = operation == "noisy_prob";
     auto config = ParseConfig(Sub(request, "simulator"), noisyProbability ? "path_integral" : "statevector");
-    const bool pathIntegral = config.simulator_type == Backend::kQCSim && config.simulation_type == Method::kPathIntegral;
-    Supported(!noisyProbability || (pathIntegral && config.fixed_backend), "noisy_prob requires the fixed QCSim path_integral method.");
+    Supported(!noisyProbability || (config.fixed_backend && SomeBackendHoldsQuantumChannels(config)),
+              "noisy_prob requires a fixed backend that applies or samples quantum channels.");
     const auto &execution = Sub(request, "execution");
     Keys(execution, {"shots", "seed", "return_samples"});
     Require(!execution.contains("shots") || operation == "execute" || operation == "checkpoint_batch", "execution.shots does not apply to " + operation);
@@ -1163,7 +1172,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             Require(UInt(q) < input.qubits, "Global qubit exceeds register");
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
-    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits, noisyProbability);
+    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits, operation);
     if (noise.enabled && !noise.automatic && !noise.exact)
         config.terminal_channel_policy = "trajectories";
     // Automatic evaluation follows the circuit too. A checkpoint's noise acts
@@ -1192,10 +1201,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // A query of one state runs the circuit once: where the backend samples
     // channels from its state, the answer is the state of one branch (as after
     // a reset on any pure-state backend), which the metadata reports.
-    const bool oneState = operation == "statevector" || operation == "amplitudes" || operation == "probabilities" || operation == "state_probability";
+    const bool amplitudes = operation == "statevector" || operation == "amplitudes";
+    const bool oneState = amplitudes || operation == "probabilities" || operation == "state_probability" || operation == "diagnostics";
     CheckChannels(input.circuit, config, noise,
-                  operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || operation == "incremental_evolve" || noisyProbability ||
-                      oneState,
+                  operation == "validate" || operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" ||
+                      operation == "incremental_evolve" || noisyProbability || oneState,
                   operation == "checkpoint_batch");
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
@@ -1229,7 +1239,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         const auto layer = noise.Layer();
         const bool estimator = operation == "estimate" || operation == "noisy_fidelity" || noisyProbability;
         noise.policy =
-            ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact);
+            ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact, true, true,
+                                     input.qubits);
         noise.realizations = noise.mode == "analytical" ? 1 : noise.policy.realizations;
         if (noise.policy.stochastic_noise && noise.mode != "analytical")
             AddApproximation(noise, "finite_noise_realizations");
@@ -1346,8 +1357,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     Require(!noise.enabled || noise.channel_count > 0 || circuitChannels || noisyProbability,
             "noise.channels may be empty only when the circuit's channel instructions supply the noise");
-    const bool amplitudes = operation == "statevector" || operation == "amplitudes";
-    const bool query = amplitudes || operation == "probabilities" || operation == "state_probability" || operation == "diagnostics";
     // Observable mirror evaluation only takes expectations of the executed mirror
     // state, which mixed-state backends provide; it needs no pure-state overlap.
     const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
@@ -1361,11 +1370,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     if (MixedStateQuery(operation))
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
+    const bool singleTrajectory = oneState && noise.enabled && !noise.automatic && !noise.exact && noise.requested_realizations == 1 &&
+                                  SamplesQuantumChannels(config);
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
-                  ((query || MixedStateQuery(operation)) && noise.exact && noise.realizations == 1) || operation == "noisy_fidelity" ||
+                  ((oneState || MixedStateQuery(operation)) && noise.exact && noise.realizations == 1) || singleTrajectory || operation == "noisy_fidelity" ||
                   operation == "checkpoint_batch" || noisyProbability,
-              "This operation requires a single exact noisy state or an explicit "
-              "batch");
+              "This operation requires a single exact noisy state. To query a sampled state, select trajectories and one realization on a "
+              "channel-sampling backend. Use noisy_prob for an ensemble probability.");
     // <psi|rho|psi> for every noise layer: sampled Pauli/T1/coherent
     // trajectories on pure states, exact channels on density matrices and MPOs
     // (as Python noisy_fidelity). Analytical damping is rejected above.
@@ -1380,7 +1391,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                                                       " qubits: its cost doubles with every qubit");
     json::array basis;
     if (amplitudes || operation == "probabilities")
-        basis = Basis(request, input.qubits, limit);
+        basis = Basis(request, input.qubits, limit, config);
     const bool nativeMpo = (config.simulator_type == Simulators::SimulatorType::kGpuSim || config.simulator_type == Simulators::SimulatorType::kQCSim) &&
                            config.simulation_type == Simulators::SimulationType::kMatrixProductOperator;
     const bool nativeMps = (config.simulator_type == Simulators::SimulatorType::kGpuSim || config.simulator_type == Simulators::SimulatorType::kQCSim) &&
@@ -1394,7 +1405,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             bits.push_back(bit == '1');
         return bits;
     };
-    uint64_t target = 0;
     std::vector<bool> targetBits;
 
     struct LocalOperator
@@ -1410,15 +1420,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     std::vector<Eigen::MatrixXcd> expectationOperators;
     if (operation == "state_probability" || noisyProbability)
     {
-        Supported(nativeMpo || pathIntegral || input.qubits < 63, "Wide state probability requires CPU or GPU MPO or QCSim path_integral");
-        Supported(!pathIntegral || input.qubits <= QC::PathIntegral::FastVectorBool::MaxWords * 64, "Path integral targets support at most 1024 qubits");
+        if (const auto *error = StateProbabilityWidthError(config, input.qubits))
+            throw Error("unsupported_capability", error);
         targetBits = readBits("target_state");
         if (noisyProbability && validate)
-            ValidateNoisyStateProbability(circuit, targetBits);
-        else if (!nativeMpo && !pathIntegral)
-            for (size_t q = 0; q < targetBits.size(); ++q)
-                if (targetBits[q])
-                    target |= uint64_t{1} << q;
+            ValidateNoisyStateProbability(circuit, targetBits, config);
     }
     Eigen::VectorXcd targetVector;
     if (operation == "fidelity_with_statevector")
@@ -1578,9 +1584,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 const auto name = String(action);
                 Require(name == "restore_trace" || name == "hermitize" || name == "trim" || name == "recanonicalize", "Unknown maintenance action");
                 if (name == "trim" || name == "recanonicalize")
-                    Supported(MatrixProductChain(config), "This maintenance action requires MPS or MPO");
+                    Supported(nativeMps || nativeMpo, name + " requires QCSim or GPU MPS or MPO");
                 else
-                    Supported(Mixed(config), "This maintenance action requires density_matrix or MPO");
+                    Supported(nativeMpo, name + " requires QCSim or GPU MPO");
             }
     }
     if (return_samples)
@@ -1615,12 +1621,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     if (noisyProbability)
     {
-        const auto estimate = NoisyStateProbability(circuit, targetBits, noise.model, noise.requested_realizations, config,
-                                                    noise.enabled ? std::optional<uint64_t>(noise.seed) : std::nullopt, noise.Layer());
-        noise.policy = estimate.policy;
         SamplingResult executionResult;
-        executionResult.simulator = config.simulator_type;
-        executionResult.method = config.simulation_type;
+        const auto estimate = NoisyStateProbability(circuit, targetBits, noise.model, noise.requested_realizations, config,
+                                                    noise.enabled ? std::optional<uint64_t>(noise.seed) : std::nullopt, noise.Layer(),
+                                                    noise.enabled ? std::optional<bool>(noise.exact) : std::nullopt, &executionResult);
+        noise.policy = estimate.policy;
         auto metadata = ReductionMetadata(executionResult, config);
         metadata["stochastic_execution"] = estimate.policy.stochastic_execution;
         metadata["estimate_evaluation"] = estimate.EstimateEvaluation();
@@ -2103,7 +2108,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     std::mt19937 rng(noise.seed);
     // On a backend that samples channels from its state, sampled realizations
     // keep the channels no draw replaces: each execution draws their branches.
-    const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
+    const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels,
+                                        singleTrajectory ? Circuits::ChainOrder::kNone : noise.policy.chain_order);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
     bool frame_suffixes = false;
@@ -2279,11 +2285,24 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Prepare(other, Inject(additional[0].circuit, noise, rng), input.clbits);
         result["overlap"] = Complex(simulator->DensityMatrixOverlap(*other.simulator()));
     }
-    else if (query)
+    else if (oneState)
     {
-        Prepare(context, Inject(circuit, noise, rng), input.clbits);
+        if (singleTrajectory)
+        {
+            // Match realization zero of noisy_prob, including state-dependent Kraus channels and the two seed streams.
+            CircuitPtr shared, first;
+            ResolveRuntimeNoise(noise.Layer(), plan, rng, shared, first);
+            RuntimeDraws draws(&plan, shared, first);
+            auto realization = shared ? shared : first ? first : Inject(plan, noise, rng);
+            draws.See(realization);
+            noise.policy.stochastic_execution = HasStochasticEvolution(realization, false);
+            const auto execution = draws ? RuntimeNoiseExecutionConfig(config, noise.seed, 0) : NoiseExecutionConfig(config, noise.seed, 0);
+            Prepare(context, realization, input.clbits, false, execution.seed);
+        }
+        else
+            Prepare(context, Inject(circuit, noise, rng), input.clbits);
         if (operation == "state_probability")
-            result["probability"] = nativeMpo || pathIntegral ? simulator->ProbabilityBits(targetBits) : simulator->Probability(target);
+            result["probability"] = simulator->ProbabilityBits(targetBits);
         else if (operation == "diagnostics")
         {
             for (const auto &op : localOperators)
@@ -2656,7 +2675,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             options->as_object()["counts_policy"] = requested_counts_policy;
     // One execution of a circuit that branches: the state returned is that of
     // the branch this execution drew.
-    if (oneState && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config)))
+    if (singleTrajectory)
+    {
+        const bool stochastic = noise.policy.stochastic_noise || noise.policy.stochastic_execution;
+        auto &metadata = result["execution_metadata"].as_object();
+        metadata["stochastic_execution"] = stochastic;
+        metadata["estimate_evaluation"] = stochastic ? "single_trajectory" : "deterministic";
+    }
+    else if (oneState && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config)))
         result["execution_metadata"].as_object()["stochastic_execution"] = true;
     if (operation == "incremental_evolve")
     {

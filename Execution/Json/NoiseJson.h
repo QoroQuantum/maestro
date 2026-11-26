@@ -145,7 +145,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
         result.approximations.emplace_back("extended_stabilizer_pruning");
 }
 
-inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits, bool noisyProbability = false)
+inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits, std::string_view operation = {})
 {
     NoiseConfig result;
     if (object.empty())
@@ -155,6 +155,7 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     result.prefix = Boolean(object, "prefix", false);
     result.mode = String(object, "mode", "combined");
     Require(NoiseLayerForMode(result.mode).has_value() || result.mode == "analytical", "Unknown noise mode");
+    const bool noisyProbability = operation == "noisy_prob";
     Supported(!noisyProbability || result.mode != "analytical", "noisy_prob mode must be combined, pauli or coherent.");
     const auto evaluation = String(object, "evaluation", "auto");
     Require(evaluation == "auto" || evaluation == "exact" || evaluation == "trajectories", "Unknown noise evaluation");
@@ -354,7 +355,12 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
             throw Error("unsupported_capability", error);
     result.model.EnsureNoT1ThermalStack();
     if (result.automatic)
-        result.exact = Mixed(config) || InjectsExactChannels(config, result.model);
+    {
+        // A probability query can read an ensemble directly, including relaxation on the Pauli propagator.
+        // The estimator's cost-based choice to sample relaxation would leave a single-state query with one draw.
+        const bool ensembleProbability = noisyProbability || operation == "probabilities" || operation == "state_probability";
+        result.exact = (ensembleProbability && UsesExactQuantumChannels(config)) || Mixed(config) || InjectsExactChannels(config, result.model);
+    }
     SettleNoiseEvaluation(result, config, qubits);
     return result;
 }

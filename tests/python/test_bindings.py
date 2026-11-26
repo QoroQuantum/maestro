@@ -6764,15 +6764,33 @@ class TestNoisyProbReadout:
         for mode in ("analytical", "unknown"):
             with pytest.raises(ValueError, match="noisy_prob mode must"):
                 maestro.noisy_prob(circuit, "00", model, mode=mode)
-        wrong_backend = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
-        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+        wrong_backend = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer)
+        with pytest.raises(ValueError, match="noisy_prob"):
             circuit.noisy_prob("00", model, config=wrong_backend)
         # The direct API accepts Python's legacy default selection when the path integral is the sole method.
         config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PathIntegral, fixed_backend=False)
         assert circuit.noisy_prob("00", model, config=config)["probability"] == pytest.approx(circuit.prob("00")["probability"])
         config.optimization_candidates = [(maestro.SimulatorType.QCSim, maestro.SimulationType.PathIntegral)]
-        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+        with pytest.raises(ValueError, match="noisy_prob"):
             circuit.noisy_prob("00", model, config=config)
+
+    def test_backend_evaluation_of_gate_noise(self):
+        from maestro.circuits import QuantumCircuit
+
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        model = maestro.NoiseModel()
+        model.set_bit_flip(0, .25)
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix)
+        exact = circuit.noisy_prob("1", model, 200, seed=12, config=config, evaluation="exact")
+        assert exact["probability"] == pytest.approx(.75)
+        assert exact["std_error"] == 0 and exact["realizations_evaluated"] == 1
+        sampled = circuit.noisy_prob("1", model, 200, seed=12, config=config, evaluation="trajectories")
+        assert sampled["realizations_evaluated"] == 200
+        assert sampled["probability"] == pytest.approx(.75, abs=5 * sampled["std_error"])
+        config.simulation_type = maestro.SimulationType.Statevector
+        with pytest.raises(ValueError, match="[Ee]xact"):
+            circuit.noisy_prob("1", model, config=config, evaluation="exact")
 
     def test_symmetric_readout(self):
         qc = self._circuit()

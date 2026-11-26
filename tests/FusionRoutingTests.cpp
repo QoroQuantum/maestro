@@ -137,6 +137,71 @@ struct Observer : ISimulatorObserver
     }
 };
 
+static void TruncatedMpoChannelFusion()
+{
+    for (auto cap : {"4", "16"})
+        for (bool fusion : {false, true})
+        {
+            auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductOperator);
+            sim->Configure("matrix_product_operator_max_bond_dimension", cap);
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->AllocateQubits(4);
+            sim->Initialize();
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyH(2);
+            sim->ApplyCX(2, 3);
+            sim->Flush();
+            const auto before = sim->GetGateFusionStatistics().backendGates;
+            // Damping disentangles the first Bell pair before the CX gates act across the middle bond.
+            sim->ApplyZ(0);
+            sim->ApplyQuantumChannel({0}, QuantumChannel::AmplitudeDamping(1.));
+            sim->ApplyCX(1, 2);
+            sim->ApplyCX(2, 1);
+            for (size_t i = 0; i < 16; ++i)
+            {
+                const double expected = i == 0 || i == 4 || i == 10 || i == 14 ? .25 : 0.;
+                Check(std::abs(sim->Probability(i) - expected) < 1e-10, "MPO fusion moved a disjoint gate across a channel before truncation");
+            }
+            if (fusion)
+                Check(sim->GetGateFusionStatistics().backendGates == before + 2, "MPO stopped fusing adjacent operations");
+        }
+}
+
+static void TruncatedChainGateFusion()
+{
+    for (const auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
+        for (const auto cap : {method == SimulationType::kMatrixProductState ? 2 : 4, method == SimulationType::kMatrixProductState ? 4 : 16})
+        {
+            const auto distribution = [&](bool fusion, bool forceOrder) {
+                auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
+                sim->Configure("matrix_product_state_max_bond_dimension", std::to_string(cap).c_str());
+                sim->Configure("gate_fusion", fusion ? "true" : "false");
+                sim->AllocateQubits(5);
+                sim->Initialize();
+                sim->ApplyH(0);
+                sim->ApplyCX(0, 1);
+                sim->ApplyH(2);
+                sim->ApplyCX(2, 3);
+                sim->Flush();
+                const auto before = sim->GetGateFusionStatistics().backendGates;
+                sim->ApplyCX(0, 2);
+                if (forceOrder)
+                    sim->Flush();
+                sim->ApplyCX(3, 1);
+                sim->ApplyCX(1, 4);
+                sim->Flush();
+                if (fusion)
+                    Check(sim->GetGateFusionStatistics().backendGates == before + 3, "Gate-order fixture unexpectedly fused distinct CX gates");
+                return sim->AllProbabilities();
+            };
+            const auto written = distribution(true, true);
+            for (const auto &actual : {distribution(true, false), distribution(false, false)})
+                for (size_t i = 0; i < written.size(); ++i)
+                    Check(std::abs(actual.at(i) - written[i]) < 1e-10, "Fusion reordered disjoint two-site gates on a truncated chain");
+        }
+}
+
 static void BoundaryPlanning()
 {
     for (bool fusion : {false, true})
@@ -1825,6 +1890,36 @@ struct AutomaticFusionInspection : Private::FusionState
     }
 };
 
+// Both the layered layout pass and the small-bond device-line shortcut can
+// install a useful initial placement without changing the order of the gates.
+template <class Backend> static void TruncatedDeviceLineOrder(size_t n)
+{
+    const auto at = DeviceLine(n, 5);
+    const auto given = LineOperations(at, true);
+    std::vector<long long> along(n);
+    for (size_t i = 0; i < n; ++i)
+        along[at[i]] = static_cast<long long>(i);
+    for (const char *cap : {"16", "32", "64"})
+    {
+        auto sim = std::make_shared<AutomaticRoutingProbe<Backend>>();
+        ConfigureExactAutomatic(*sim, n);
+        AutomaticNetworkProbe net(Types::qubits_vector{n}, std::vector<size_t>{n});
+        for (const auto *key : {"matrix_product_state_max_bond_dimension", "matrix_product_operator_max_bond_dimension"})
+        {
+            sim->Configure(key, cap);
+            net.Configure(key, cap);
+        }
+        net.SetInitialQubitsMapOptimization(true);
+        net.SetMPSOptimizeSwaps(true);
+        auto circuit = CF::CreateCircuit(given);
+        net.OptimizeMPSInitialQubitsMap(sim, circuit, n);
+        Check(!sim->initialMaps.empty() && sim->initialMaps.back() == along, "Truncation lost the device-line placement");
+        // Both test registers have maximum central rank 64. Only the last cap
+        // can never truncate, so the centre-travel optimization still applies.
+        Check((circuit->GetOperations() == given) == (std::string_view(cap) != "64"), "Initial layout selected the wrong execution order");
+    }
+}
+
 static void AutomaticNetworkJobs()
 {
     std::map<std::pair<bool, bool>, std::vector<long long>> initialMaps;
@@ -2313,6 +2408,8 @@ int main(int argc, char **argv)
         }
 #endif
         BoundaryPlanning();
+        TruncatedMpoChannelFusion();
+        TruncatedChainGateFusion();
         LazyBoundedRoutingAndSharing<Private::QCSimMPSSimulator>(12);
         LazyBoundedRoutingAndSharing<Private::QCSimMPOSimulator>(6);
         InactiveRoutingViewLifetime<Private::QCSimMPSSimulator>(12);
@@ -2342,6 +2439,8 @@ int main(int argc, char **argv)
         AutomaticNetworkLayoutParity<Private::QCSimMPOSimulator>(6);
         DeviceLineLayout<Private::QCSimMPSSimulator>(12, false);
         DeviceLineLayout<Private::QCSimMPOSimulator>(6, true);
+        TruncatedDeviceLineOrder<Private::QCSimMPSSimulator>(12);
+        TruncatedDeviceLineOrder<Private::QCSimMPOSimulator>(6);
         DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(12, 5, "16", true, Circuits::ChainOrder::kSampledChannels);
         DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(6, 5, "16", true, Circuits::ChainOrder::kMixedState);
         DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(8, 5, "64", false, Circuits::ChainOrder::kSampledChannels);

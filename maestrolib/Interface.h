@@ -416,7 +416,8 @@ extern "C"
 #endif
         int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma);
 // State queries. Return 1 on success, 0 on invalid arguments/backend failure.
-// MaestroProbabilityBits also reads the current QCSim path integral trajectory.
+// MaestroProbabilityBits reads the current single-trajectory or ensemble probability.
+// QCSim MPS, QCSim path integral and CPU/GPU MPO accept labels wider than the integer index.
 // Bit vectors are q0-first; matrices are column-major interleaved doubles.
 // GetDensityMatrix capacity counts doubles. SampleCountsBits capacity counts
 // histogram entries and must be >= shots; outcomes needs capacity*width bytes,

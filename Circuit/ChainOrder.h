@@ -70,7 +70,9 @@ enum class ChainOrder
  * and nested circuits keep their place: everything before one of them stays
  * before it.
  *
- * The result shares the operations of the circuit and describes the same map.
+ * The result shares the operations of the circuit and describes the same map
+ * in exact arithmetic. Select kNone when a chain can truncate significantly:
+ * a gate across a bond can discard a different subspace after reordering.
  * On a matrix product state the channels draw their branches in the new order,
  * so a seeded trajectory differs from the one of the original order; the
  * distribution of the trajectories is the same.

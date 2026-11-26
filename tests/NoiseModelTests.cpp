@@ -1405,6 +1405,23 @@ BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
     const auto translates = MaestroExecution::ResolveNoiseRealizations(std::nullopt, relaxing, config, MaestroExecution::NoiseLayer::kPauli, 64, flipped, false,
                                                                        std::nullopt, true, false);
     BOOST_CHECK(!translates.runtime_channels && translates.chain_order == Circuits::ChainOrder::kNone);
+
+    // On four sites, the maximum central bond is 4 for MPS and 16 for MPO.
+    // Keep the cheaper chain order when the cap cannot change a singular value.
+    for (const bool mpo : {false, true})
+    {
+        config.simulation_type = mpo ? Simulators::SimulationType::kMatrixProductOperator : Simulators::SimulationType::kMatrixProductState;
+        const auto full = mpo ? 16u : 4u;
+        config.max_bond_dimension = full;
+        const auto preferred = mpo ? Circuits::ChainOrder::kMixedState : Circuits::ChainOrder::kSampledChannels;
+        BOOST_CHECK(MaestroExecution::OrdersForChain(config, mpo, 4) == preferred);
+        config.max_bond_dimension = full - 1;
+        BOOST_CHECK(MaestroExecution::OrdersForChain(config, mpo, 4) == Circuits::ChainOrder::kNone);
+        config.max_bond_dimension.reset();
+        config.singular_value_threshold = .4;
+        BOOST_CHECK(MaestroExecution::OrdersForChain(config, mpo, 4) == Circuits::ChainOrder::kNone);
+        config.singular_value_threshold.reset();
+    }
 }
 
 /** Each coherent setter replaces only its own component, so axes compose. */

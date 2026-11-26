@@ -462,8 +462,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             const auto result = SampleCircuit(circuit, config, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
-            const auto prefix =
-                Simulators::ShotPrefixPolicy::FromConfiguration(result.simulator, result.method, config.native_options, config.path_integral_threshold);
+            const auto prefix = ConfiguredShotPrefix(config, result.simulator, result.method, result.largest_component);
             terminal = shots > 1 && !circuit->HasOpsAfterMeasurementsOn(prefix);
             RecordFusion(records, result);
             // Automatic selection may have chosen another backend.
@@ -533,14 +532,18 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (exact && SamplesQuantumChannels(config))
         throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
                                     "channel as one sampled trajectory");
-    auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact);
+    const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
+    const QubitCompaction compaction(*circuit);
+    // Outside spectators receive only Rz on |0>. They do not increase the
+    // maximum Schmidt rank of the circuit's active qubits.
+    auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact, true, true, compaction.Width());
     // A backend that samples channels draws all the noise as each shot runs
     // (ResolveRuntimeNoise): every shot is then a realization of its own.
     std::unique_ptr<noise::NoiseInjectionPlan> plan;
     RecordCircuitPtr runtime_circuit, first_realization;
     if (InjectsRuntimeChannels(config, exact))
     {
-        plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, true, OrdersForChain(config, exact));
+        plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, true, policy.chain_order);
         ResolveRuntimeNoise(layer, *plan, rng, runtime_circuit, first_realization);
     }
     if (runtime_circuit)
@@ -550,7 +553,6 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     const size_t base_batch = shots / batches;
     const size_t leftover = shots % batches;
 
-    const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
     const size_t width = ClassicalWidth(*circuit);
     // Independent one-shot realizations may skip per-realization network setup;
     // shared-realization counts keep their existing executor. So do
@@ -572,13 +574,12 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // direct counts pad theirs the same way. It compacts each realization to
     // the circuit's qubits plus the untouched spectators, which is what its
     // workers' memory budget counts.
-    const QubitCompaction compaction(*circuit);
     bool trim_spectators = false;
     size_t host_qubits = qubits, untouched_spectators = 0;
     if (noise_model.has_crosstalk())
     {
         if (!plan)
-            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
+            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, policy.runtime_channels, policy.chain_order);
         trim_spectators = compaction.Sparse() || plan->RegisterWidth() > qubits;
         host_qubits = std::max(qubits, plan->RegisterWidth());
         for (const auto spectator : plan->Spectators())
@@ -605,8 +606,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     using Method = Simulators::SimulationType;
     // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
     // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
-    const auto prefix =
-        Simulators::ShotPrefixPolicy::FromConfiguration(config.simulator_type, config.simulation_type, config.native_options, config.path_integral_threshold);
+    const auto prefix = ConfiguredShotPrefix(config, config.simulator_type, config.simulation_type, budget_qubits);
     const bool prepared_batches = !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
                                                                         UsesExactQuantumChannels(config), prefix.contiguous) &&
                                   (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
@@ -703,7 +703,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         uint8_t *samples = records.rows.data();
         // Resolved once; each realization draws from the noise RNG in order.
         if (!plan)
-            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
+            plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model, policy.runtime_channels, policy.chain_order);
         // `auto` may reach a QCSim composite: its components then sample a
         // batch of counts at their own crossover, as they do for a native
         // request. A fixed composite takes no frames and no request-level
@@ -796,8 +796,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                     {
                         CopyCountSamples(result, samples + first * width, count, width, execution_config.seed);
                         // The network samples terminal measurements from one prepared state.
-                        const auto ranPrefix = Simulators::ShotPrefixPolicy::FromConfiguration(result.simulator, result.method, execution_config.native_options,
-                                                                                               execution_config.path_integral_threshold);
+                        const auto ranPrefix = ConfiguredShotPrefix(execution_config, result.simulator, result.method, result.largest_component);
                         ++(count > 1 && !noisy->HasOpsAfterMeasurementsOn(ranPrefix) ? network_terminal : network_trajectory)[worker];
                     }
                     else

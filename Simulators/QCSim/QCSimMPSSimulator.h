@@ -460,8 +460,16 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     double Probability(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
-        std::vector<bool> bits = BasisStateBits(outcome);
+        auto bits = BasisStateBits(outcome);
         return mpsSimulator->getBasisStateProbability(bits);
+    }
+
+    double ProbabilityBits(const std::vector<bool> &bits) override
+    {
+        if (!mpsSimulator || bits.size() != nrQubits)
+            throw std::invalid_argument("The basis bitstring must match the initialized MPS register");
+        auto label = bits;
+        return mpsSimulator->getBasisStateProbability(label);
     }
 
     std::complex<double> Amplitude(Types::qubit_t outcome) override

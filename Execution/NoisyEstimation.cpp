@@ -482,7 +482,11 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     Simulators::ValidatePauliStrings(observables);
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyEstimate out;
-    out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels);
+    const auto clean = circuit->RemoveEndMeasurements();
+    size_t qubits = clean->GetMaxQubitIndex() + 1;
+    for (const auto &observable : observables)
+        qubits = std::max(qubits, observable.size());
+    out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels, true, true, qubits);
     out.realizations = out.policy.realizations;
     if (observables.empty())
     {
@@ -494,12 +498,11 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
         return out;
     }
     const size_t count = observables.size();
-    const auto clean = circuit->RemoveEndMeasurements();
     const bool exact = out.policy.exact_channels;
     if (exact && SamplesQuantumChannels(config))
         throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
                                     "channel as one sampled trajectory");
-    const noise::NoiseInjectionPlan plan(clean, noise_model, InjectsRuntimeChannels(config, exact), OrdersForChain(config, exact));
+    const noise::NoiseInjectionPlan plan(clean, noise_model, out.policy.runtime_channels, out.policy.chain_order);
     // A backend that samples channels draws all the noise as each realization
     // runs (ResolveRuntimeNoise): they then share one circuit and differ by seed.
     RecordCircuitPtr runtime_circuit, first_realization;
@@ -549,9 +552,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     std::vector<Realization> realizations(noise_realizations);
     // Each realization's register also holds the idle qubits its observables
     // name: the host executor keeps every position of a Pauli string.
-    size_t qubits = std::max({size_t{1}, clean->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
-    for (const auto &observable : observables)
-        qubits = std::max(qubits, observable.size());
+    qubits = std::max(qubits, plan.RegisterWidth());
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
     // The workers available to the realizations after the warm-up one below,
     // which runs alone: two realizations run one after the other whatever the
@@ -822,7 +823,8 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     unsigned long probed = 0;
     const auto config = ResolveCandidateBackend(requested_config, qubits, probed);
     spare.handle = probed;
-    const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true);
+    const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true, std::nullopt, true,
+                                                 true, qubits);
     const size_t noise_realizations = policy.realizations;
     auto rng = MakeNoiseRng(config, noise_seed);
     const bool exact = policy.exact_channels;
@@ -882,18 +884,42 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     return out;
 }
 
-void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target)
+const char *StateProbabilityWidthError(const SimulatorConfig &config, size_t width)
 {
-    if (target.empty() || target.size() > QC::PathIntegral::FastVectorBool::MaxWords * 64)
-        throw std::invalid_argument("target_state must have between 1 and 1024 bits.");
-    Circuits::ForEachUnitaryGate(circuit, "Noisy path-integral probability", Circuits::UnitaryPreparationQuery::NoisyProbability, [&](const auto &gate) {
-        // The path integral supports every named Maestro gate. Validation needs neither a simulator nor randomness.
+    if (!width || width > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return "target_state must have a positive width representable by the simulator";
+    using Backend = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    if (config.simulator_type == Backend::kQCSim && config.simulation_type == Method::kPathIntegral)
+        return width > QC::PathIntegral::FastVectorBool::MaxWords * 64 ? "Path integral targets support at most 1024 qubits" : nullptr;
+    if ((config.simulator_type == Backend::kQCSim && config.simulation_type == Method::kMatrixProductState) ||
+        ((config.simulator_type == Backend::kQCSim || config.simulator_type == Backend::kGpuSim) && config.simulation_type == Method::kMatrixProductOperator))
+        return nullptr;
+    if (IsAerTrajectoryBackend(config) && config.simulation_type == Method::kMatrixProductState)
+        return width <= 64 ? nullptr : "Aer MPS target bitstrings support at most 64 qubits";
+    return width < 63 ? nullptr : "Wide state probability requires QCSim MPS, QCSim path_integral, or CPU or GPU MPO";
+}
+
+void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target, const SimulatorConfig &config)
+{
+    if (HasCandidateList(config) || !SomeBackendHoldsQuantumChannels(config))
+        throw std::invalid_argument("noisy_prob requires a fixed backend that applies or samples quantum channels.");
+    if (const auto *error = StateProbabilityWidthError(config, target.size()))
+        throw std::invalid_argument(error);
+    Circuits::ForEachUnitaryGate(circuit, "noisy_prob", Circuits::UnitaryPreparationQuery::NoisyProbability, [](const auto &gate) {
         const auto type = gate->GetGateType();
         if (type < Circuits::QuantumGateType::kPhaseGateType || type >= Circuits::QuantumGateType::kNone)
-            throw std::invalid_argument("Unsupported gate in noisy path-integral probability.");
+            throw std::invalid_argument("Unsupported gate in noisy_prob.");
     });
     if (circuit->GetMaxQubitIndex() >= target.size())
         throw std::invalid_argument("target_state must cover the circuit's qubits.");
+}
+
+void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target)
+{
+    SimulatorConfig config;
+    config.simulation_type = Simulators::SimulationType::kPathIntegral;
+    ValidateNoisyStateProbability(circuit, target, config);
 }
 
 namespace
@@ -955,15 +981,28 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
                                              std::optional<size_t> requested_realizations, const SimulatorConfig &requested_config,
                                              std::optional<uint64_t> noise_seed, NoiseLayer layer)
 {
-    ValidateNoisyStateProbability(circuit, target);
+    return NoisyStateProbability(circuit, target, model, requested_realizations, requested_config, noise_seed, layer, std::nullopt);
+}
+
+NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target, const noise::NoiseModel &model,
+                                             std::optional<size_t> requested_realizations, const SimulatorConfig &requested_config,
+                                             std::optional<uint64_t> noise_seed, NoiseLayer layer, std::optional<bool> exact_channels, SamplingResult *execution)
+{
     auto config = requested_config;
     config.Validate();
-    if (HasCandidateList(config) || config.simulator_type != Simulators::SimulatorType::kQCSim ||
-        config.simulation_type != Simulators::SimulationType::kPathIntegral)
-        throw std::invalid_argument("noisy_prob requires the fixed QCSim path_integral method.");
+    ValidateNoisyStateProbability(circuit, target, config);
+    const bool ensemble = UsesExactQuantumChannels(config);
+    const bool exact = exact_channels.value_or(ensemble);
+    if (exact && !ensemble)
+        throw std::invalid_argument("Exact noise requires a backend that applies ensemble channels.");
     if (const auto *error = NoisyProbabilityLayerError(model, layer))
         throw std::invalid_argument(error);
     config.fixed_backend = true;
+    if (execution)
+    {
+        execution->simulator = config.simulator_type;
+        execution->method = config.simulation_type;
+    }
     // Native requests promote a lone noise seed to the execution seed. Do the same here so that a runtime
     // Kraus branch uses identical streams through C++, JSON and Python, including when only one seed is given.
     if (!EffectiveSamplingSeed(config) && noise_seed)
@@ -973,9 +1012,14 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
     const auto clean = circuit->RemoveEndMeasurements();
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyProbabilityResult out;
-    out.policy = ResolveNoiseRealizations(requested_realizations, model, config, layer, kMeasurementTrajectories, clean, true);
+    out.policy = ResolveNoiseRealizations(requested_realizations, model, config, layer, kMeasurementTrajectories, clean, true, exact);
+    const bool stochastic = out.policy.stochastic_noise || out.policy.stochastic_execution;
+    if (!stochastic)
+        out.policy.realizations = requested_realizations.value_or(1);
+    out.realizations = out.policy.realizations;
+    out.realizations_evaluated = stochastic ? out.realizations : 1;
     const TargetReadout readout(target, model);
-    if (!model.has_non_readout_noise() && !clean->HasQuantumChannels())
+    if (config.simulation_type == Simulators::SimulationType::kPathIntegral && !model.has_non_readout_noise() && !clean->HasQuantumChannels())
     {
         // The recorded unitary circuit can prune paths to each endpoint. Using the full evolved frontier here
         // would lose that advantage on large coherent queries with or without classical readout error.
@@ -990,8 +1034,6 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
             throw std::invalid_argument(error);
         out.probability = readout.Evaluate([&](const auto &bits) { return std::norm(paths.AmplitudeFromZero(bits)); });
         out.std_error = 0.;
-        out.policy.realizations = requested_realizations.value_or(1);
-        out.realizations_evaluated = 1;
     }
     else
     {
@@ -1002,34 +1044,45 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
         GetMaestroObjectWithMute();
         SimulatorHandle handle{CreateSimpleSimulator(static_cast<int>(target.size()))};
         auto network = handle.value ? ConfigureNetwork(handle.value, config, target.size()) : nullptr;
-        if (!network)
-            throw std::runtime_error("Could not create the path integral simulator for a noisy probability.");
-        auto sim = network->GetSimulator();
-        double m2 = 0.;
-        for (size_t r = 0; r < out.policy.realizations; ++r)
+        auto sim = network ? network->GetSimulator() : nullptr;
+        if (!sim || sim->GetType() != config.simulator_type || sim->GetSimulationType() != config.simulation_type || sim->GetNumberOfQubits() != target.size())
+            throw std::runtime_error("Could not create the requested noisy_prob backend at the target width.");
+        const auto nativeDevice = config.native_options.find("gpu_device");
+        if ((config.gpu_device && sim->GetGpuDevice() != *config.gpu_device) ||
+            (!config.gpu_device && nativeDevice != config.native_options.end() && sim->GetGpuDevice() != std::stoi(nativeDevice->second)))
+            throw std::runtime_error("Requested GPU device was not selected for noisy_prob.");
+        if (execution)
         {
-            auto noisy = shared ? shared : first ? std::exchange(first, nullptr) : InjectPlanned(layer, plan, rng, false);
+            execution->gpu_device = sim->GetGpuDevice();
+            execution->gate_fusion = sim->IsGateFusionEnabled();
+            execution->gate_fusion_max_qubits = sim->GetGateFusionMaxQubits();
+        }
+        double m2 = 0.;
+        for (size_t r = 0; r < out.realizations_evaluated; ++r)
+        {
+            auto noisy = shared ? shared : first ? std::exchange(first, nullptr) : InjectPlanned(layer, plan, rng, exact);
             if (plan.RegisterWidth() > target.size())
                 noisy = noise::drop_outside_spectator_phases(noisy, target.size());
             draws.See(noisy);
-            const auto execution = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r);
-            sim->Reset();
-            if (execution.seed)
-                sim->SetSeed(*execution.seed);
+            const auto realization = draws ? RuntimeNoiseExecutionConfig(config, noise_seed, r) : NoiseExecutionConfig(config, noise_seed, r);
+            if (r != 0)
+                sim->Reset();
+            if (realization.seed)
+                sim->SetSeed(*realization.seed);
             Circuits::OperationState state(clean->GetMaxCbitIndex() + 1);
+            sim->SetGatesCounter(0);
+            sim->SetUpcomingGates(noisy->GetOperations());
             noisy->ExecutePhysicalOperations(sim, state);
             const double sample = readout.Evaluate([&](const auto &bits) { return sim->ProbabilityBits(bits); });
             const double delta = sample - out.probability;
             out.probability += delta / static_cast<double>(r + 1);
             m2 += delta * (sample - out.probability);
         }
-        if (out.policy.realizations > 1)
-            out.std_error = std::sqrt(std::max(0., m2) / static_cast<double>(out.policy.realizations - 1) / static_cast<double>(out.policy.realizations));
-        else if (!out.policy.stochastic_execution && !out.policy.stochastic_noise)
+        if (out.realizations_evaluated > 1)
+            out.std_error = std::sqrt(std::max(0., m2) / static_cast<double>(out.realizations_evaluated - 1) / static_cast<double>(out.realizations_evaluated));
+        else if (!stochastic)
             out.std_error = 0.;
-        out.realizations_evaluated = out.policy.realizations;
     }
-    out.realizations = out.policy.realizations;
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     return out;
 }

@@ -25,6 +25,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <random>
@@ -186,11 +187,64 @@ struct ShotPrefixPolicy
         return {false, threshold > kDefaultPathIntegralThreshold, threshold > 0.};
     }
 
-    static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                                              std::optional<double> pathIntegralThreshold = std::nullopt)
+    // A measurement adds a normalized projector to the backward propagation.
+    // Its coefficients and Pauli weights can move a term across a trim boundary.
+    static bool TruncatesPauli(const std::unordered_map<std::string, std::string> &options, size_t qubits, std::optional<double> coefficient = {},
+                              std::optional<size_t> weight = {})
     {
+        if (!coefficient)
+            if (const auto it = options.find("pauli_propagator_coefficient_threshold"); it != options.end())
+                coefficient = std::strtod(it->second.c_str(), nullptr);
+        if (!weight)
+            if (const auto it = options.find("pauli_propagator_pauli_weight_threshold"); it != options.end())
+                weight = std::stoull(it->second);
+        return coefficient.value_or(0.) > 0. || (weight && *weight < qubits);
+    }
+
+    // A truncating SVD depends on the state of the whole chain. A disjoint gate
+    // can change which terms survive before a measurement or a Kraus draw.
+    // Keep ordinary numerical cutoffs fast. A bond cap matters only below
+    // the maximum Schmidt rank across the centre (site dimension 2 or 4).
+    static bool TruncatesChain(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
+                               size_t qubits, std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
+    {
+        const bool mpo = method == SimulationType::kMatrixProductOperator;
+        if (!mpo && method != SimulationType::kMatrixProductState)
+            return false;
+        if (!cutoff)
+        {
+            auto it = options.find("matrix_product_state_truncation_threshold");
+            if (it == options.end())
+                it = options.find("matrix_product_operator_truncation_threshold");
+            if (it != options.end())
+                cutoff = std::strtod(it->second.c_str(), nullptr);
+        }
+        double numericalCutoff = 1e-15;
+#ifndef NO_QISKIT_AER
+        if (type == SimulatorType::kQiskitAer)
+            numericalCutoff = 1e-16;
+#endif
+        if (cutoff.value_or(0.) > numericalCutoff)
+            return true;
+        if (!bondCap)
+        {
+            auto it = mpo ? options.find("matrix_product_operator_max_bond_dimension") : options.end();
+            if (it == options.end())
+                it = options.find("matrix_product_state_max_bond_dimension");
+            bondCap = it == options.end() ? (type == SimulatorType::kGpuSim ? 128 : 0) : std::stoull(it->second);
+        }
+        const size_t rankBits = (qubits / 2) * (mpo ? 2 : 1);
+        return *bondCap && (!qubits || rankBits >= std::numeric_limits<size_t>::digits || *bondCap < (size_t{1} << rankBits));
+    }
+
+    static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
+                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0,
+                                              std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
+    {
+        if (type == SimulatorType::kQCSim && method == SimulationType::kPauliPropagator)
+            return {true, TruncatesPauli(options, qubits)};
         if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
-            return {EvolvesExactQuantumChannels(type, method), false};
+            return {EvolvesExactQuantumChannels(type, method), TruncatesChain(type, method, options, qubits, bondCap, cutoff)};
         if (pathIntegralThreshold)
             return ForPathIntegral(*pathIntegralThreshold);
         const auto value = options.find("path_integral_threshold");
@@ -704,6 +758,11 @@ class IState
     // conditional gate when the simulator prunes the whole state per operation.
     virtual ShotPrefixPolicy GetShotPrefixPolicy() const
     {
+        const auto method = GetSimulationType();
+        if (method == SimulationType::kPauliPropagator && GetType() == SimulatorType::kQCSim)
+            return {true, ShotPrefixPolicy::TruncatesPauli(GetExplicitConfigMap(), GetNumberOfQubits())};
+        if (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator)
+            return {SupportsQuantumChannels(), ShotPrefixPolicy::TruncatesChain(GetType(), method, GetExplicitConfigMap(), GetNumberOfQubits())};
         return {SupportsQuantumChannels(), false};
     }
 
@@ -788,10 +847,18 @@ class IState
         throw std::runtime_error("This simulator does not apply superoperators");
     }
 
-    /** Probability of a full q0-first bitstring, including registers wider than a machine word. */
-    virtual double ProbabilityBits(const std::vector<bool> &)
+    /** Probability of a full q0-first bitstring. Backends with wide labels override the indexed reader. */
+    virtual double ProbabilityBits(const std::vector<bool> &bits)
     {
-        throw std::runtime_error("This simulator does not support ProbabilityBits");
+        if (bits.size() != GetNumberOfQubits())
+            throw std::invalid_argument("The basis bitstring must match the register width");
+        if (bits.size() > std::numeric_limits<Types::qubit_t>::digits)
+            throw std::length_error("The basis bitstring exceeds the simulator's probability index width");
+        Types::qubit_t index = 0;
+        for (size_t q = 0; q < bits.size(); ++q)
+            if (bits[q])
+                index |= Types::qubit_t{1} << q;
+        return Probability(index);
     }
 
     /** MPO extensions: bit vectors are q0-first; matrices use logical basis

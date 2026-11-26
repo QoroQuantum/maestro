@@ -510,6 +510,97 @@ void TestMixedStateQueries()
     Check(ErrorCode(Call(misplaced, false)) == "invalid_input", "target_statevector on execute was accepted");
 }
 
+void TestChannelDiagnostics(const j::object &capabilities)
+{
+    const j::object damping{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{1, 0, 0, 0.8}, j::array{0, 0.6, 0, 0}}}};
+    const j::object pauli{{"name", "pauli_channel"}, {"qubits", j::array{0}}, {"probabilities", j::array{0.25, 0.25, 0.25, 0.25}}};
+    for (const auto &entry : capabilities.at("backends").as_array())
+    {
+        const auto name = entry.at("name").as_string();
+        if (name != "qcsim" && name != "composite_qcsim" && name != "aer" && name != "composite_aer")
+            continue;
+        for (const auto &method : entry.at("methods").as_array())
+        {
+            if (method != "statevector" && method != "matrix_product_state" && method != "path_integral")
+                continue;
+            for (const auto &channel : {damping, pauli})
+            {
+                auto request = Instructions("validate", 1, {Gate("x", {0}), channel});
+                request["simulator"] = j::object{{"backend", name}, {"method", method}};
+                Check(Call(request).at("valid").as_bool(), "Standalone validation rejected a channel-capable simulator");
+                request["operation"] = "execute";
+                Check(Call(request, true, true).at("valid").as_bool(), "Validation of the executable request disagreed");
+            }
+        }
+    }
+    for (const auto &channel : {damping, pauli})
+        Check(ErrorCode(Call(Instructions("validate", 1, {channel}, "tensor_network"), false)) == "unsupported_capability",
+              "Standalone validation accepted a channel the fixed backend cannot execute");
+
+    auto mps = Instructions("diagnostics", 1, {Gate("x", {0}), damping}, "matrix_product_state");
+    mps["diagnostics"] = j::array{"operator_expectation"};
+    mps["expectation_operators"] = j::array{j::object{{"qubit", 0}, {"matrix", j::array{1, 0, 0, -1}}}};
+    Call(mps, true, true);
+    auto population = Instructions("state_probability", 1, {Gate("x", {0}), damping}, "matrix_product_state");
+    population["target_state"] = "1";
+    bool sawGround = false, sawExcited = false;
+    for (unsigned int seed = 0; seed < 20; ++seed)
+    {
+        mps["execution"].as_object()["seed"] = seed;
+        population["execution"].as_object()["seed"] = seed;
+        const auto result = Call(mps);
+        const auto z = Real(result.at("operator_expectation").at(0));
+        Near(z, 1 - 2 * Real(Call(population).at("probability")));
+        Near(std::abs(z), 1);
+        sawGround |= z > 0;
+        sawExcited |= z < 0;
+        Check(result.at("execution_metadata").at("stochastic_execution").as_bool(), "MPS diagnostic omitted its channel draw");
+    }
+    Check(sawGround && sawExcited, "MPS diagnostics did not report both damping branches");
+
+    for (const char *backend : {"qcsim", "gpu", "aer"})
+    {
+        const auto &backends = capabilities.at("backends").as_array();
+        if (std::none_of(backends.begin(), backends.end(), [&](const auto &entry) { return entry.at("name") == backend; }))
+            continue;
+        auto density = Instructions("diagnostics", 2, {Gate("x", {0}), damping, Gate("h", {1}), Gate("s", {1})}, "density_matrix");
+        density["simulator"].as_object()["backend"] = backend;
+        for (const char *action : {"restore_trace", "hermitize"})
+        {
+            density["maintenance"] = j::array{action};
+            for (bool validate : {true, false})
+                Check(ErrorCode(Call(density, false, validate)) == "unsupported_capability", "A density matrix accepted MPO maintenance");
+        }
+        density.erase("maintenance");
+        if (std::string(backend) != "aer")
+            continue;
+        for (const char *precision : {"single", "double"})
+        {
+            density["simulator"].as_object()["options"] = j::object{{"precision", precision}};
+            const auto defaults = Call(density);
+            Check(std::abs(Real(defaults.at("trace").at(0)) - 1.) < 1e-6 && std::abs(Real(defaults.at("purity")) - 0.5392) < 1e-6,
+                  "Default Aer diagnostics failed on a damped state");
+            auto details = density;
+            details["diagnostics"] = j::array{"trace_of_square", "hermiticity_residual", "is_hermitian", "partial_trace"};
+            details["keep_qubits"] = j::array{1, 0};
+            Call(details, true, true);
+            const auto measured = Call(details);
+            Check(std::abs(Real(measured.at("trace_of_square").at(0)) - 0.5392) < 1e-6 && Real(measured.at("hermiticity_residual")) < 1e-9 &&
+                      measured.at("is_hermitian").as_bool(),
+                  "Aer mixed-state diagnostics disagree on a damped Hermitian state");
+            const auto &matrix = measured.at("partial_trace").at("row_major");
+            Check(std::abs(Real(matrix.at(1).at(1)) + 0.18) < 1e-6 && std::abs(Real(matrix.at(11).at(1)) + 0.32) < 1e-6,
+                  "Aer partial trace changed the qubit order or conjugated the off-diagonal entries");
+            details["keep_qubits"] = j::array{1};
+            const auto reduced = Call(details).at("partial_trace").as_object();
+            Check(reduced.at("dimension") == 2 && std::abs(Real(reduced.at("row_major").at(1).at(1)) + 0.5) < 1e-6,
+                  "Aer partial trace lost the kept qubit's coherence");
+            details["max_output_elements"] = 3;
+            Check(ErrorCode(Call(details, false, true)) == "invalid_input", "Aer partial trace ignored the output limit");
+        }
+    }
+}
+
 // The outcomes of a checkpoint prefix's measurements are not returned, so
 // readout on them is refused; suffix measurements still apply it.
 void TestCheckpointPrefixReadout()
@@ -531,6 +622,7 @@ void TestNativeExtensions(const j::object &capabilities)
 {
     Check(capabilities.at("mixed_state_queries").at("max_target_statevector_qubits").to_number<int>() == 20, "Mixed-state queries were not advertised");
     TestMixedStateQueries();
+    TestChannelDiagnostics(capabilities);
     TestCheckpointPrefixReadout();
     bool adjoint = false;
     for (const auto &operation : capabilities.at("operations").as_array())

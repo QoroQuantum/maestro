@@ -107,6 +107,15 @@ Dynamic raw sampling reuses deterministic prefixes while retaining the complete
 per-shot measurement history. Nested circuits are inlined first, so one that
 ends in measurements counts as terminal.
 
+On MPS and MPO, a bond cap below the register's maximum Schmidt rank or a
+singular-value cutoff above the numerical default can make the result depend on
+operation order. Shot preparation then stops at the first deferred operation.
+Later gates run in the written order, including gates on different qubits. Gate
+fusion on these chains combines consecutive gates and channels on overlapping
+targets. The QCSim Pauli propagator also preserves measurement order when a
+positive coefficient threshold or a weight limit below the register width
+can discard Pauli terms. Terminal measurements can still share one preparation.
+
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames
 

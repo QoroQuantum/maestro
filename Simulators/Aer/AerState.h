@@ -777,6 +777,38 @@ class AerState : public ISimulator
         return Amplitude(0);
     }
 
+    std::complex<double> DensityMatrixTrace() const override
+    {
+        return state->reduced_density_matrix({})(0, 0);
+    }
+
+    double DensityMatrixPurity() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return rho.squaredNorm(); });
+    }
+
+    std::complex<double> DensityMatrixTraceOfSquare() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return rho.cwiseProduct(rho.transpose()).sum(); });
+    }
+
+    double DensityMatrixHermiticityResidual() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return (rho - rho.adjoint()).norm(); });
+    }
+
+    bool IsDensityMatrixHermitian(double eps = 1e-10) const override
+    {
+        return DensityMatrixHermiticityResidual() < eps;
+    }
+
+    Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override
+    {
+        const auto reduced = state->reduced_density_matrix(AER::reg_t(qubits.begin(), qubits.end()));
+        using ColumnMajorMatrix = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
+        return Eigen::Map<const ColumnMajorMatrix>(reduced.data(), reduced.GetRows(), reduced.GetColumns());
+    }
+
     /**
      * @brief Returns the probabilities of all possible outcomes.
      *
