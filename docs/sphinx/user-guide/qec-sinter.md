@@ -172,6 +172,20 @@ after gates only, and the basis changes that translation inserts for `RX`,
 noise exactly where Stim has gates. Its readout error composes with any `M(p)`
 flip.
 
+Every one- and two-qubit Clifford gate of Stim translates, under any of Stim's
+names for it (`CNOT`, `ZCX`, `SWAPCZ`, `H_XZ`, ...), and `I` and `II` are
+zero-duration idles. Gates that Maestro lacks (`ISWAP`, `ISWAP_DAG`, `CXSWAP`,
+`CZSWAP`, `SWAPCX`, `SQRT_XX`, `SQRT_YY`, `SQRT_ZZ` and their inverses, `XCX`,
+`XCY`, `XCZ`, `YCX`, `YCY`, `YCZ`, `SQRT_Y`, `SQRT_Y_DAG`, the `C_...` axis
+cycles and the `H_...` variants) are built from Maestro gates whose leading
+steps are noiseless. A `NoiseModel` therefore adds a gate's noise once, after
+the whole gate, as for a native gate: the two-qubit layers on its pair and the
+per-qubit layers on each of its qubits. Noise placed before the trailing local
+gates would be equivalent for Pauli noise, but not for coherent over-rotations
+or T1. `SQRT_XX`, `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take
+two Maestro entangling gates, because the noisy last gate must be one of
+Maestro's two-qubit gates, which all have a Z on one side.
+
 Counts must contain exactly the requested positive number of shots.
 Unexpected record widths and nonzero padding raise `ValueError`. A caller's
 `SimulatorConfig` is copied before sampling. Direct compiled samplers accept a

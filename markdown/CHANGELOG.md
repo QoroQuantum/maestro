@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `maestro.sinter` translates the rest of Stim's one- and two-qubit Clifford
+  gates, which raised "Unsupported Stim instruction": `ISWAP`, `ISWAP_DAG`,
+  `CXSWAP`, `CZSWAP`, `SWAPCX`, `SQRT_XX`, `SQRT_XX_DAG`, `SQRT_YY`,
+  `SQRT_YY_DAG`, `SQRT_ZZ`, `SQRT_ZZ_DAG`, `XCX`, `XCY`, `XCZ`, `YCX`, `YCY`,
+  `YCZ`, `II`, `C_XYZ`, `C_ZYX`, `C_NXYZ`, `C_XNYZ`, `C_XYNZ`, `C_NZYX`,
+  `C_ZNYX`, `C_ZYNX`, `H_XY`, `H_YZ`, `H_NXY`, `H_NXZ` and `H_NYZ`. Circuits
+  such as the iSWAP syndrome extraction of directional codes can now run under
+  the `NoiseModel` layers Stim cannot simulate, such as coherent
+  over-rotations and T1. Each gate is built from Maestro gates, and only the
+  last of them is noisy, so a `NoiseModel` adds the gate's noise once, after
+  the whole gate, as it does for a native gate: the two-qubit layers on its
+  pair and the per-qubit layers on each of its qubits. Noise before trailing
+  local gates would be equivalent for Pauli noise but not for coherent
+  over-rotations or T1. `II`, like `I`, is a zero-duration idle. `SQRT_XX`,
+  `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take two Maestro
+  entangling gates, because the noisy last gate must be one of Maestro's
+  two-qubit gates, which all have a Z on one side.
+- `QuantumCircuit.cx`, `cy`, `cz` and `swap` take `noiseless=True`, as `h`, `s`
+  and `sdg` do: a `NoiseModel` adds no gate noise after the gate. Their
+  arguments now have names (`control_qubit` and `target_qubit`, `qubit1` and
+  `qubit2`), as on the simulator's `ApplyCX` and `ApplySwap`.
+
 - `extended_stabilizer_amplitude_tolerance` and
   `extended_stabilizer_max_components` select QCSim's approximate extended
   stabilizer, which until now no caller could reach. They are
@@ -303,6 +325,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `maestro.sinter` accepts Stim's other gate names (`ZCX`, `ZCY`, `ZCZ`,
+  `SWAPCZ`, `H_XZ`) in circuit text and instruction tuples, as it already did
+  in a `stim.Circuit`, which reports the canonical name. In text they raised
+  "Unsupported Stim instruction".
+- A two-qubit instruction whose pair repeats a qubit, such as `CX 1 1` in
+  circuit text, raises `ValueError`, as Stim does, instead of being translated.
 - A QuEST statevector too large for the machine's memory is refused with an
   error instead of ending the process. QuEST does not report such a register:
   its validation prints a message and exits, which no caller could catch.

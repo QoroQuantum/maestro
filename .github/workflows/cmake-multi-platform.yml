@@ -124,9 +124,9 @@ jobs:
       run: |
         cp maestro*.so maestro/
         python -m pip install -r tests/python/requirements.txt
-        # test_sinter.py skips itself when stim or sinter is missing; fail instead.
+        # The Sinter tests skip themselves when stim or sinter is missing; fail instead.
         python -c "import stim, sinter, pymatching"
-        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_pauli_propagation_config.py tests/python/test_truncation_config.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
+        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_pauli_propagation_config.py tests/python/test_truncation_config.py tests/python/test_sinter.py tests/python/test_sinter_clifford_gates.py tests/python/test_sampling_*.py -q -rs
 
     - name: Build the Python docs
       # Pages with code run against the module built above, and any Sphinx
