@@ -206,6 +206,12 @@ class QiskitAerState : public AER::AerState
         return std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
     }
 
+    AER::MatrixProductState::MPS &matrix_product_register()
+    {
+        flush_ops();
+        return dynamic_cast<AER::MatrixProductState::State &>(*get_state()).qreg();
+    }
+
     void restore_extended_stabilizer_state(const std::shared_ptr<AER::QuantumState::Base> &savedState)
     {
         const auto extendedState = std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(savedState);
