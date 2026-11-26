@@ -2334,6 +2334,39 @@ def test_a_checkpoint_suffix_without_noise_reports_the_channels_it_draws(name, s
 
 # ---- One circuit for every shot runs once ----
 
+def test_bond_certified_model_trajectories_match_the_density_matrix():
+    # Each physical bond sees at most two CNOTs. Cap four covers all of their
+    # ranks, including branches chosen by the interleaved non-unital T1 noise.
+    width = 6
+    gates = []
+    for layer in range(3):
+        gates.extend({"name": "ry", "qubits": [q], "params": [0.37 + 0.13 * (layer + q)]} for q in range(width))
+        gates.extend({"name": "cx", "qubits": [q, q + 1]} for q in range(layer % 2, width - 1, 2))
+    wires = list(range(width))
+    noise = {"channels": [{"kind": "depolarizing", "targets": wires, "probability": 0.07},
+                          {"kind": "t1", "targets": wires, "gamma": 0.15}], "seed": 9}
+    request = {"schema_version": 2, "operation": "probabilities",
+               "circuit": {"num_qubits": width, "format": "instructions", "source": gates},
+               "simulator": {"backend": "qcsim", "method": "density_matrix"},
+               "noise": dict(noise, evaluation="exact")}
+    exact = _native_request(request)
+    assert exact["ok"], exact
+    probabilities = np.asarray(exact["probabilities"])
+
+    shots = 6000
+    request.update(operation="execute", simulator={"backend": "qcsim", "method": "matrix_product_state",
+                   "options": {"max_bond_dimension": 4}}, noise=noise, execution={"shots": shots, "seed": 17})
+    request["circuit"].update(num_clbits=width, source=gates + [{"name": "measure", "qubits": wires, "clbits": wires}])
+    sampled = _native_request(request)
+    assert sampled["ok"], sampled
+    observed = np.zeros(1 << width)
+    for bits, count in sampled["counts"].items():
+        observed[int(bits[::-1], 2)] = count / shots
+    # Compare every outcome with the independently evolved ensemble.
+    sigma = np.sqrt(probabilities * (1 - probabilities) / shots)
+    assert np.all(np.abs(observed - probabilities) < 6 * sigma + 3 / shots)
+
+
 @pytest.mark.parametrize("bond", [None, 16])
 def test_noise_drawn_while_the_circuit_runs_on_a_matrix_product_state(bond):
     """Channel instructions on the matrix product state are drawn while the circuit runs, so every

@@ -804,6 +804,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     ExecuteResults RepeatedExecute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t shots = 1000) override
     {
+        usedTerminalSampling = false;
         if (!controller || !circuit)
             return {};
 
@@ -873,6 +874,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         const bool release = optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized();
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed, release, release);
+        const bool rankBounded = resetBeforeExecution && !optSim && PlanRankBoundedShots(nrQubits, simType, method);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -884,9 +886,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
+        usedTerminalSampling = shots > 1 && terminalSampling;
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
                                     simulator->GetNumberOfQubits() != nrQubits;
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim, rankBounded);
         const size_t nrThreads =
             ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, fullTerminalBatch, optSim, executed);
 
@@ -1006,6 +1009,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         {
                             optSim->Reset();
                             optSim->SetGatesCounter(0);
+                            job->startsFromZero = true;
                         }
                         job->config.ApplyConfigurationToSimulator(optSim);
                         // An initial mapping is only valid for a freshly reset register.
@@ -1052,6 +1056,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     ExecuteResults RepeatedExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId, size_t shots = 1000) override
     {
+        usedTerminalSampling = false;
         if (!circuit || hostId >= GetNumHosts())
             return {};
 
@@ -1120,6 +1125,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         std::vector<bool> executed;
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbits, simType, method, executed, GetOptimizeSimulator() && !distributed, true);
+        // Host execution always starts from zero.
+        const bool rankBounded = !optSim && PlanRankBoundedShots(nrQubits, simType, method);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1131,7 +1138,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim);
+        usedTerminalSampling = shots > 1 && terminalSampling;
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim, rankBounded);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
         const size_t nrThreads =
@@ -1242,6 +1250,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     // invocation retained its state for an expectation/state query.
                     optSim->Reset();
                     optSim->SetGatesCounter(0);
+                    job->startsFromZero = true;
                     job->config.ApplyConfigurationToSimulator(optSim);
                     OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
                 }
@@ -2268,6 +2277,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return lastFusionEnabled.load();
     }
 
+    bool UsedTerminalSampling() const override
+    {
+        return usedTerminalSampling;
+    }
+
     bool GetGateFusion() const override
     {
         if (simulator)
@@ -2585,8 +2599,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     bool HasTerminalMeasurements(Simulators::SimulatorType type, Simulators::SimulationType method, const std::shared_ptr<Simulators::ISimulator> &chosen,
                                  size_t qubits, size_t &measuredWidth) const
     {
-        const auto policy =
-            chosen ? chosen->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
+        const auto policy = chosen && chosen->GetNumberOfQubits() == qubits
+                                ? chosen->GetShotPrefixPolicy()
+                                : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
         return !distCirc->HasOpsAfterMeasurementsWithWidth(policy.exactChannels, measuredWidth, policy.contiguous);
     }
 
@@ -3281,6 +3296,24 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             distCirc = std::move(inlined);
     }
 
+    bool PlanRankBoundedShots(size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method)
+    {
+        if (method != Simulators::SimulationType::kMatrixProductState || GetOptimizeSimulator() || !simulator || simulator->GetType() != type ||
+            simulator->GetSimulationType() != method || !configuration.IsSet("matrix_product_state_max_bond_dimension"))
+            return false;
+        const auto cap = std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"));
+        // Below the layout search threshold only off-index paths may get a new
+        // layout. The rank proof itself requires every pair to be adjacent in
+        // index order. Aer starts in index order and does no initial layout search.
+        const bool knownLayout = !simulator->SupportsMPSSwapOptimization() || !optimizeInitialQubitsMap || qubits < mpsOptimizationQubitsNumberThreshold ||
+                                 (cap && cap < mpsOptimizationBondDimensionThreshold);
+        auto planned = Circuits::RankBoundedShotOrder(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout);
+        if (planned == distCirc)
+            return false;
+        distCirc = std::move(planned);
+        return true;
+    }
+
     // The stabilizer backend automatic selection may move a Clifford circuit
     // to: the current backend's own (a composite maps to its plain backend)
     // when the candidate set lists it, else another listed stabilizer backend;
@@ -3319,8 +3352,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // put every block below the crossover. This decision must not depend on
     // the requested worker count, since it also selects the logical RNG layout.
     bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth, bool startsFromZero,
-                               const std::shared_ptr<Simulators::ISimulator> &prepared = nullptr) const
+                               const std::shared_ptr<Simulators::ISimulator> &prepared, bool rankBounded = false) const
     {
+#ifndef NO_QISKIT_AER
+        // Newly certified Aer terminal circuits use one stream regardless of
+        // the worker budget. The ordinary Aer sampler seeds each physical job.
+        if (rankBounded && type == Simulators::SimulatorType::kQiskitAer && configuration.IsSet("seed"))
+            return true;
+#endif
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
             method == Simulators::SimulationType::kDensityMatrix)
             return true;
@@ -3453,6 +3492,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 configuration.IsSet("seed") ? std::optional<uint64_t>(std::stoull(configuration.GetConfiguration("seed"))) : std::nullopt;
             if (MaestroExecution::SampleNetworkTerminalChannels(circuit, state, shots, classicalWidth, resultWidth, seed, prepare, counts))
             {
+                usedTerminalSampling = true;
                 lastFusionWidth.store(state->GetGateFusionMaxQubits());
                 lastFusionEnabled.store(state->IsGateFusionEnabled());
                 return true;
@@ -4283,6 +4323,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     std::unordered_map<std::string, std::string> lastDistributedPlacement; /**< GetLastDistributedPlacement. */
     std::atomic<unsigned> lastFusionWidth{0};
     std::atomic<bool> lastFusionEnabled{false};
+    bool usedTerminalSampling = false;
     Simulators::SimulatorType lastSimulatorType = Simulators::SimulatorType::kQCSim;  /**< The last simulator type used. */
     Simulators::SimulationType lastMethod = Simulators::SimulationType::kStatevector; /**< The last simulation method
                                                                                          used. */

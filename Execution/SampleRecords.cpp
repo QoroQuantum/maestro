@@ -462,8 +462,12 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             const auto result = SampleCircuit(circuit, config, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
-            const auto prefix = ConfiguredShotPrefix(config, result.simulator, result.method, result.largest_component);
-            terminal = shots > 1 && !circuit->HasOpsAfterMeasurementsOn(prefix);
+            // The network may have shared a rank-bounded prefix or split the
+            // circuit into components. Report the plan it actually executed.
+            records.sampling_strategy = result.sampling_strategy;
+            if (result.network_terminal && result.network_trajectory)
+                records.sampling_strategy = "mixed_v1";
+            terminal = result.network_terminal;
             RecordFusion(records, result);
             // Automatic selection may have chosen another backend.
             records.simulator = result.simulator;
@@ -474,7 +478,8 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
     }
     if (reference)
         std::tie(records.simulator, records.method) = std::pair{Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer};
-    records.sampling_strategy = reference ? "reference_frame_v1" : terminal ? "terminal_v1" : "trajectory_v1";
+    if (records.sampling_strategy.empty())
+        records.sampling_strategy = reference ? "reference_frame_v1" : terminal ? "terminal_v1" : "trajectory_v1";
     records.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     return records;
 }
@@ -795,9 +800,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                     if (return_samples)
                     {
                         CopyCountSamples(result, samples + first * width, count, width, execution_config.seed);
-                        // The network samples terminal measurements from one prepared state.
-                        const auto ranPrefix = ConfiguredShotPrefix(execution_config, result.simulator, result.method, result.largest_component);
-                        ++(count > 1 && !noisy->HasOpsAfterMeasurementsOn(ranPrefix) ? network_terminal : network_trajectory)[worker];
+                        const bool terminal = result.network_terminal || result.sampling_strategy == "terminal_v1";
+                        network_terminal[worker] += terminal;
+                        network_trajectory[worker] += result.network_trajectory || !terminal;
                     }
                     else
                         for (const auto &[bits, n] : result.counts)

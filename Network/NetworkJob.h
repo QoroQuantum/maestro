@@ -148,7 +148,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         if (optSim && optimiseMultipleShots && executedGates.size() == dcirc->size() &&
             std::none_of(executedGates.begin(), executedGates.end(), [](bool executed) { return executed; }))
         {
-            executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
+            executedGates = ExecutePrefix(state, &curMaxBondDimLocal, startsFromZero);
             if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                 optSim->SaveState();
         }
@@ -172,7 +172,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             if (optimiseMultipleShots)
             {
-                executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
+                executedGates = ExecutePrefix(state, &curMaxBondDimLocal, true);
 
                 dcirc = dcirc->RemoveExecutedOperations(executedGates);
                 if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
@@ -339,7 +339,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
                 if (optimiseMultipleShots)
                 {
-                    executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+                    executedGates = ExecutePrefix(state, curMaxBondDim, true);
 
                     dcirc = dcirc->RemoveExecutedOperations(executedGates);
                     if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
@@ -369,7 +369,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 }
                 if (needToExecuteGates && optimiseMultipleShots)
                 {
-                    executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+                    executedGates = ExecutePrefix(state, curMaxBondDim, startsFromZero);
                     dcirc = dcirc->RemoveExecutedOperations(executedGates);
                     if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
                         network->GetMPSOptimizeSwaps())
@@ -423,7 +423,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             if (optimiseMultipleShots)
             {
-                executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+                executedGates = ExecutePrefix(state, curMaxBondDim, true);
                 dcirc = dcirc->RemoveExecutedOperations(executedGates);
                 if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
                     network->GetMPSOptimizeSwaps())
@@ -550,10 +550,19 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
+    std::vector<bool> ExecutePrefix(Circuits::OperationState &state, size_t *maxBondDimension, bool freshRegister) const
+    {
+        const bool isolated = curCnt > 1 && freshRegister && Circuits::HasIsolatedMpsMeasurements(*dcirc, *optSim);
+        return dcirc->ExecuteNonMeasurements(optSim, state, maxBondDimension, false, false, isolated);
+    }
+
     bool HasTerminalMeasurements() const
     {
-        const auto policy =
-            optSim ? optSim->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap(), {}, nrQubits);
+        // A serial job can receive a smaller template register which it will resize and configure.
+        // Whether a bond cap can truncate depends on the width that actually executes the circuit.
+        const auto policy = optSim && optSim->GetNumberOfQubits() == nrQubits
+                                ? optSim->GetShotPrefixPolicy()
+                                : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap(), {}, nrQubits);
         return !dcirc->HasOpsAfterMeasurementsOn(policy);
     }
 
@@ -853,6 +862,7 @@ template <typename Time = Types::time_type> class ExecuteJob
     std::mutex &resultsMutex;
 
     bool optimiseMultipleShotsExecution = true;
+    bool startsFromZero = false; // The network explicitly reset the supplied simulator before this job.
     bool allowInternalMultithreading = false;
     // Zero leaves the caller's OpenMP settings untouched (ordinary jobs).
     int internalThreads = 0;

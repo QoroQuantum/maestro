@@ -479,6 +479,11 @@ class FusionState : public ISimulator
         return immediate_->SupportsMPSSwapOptimization();
     }
 
+    std::vector<long long> CurrentRoutingMap() const override
+    {
+        return immediate_->CurrentRoutingMap();
+    }
+
     bool SwapGatesRelabelQubits() const override
     {
         return immediate_->SwapGatesRelabelQubits();

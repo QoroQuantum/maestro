@@ -1,5 +1,7 @@
 // Numerical contract tests through the public request API, without Python/GPU.
+#include "../Circuit/ChainOrder.h"
 #include "../Execution/NoisyEstimation.h"
+#include "../Simulators/Core/Factory.h"
 #include "../maestrolib/Interface.h"
 #include <array>
 #include <boost/json.hpp>
@@ -483,6 +485,67 @@ void TestTruncatedPauliShotOrder()
             // At full weight both outcomes survive on this same branch.
             Check(counts.contains("101") && counts.contains("111") == (weight == 3), "Pauli weight cap moved CX ahead of a measurement");
         }
+    }
+}
+
+void TestIsolatedMeasurementShotOrder()
+{
+    using namespace Circuits;
+    const auto read = std::make_shared<MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}});
+    const auto pair = std::make_shared<CXGate<>>(1, 2);
+    auto native = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+    native->Configure("matrix_product_state_truncation_threshold", "0.4");
+    native->AllocateQubits(4);
+    native->Initialize();
+    const Circuit<> isolated({std::make_shared<HadamardGate<>>(0), read, pair});
+    Check(HasIsolatedMpsMeasurements(isolated, *native), "An isolated measured MPS site did not share the adjacent gate");
+    Check(!HasIsolatedMpsMeasurements(Circuit<>({std::make_shared<CXGate<>>(0, 1), read, pair}), *native), "Shared across a coupled measured site");
+    Check(!HasIsolatedMpsMeasurements(Circuit<>({read, std::make_shared<XGate<>>(0), pair}), *native), "Shared across reuse of a measured site");
+
+    struct UnnamedGate : XGate<>
+    {
+        UnnamedGate() : XGate<>(1)
+        {
+        }
+
+        QuantumGateType GetGateType() const override
+        {
+            return QuantumGateType::kNone;
+        }
+
+        Eigen::MatrixXcd GetMatrix() const override
+        {
+            return Eigen::Matrix2cd::Zero();
+        }
+    };
+
+    Check(!HasIsolatedMpsMeasurements(Circuit<>({read, std::make_shared<UnnamedGate>()}), *native), "Shared an opaque gate across a measurement");
+    native->SetInitialQubitsMap({1, 0, 2, 3});
+    Check(!HasIsolatedMpsMeasurements(isolated, *native), "Shared a routed pair across a measured MPS site");
+
+    for (const char *backend : {"qcsim"
+#ifndef NO_QISKIT_AER
+                                ,
+                                "aer"
+#endif
+         })
+    {
+        // The two entangled pairs on the right cross a truncating central cut.
+        // Only the early q0 readout can move. Measuring the right-hand sites
+        // individually, including a repeated classical destination, is observable.
+        const std::string prepare = "ry(1.1) q[0]; measure q[0] -> c[1]; ";
+        const std::string rest = "h q[1]; cx q[1],q[2]; h q[3]; cx q[3],q[4]; cx q[2],q[3]; cx q[3],q[2]; "
+                                 "measure q[2] -> c[2]; measure q[4] -> c[0]; measure q[1] -> c[3]; measure q[3] -> c[0];";
+        const auto rows = [&](const char *guard) {
+            auto request = Request("execute", 5, prepare + guard + rest, "matrix_product_state", 4);
+            request["simulator"].as_object()["backend"] = backend;
+            request["simulator"].as_object()["options"] = j::object{{"singular_value_threshold", 0.4}};
+            request["execution"].as_object()["shots"] = 256;
+            request["execution"].as_object()["return_samples"] = true;
+            return Call(request).at("samples").as_array();
+        };
+        // Z on the measured site is only a phase but forces strict execution.
+        Check(rows("") == rows("z q[0]; "), "Sharing gates across an isolated measurement changed seeded serial readout");
     }
 }
 
@@ -2902,6 +2965,7 @@ void TestRequestNoiseAndOptions()
     TestPathIntegralNoisyProbability();
     TestBackendNoisyProbability();
     TestSingleNoisyState();
+    TestIsolatedMeasurementShotOrder();
     TestTruncatedChainShotOrder();
     TestTruncatedPauliShotOrder();
     TestSampledChannelRequests();

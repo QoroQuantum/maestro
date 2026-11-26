@@ -109,9 +109,22 @@ ends in measurements counts as terminal.
 
 On MPS and MPO, a bond cap below the register's maximum Schmidt rank or a
 singular-value cutoff above the numerical default can make the result depend on
-operation order. Shot preparation then stops at the first deferred operation.
-Later gates run in the written order, including gates on different qubits. Gate
-fusion on these chains combines consecutive gates and channels on overlapping
+operation order. Shot preparation normally stops at the first deferred operation,
+and later gates run in written order. Fresh QCSim and Aer MPS runs can share
+gates across an early measurement when the measured qubit stays independent
+and the gates leave its site alone. The measurements still execute in their
+original order when the cutoff can affect a collapse.
+
+With a bond cap and a numerical-default cutoff, Maestro can also check the
+circuit against each physical bond. For example, four neighboring CNOTs
+crossing the same cut can raise its rank from one to at most 16. A one-qubit
+noise branch cannot raise it further. When every cut fits and the layout is
+known, independent gates can share a preparation. QCSim can also schedule
+errors injected by a noise model near the current tensor site. A circuit
+with explicit channel instructions retains their draw order on this path.
+Checkpoint suffixes start from an existing state and keep their usual ordering rules.
+
+Gate fusion on truncating chains combines consecutive gates and channels on overlapping
 targets. The QCSim Pauli propagator also preserves measurement order when a
 positive coefficient threshold or a weight limit below the register width
 can discard Pauli terms. Terminal measurements can still share one preparation.

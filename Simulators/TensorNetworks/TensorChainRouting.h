@@ -35,7 +35,7 @@ template <class Backend> class TensorChainRouting : public Backend
         return true;
     }
 
-    virtual std::vector<long long> CurrentRoutingMap() const = 0;
+    std::vector<long long> CurrentRoutingMap() const override = 0;
     virtual std::vector<double> CurrentBondDimensions() const = 0;
     const bool operatorChain;
     bool swapGatesRelabelQubits;

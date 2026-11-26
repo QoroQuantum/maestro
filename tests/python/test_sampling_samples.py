@@ -230,6 +230,46 @@ def test_raw_terminal_measurements_draw_rows_from_one_prepared_state(method):
     assert not np.array_equal(rows, circuit.execute(config=config, shots=4000, return_samples=True)["samples"])
 
 
+@pytest.mark.parametrize("backend,options", [
+    ("QCSim", {"singular_value_threshold": 1e-10}),
+    ("QiskitAer", {"max_bond_dimension": 2}),
+])
+def test_isolated_mps_readout_preserves_joint_distribution_and_seeded_rows(backend, options):
+    backend_type = getattr(maestro.SimulatorType, backend, None)
+    if backend_type is None:
+        pytest.skip(f"{backend} is not compiled in")
+    circuit = QuantumCircuit()
+    circuit.ry(0, 0.79)
+    circuit.measure([(0, 2)])
+    circuit.ry(1, 1.13)
+    for q in range(1, 4):
+        circuit.cx(q, q + 1)
+    circuit.measure([(1, 4), (2, 3), (3, 1), (4, 0)])
+
+    # The isolated bit and the GHZ branch are independent. Both have biased
+    # marginals, so a readout layout error also changes the joint distribution.
+    a, b = math.sin(0.79 / 2) ** 2, math.sin(1.13 / 2) ** 2
+    expected = {"00000": (1 - a) * (1 - b), "00100": a * (1 - b),
+                "11011": (1 - a) * b, "11111": a * b}
+    shots = 2048
+    cfg = maestro.SimulatorConfig(simulator_type=backend_type, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=71, max_simulators=1, **options)
+    first = circuit.execute(config=cfg, shots=shots, return_samples=True)
+    assert first["sampling_strategy"] == ("terminal_v1" if backend == "QiskitAer" else "trajectory_v1")
+    rows = _records(first, shots, 5)
+    counts = Counter("".join(map(str, row)) for row in rows)
+    assert set(counts) == set(expected)
+    for bits, probability in expected.items():
+        assert counts[bits] / shots == pytest.approx(probability, abs=0.035)
+    first_counts = circuit.execute(config=cfg, shots=shots)["counts"]
+    assert set(first_counts) == set(expected)
+    for bits, probability in expected.items():
+        assert first_counts[bits] / shots == pytest.approx(probability, abs=0.035)
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=shots, return_samples=True)["samples"])
+    assert first_counts == circuit.execute(config=cfg, shots=shots)["counts"]
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])
 def test_raw_terminal_readout_is_drawn_per_row(method):
     circuit = QuantumCircuit()

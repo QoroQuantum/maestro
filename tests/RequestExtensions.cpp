@@ -6,6 +6,7 @@
 #include <boost/json.hpp>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 namespace j = boost::json;
 void Check(bool, const char *);
@@ -601,6 +602,56 @@ void TestChannelDiagnostics(const j::object &capabilities)
     }
 }
 
+#ifndef NO_QISKIT_AER
+void TestAerMpsSnapshotShots()
+{
+    auto request = Request("execute", 4,
+                           "h q[0]; cx q[0],q[2]; h q[1]; cx q[1],q[3]; measure q[0]->c[0]; cx q[1],q[2]; "
+                           "measure q[1]->c[1]; measure q[2]->c[2]; measure q[3]->c[3];",
+                           "matrix_product_state");
+    request["simulator"].as_object()["backend"] = "aer";
+    request["simulator"].as_object()["options"] = j::object{{"max_bond_dimension", 2}, {"max_simulators", 1}};
+    request["execution"] = j::object{{"shots", 512}, {"seed", 57}};
+    for (bool rows : {false, true})
+    {
+        request["execution"].as_object()["return_samples"] = rows;
+        const auto result = Call(request);
+        const char *field = rows ? "samples" : "counts";
+        Check(result.at(field) == Call(request).at(field), "Aer MPS snapshot shots did not replay with the same seed");
+        std::map<std::string, size_t> counts;
+        if (rows)
+            for (const auto &row : result.at("samples").as_array())
+                ++counts[std::string(row.as_string())];
+        else
+            for (const auto &entry : result.at("counts").as_object())
+                counts[std::string(entry.key())] = entry.value().to_number<size_t>();
+        // In classical-bit order the measurement row is (a, b, a XOR b, b), with two independent fair bits.
+        for (const char *row : {"0000", "0111", "1010", "1101"})
+            Check(std::abs(static_cast<double>(counts[row]) / 512 - .25) < .10, "Aer MPS snapshot changed a Bell-pair branch across shots");
+        Check(counts.size() == 4, "Aer MPS snapshot produced an unexpected measurement row");
+    }
+}
+
+void TestAerMpsPrefixAtExecutionWidth()
+{
+    // The long-range Bell pair rules out both the isolated-wire and fixed-layout rank optimizations.
+    // At the template register's smaller width, a bond cap of two would appear to permit terminal sampling.
+    auto request = Request("execute", 5,
+                           "h q[0]; cx q[0],q[3]; measure q[0]->c[0]; x q[1]; "
+                           "measure q[1]->c[1]; measure q[2]->c[2]; measure q[3]->c[3]; measure q[4]->c[4];",
+                           "matrix_product_state");
+    auto &simulator = request["simulator"].as_object();
+    simulator["backend"] = "aer";
+    for (int workers : {1, 2})
+    {
+        simulator["options"] = j::object{{"max_bond_dimension", 2}, {"max_simulators", workers}};
+        const auto result = Call(request);
+        const auto low = Count(result, "01000"), high = Count(result, "11010");
+        Check(low && high && low + high == 80, "Capped Aer MPS skipped the X after measuring one qubit of a Bell pair");
+    }
+}
+#endif
+
 // The outcomes of a checkpoint prefix's measurements are not returned, so
 // readout on them is refused; suffix measurements still apply it.
 void TestCheckpointPrefixReadout()
@@ -623,6 +674,10 @@ void TestNativeExtensions(const j::object &capabilities)
     Check(capabilities.at("mixed_state_queries").at("max_target_statevector_qubits").to_number<int>() == 20, "Mixed-state queries were not advertised");
     TestMixedStateQueries();
     TestChannelDiagnostics(capabilities);
+#ifndef NO_QISKIT_AER
+    TestAerMpsSnapshotShots();
+    TestAerMpsPrefixAtExecutionWidth();
+#endif
     TestCheckpointPrefixReadout();
     bool adjoint = false;
     for (const auto &operation : capabilities.at("operations").as_array())

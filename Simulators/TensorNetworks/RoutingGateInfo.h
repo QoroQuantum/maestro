@@ -62,23 +62,7 @@ template <class MatrixFn> double RoutingSchmidtRank(Circuits::QuantumGateType ty
 
 inline bool IsControlledRoutingGate(Circuits::QuantumGateType type)
 {
-    switch (type)
-    {
-    case Circuits::QuantumGateType::kCXGateType:
-    case Circuits::QuantumGateType::kCYGateType:
-    case Circuits::QuantumGateType::kCZGateType:
-    case Circuits::QuantumGateType::kCPGateType:
-    case Circuits::QuantumGateType::kCRxGateType:
-    case Circuits::QuantumGateType::kCRyGateType:
-    case Circuits::QuantumGateType::kCRzGateType:
-    case Circuits::QuantumGateType::kCHGateType:
-    case Circuits::QuantumGateType::kCSxGateType:
-    case Circuits::QuantumGateType::kCSxDagGateType:
-    case Circuits::QuantumGateType::kCUGateType:
-        return true;
-    default:
-        return false;
-    }
+    return Circuits::IsControlledTwoQubitGate(type);
 }
 
 // Metadata for non-executable routing operations emitted by gate fusion.
