@@ -829,11 +829,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         InlineTerminalComposites();
 
         auto simType = simulator->GetType();
-        if (distCirc->HasOpsAfterMeasurements() && (
+        if (distCirc->HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()) && (
 #ifndef NO_QISKIT_AER
-                                                       simType == Simulators::SimulatorType::kCompositeQiskitAer ||
+                                                                                         simType == Simulators::SimulatorType::kCompositeQiskitAer ||
 #endif
-                                                       simType == Simulators::SimulatorType::kCompositeQCSim))
+                                                                                         simType == Simulators::SimulatorType::kCompositeQCSim))
             distCirc->MoveMeasurementsAndResets();
 
         auto method = simulator->GetSimulationType();
@@ -883,7 +883,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
                                     simulator->GetNumberOfQubits() != nrQubits;
         const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim);
@@ -1083,11 +1083,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         CaptureSimulatorConfiguration();
 
-        if (distCirc->HasOpsAfterMeasurements() && (
+        if (distCirc->HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()) && (
 #ifndef NO_QISKIT_AER
-                                                       simType == Simulators::SimulatorType::kCompositeQiskitAer ||
+                                                                                         simType == Simulators::SimulatorType::kCompositeQiskitAer ||
 #endif
-                                                       simType == Simulators::SimulatorType::kCompositeQCSim))
+                                                                                         simType == Simulators::SimulatorType::kCompositeQCSim))
             distCirc->MoveMeasurementsAndResets();
 
         auto method = simulator->GetSimulationType();
@@ -1130,7 +1130,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
         const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
@@ -2582,6 +2582,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
   private:
+    bool HasTerminalMeasurements(Simulators::SimulatorType type, Simulators::SimulationType method, const std::shared_ptr<Simulators::ISimulator> &chosen,
+                                 size_t &measuredWidth) const
+    {
+        const auto policy =
+            chosen ? chosen->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap());
+        return !distCirc->HasOpsAfterMeasurementsWithWidth(policy.exactChannels, measuredWidth, policy.contiguous);
+    }
+
     std::shared_ptr<Simulators::ISimulator> ChooseShotSimulator(size_t &shots, size_t qubits, size_t cbits, size_t resultBits, Simulators::SimulatorType &type,
                                                                 Simulators::SimulationType &method, std::vector<bool> &executed, bool releaseRegister,
                                                                 bool clearClassical)
@@ -2790,7 +2798,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             ValidateRetainedPhase(candidate->GetType(), candidate->GetSimulationType(), nrQubits);
             if (hasChannels && !candidate->SupportsQuantumChannels() && !candidate->SamplesQuantumChannels())
                 throw std::runtime_error("This backend neither holds nor samples quantum channels: use density_matrix or matrix_product_operator, "
-                                         "which apply them, or statevector or matrix_product_state, which sample them");
+                                         "which apply them, or statevector, matrix_product_state or QCSim path_integral, which sample them");
         };
         const auto prepare = [&](const std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> &candidates,
                                  bool report = true) -> std::shared_ptr<Simulators::ISimulator> {
@@ -2849,7 +2857,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!dontRunCircuitStart)
                 {
                     if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements(sim->SupportsQuantumChannels()) ? "true" : "false");
+                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy()) ? "true" : "false");
                     sim->SetMultithreading(true);
                     try
                     {
@@ -2943,7 +2951,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!dontRunCircuitStart)
                 {
                     if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements(sim->SupportsQuantumChannels()) ? "true" : "false");
+                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy()) ? "true" : "false");
                     sim->SetMultithreading(true);
                     Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed,
                                                                                             &curMaxBondDim);
@@ -3736,8 +3744,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     {
         auto result = configuration;
         if (type == Simulators::SimulatorType::kQCSim)
-            result.SetConfiguration("reproducible_trajectory",
-                                    distCirc && distCirc->HasOpsAfterMeasurements(Simulators::EvolvesExactQuantumChannels(type, method)) ? "true" : "false");
+            result.SetConfiguration("reproducible_trajectory", distCirc && distCirc->HasOpsAfterMeasurementsOn(Simulators::ShotPrefixPolicy::FromConfiguration(
+                                                                               type, method, configuration.GetConfigMap()))
+                                                                   ? "true"
+                                                                   : "false");
         const auto found = resolvedDistributedDevices.find(type);
         if (!Simulators::IsDistributedGpuSimulator(type) || !configuration.GetConfiguration("distributed_devices").empty() ||
             found == resolvedDistributedDevices.end())

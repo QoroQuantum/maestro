@@ -307,6 +307,13 @@ class PathIntegralSimulator
         return std::norm(AmplitudeForOutcome(outcome));
     }
 
+    double ProbabilityBits(const std::vector<bool> &bits)
+    {
+        const auto &amplitudes = simulator.GetAmplitudes();
+        const auto found = amplitudes.find(QC::PathIntegral::FastVectorBool(bits));
+        return found == amplitudes.end() ? 0. : std::norm(found->second);
+    }
+
     QC::PathIntegral::FastVectorBool MeasureNoCollapse()
     {
         return simulator.MeasureNoCollapse();

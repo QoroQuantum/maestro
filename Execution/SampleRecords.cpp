@@ -462,7 +462,9 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             const auto result = SampleCircuit(circuit, config, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
-            terminal = shots > 1 && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config));
+            const auto prefix =
+                Simulators::ShotPrefixPolicy::FromConfiguration(result.simulator, result.method, config.native_options, config.path_integral_threshold);
+            terminal = shots > 1 && !circuit->HasOpsAfterMeasurementsOn(prefix);
             RecordFusion(records, result);
             // Automatic selection may have chosen another backend.
             records.simulator = result.simulator;
@@ -603,10 +605,12 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     using Method = Simulators::SimulationType;
     // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
     // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
-    const bool prepared_batches =
-        !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)), UsesExactQuantumChannels(config)) &&
-        (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
-         config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
+    const auto prefix =
+        Simulators::ShotPrefixPolicy::FromConfiguration(config.simulator_type, config.simulation_type, config.native_options, config.path_integral_threshold);
+    const bool prepared_batches = !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
+                                                                        UsesExactQuantumChannels(config), prefix.contiguous) &&
+                                  (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
+                                   config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     // Network trajectories retain their prepared source and checkpoint plus
     // execution clones and any clone-owned snapshots. Direct sessions need
     // only their register and save slot.
@@ -792,8 +796,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                     {
                         CopyCountSamples(result, samples + first * width, count, width, execution_config.seed);
                         // The network samples terminal measurements from one prepared state.
-                        ++(count > 1 && !noisy->HasOpsAfterMeasurements(UsesExactQuantumChannels(execution_config)) ? network_terminal
-                                                                                                                    : network_trajectory)[worker];
+                        const auto ranPrefix = Simulators::ShotPrefixPolicy::FromConfiguration(result.simulator, result.method, execution_config.native_options,
+                                                                                               execution_config.path_integral_threshold);
+                        ++(count > 1 && !noisy->HasOpsAfterMeasurementsOn(ranPrefix) ? network_terminal : network_trajectory)[worker];
                     }
                     else
                         for (const auto &[bits, n] : result.counts)

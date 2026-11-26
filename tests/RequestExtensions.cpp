@@ -161,14 +161,12 @@ void TestPauliChannelInstructions()
         Near(Real(Call(estimate).at("expectation_values").at(0)), 0);
         Check(Count(Call(Instructions("execute", 1, {channel({0, 1, 0, 0}), Gate("measure", {0})}, method)), "1") == 80, "Exact Pauli channel was not applied");
     }
-    // The statevector and the matrix product state draw a branch as each shot
-    // runs, with or without a noise block. The other pure-state methods take one
-    // Pauli per realization from a trajectory noise block, which then needs no
-    // model channels of its own.
-    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
+    // A backend with channel trajectories draws one branch per shot. A tensor
+    // network can draw this Pauli at noise injection, once per realization.
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral", "tensor_network"})
     {
         auto execute = Instructions("execute", 1, {channel({0.5, 0.5, 0, 0}), Gate("measure", {0})}, method);
-        if (std::string(method) == "path_integral")
+        if (std::string(method) == "tensor_network")
             Check(ErrorCode(Call(execute, false)) == "unsupported_capability", "Pure-state channel ran without sampling");
         else
         {
@@ -199,10 +197,10 @@ void TestPauliChannelInstructions()
     // channels and refused by the other pure-state methods. One that is a
     // mixture of unitaries is drawn at injection by any of them.
     const j::object damping{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{1, 0, 0, 0.8}, j::array{0, 0.6, 0, 0}}}};
-    auto kraus = Instructions("execute", 1, {Gate("x", {0}), damping, Gate("measure", {0})}, "path_integral");
+    auto kraus = Instructions("execute", 1, {Gate("x", {0}), damping, Gate("measure", {0})}, "tensor_network");
     kraus["noise"] = j::object{{"realizations", 4}};
     Check(ErrorCode(Call(kraus, false)) == "unsupported_capability", "A Kraus channel that needs the state was sampled by a method that cannot");
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         kraus["simulator"].as_object()["method"] = method;
         const auto sampled = Call(kraus);
@@ -213,7 +211,7 @@ void TestPauliChannelInstructions()
                              {j::object{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array(1, j::array{0, 1, 1, 0})}}, Gate("measure", {0})},
                              "path_integral");
     flip["noise"] = j::object{{"realizations", 4}};
-    Check(Count(Call(flip), "1") == 80, "A unitary Kraus channel was not drawn at injection");
+    Check(Count(Call(flip), "1") == 80, "A unitary Kraus channel did not apply the supplied flip");
     // Exact model noise keeps circuit channels: bit flip 0.1 after x, then a
     // Kraus flip with probability 0.36, gives <Z> = -(0.8)(0.28).
     for (const char *method : {"density_matrix", "matrix_product_operator"})

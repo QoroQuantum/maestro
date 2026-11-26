@@ -213,7 +213,8 @@ def test_raw_terminal_measurements_draw_rows_from_one_prepared_state(method):
     circuit.cx(1, 3)
     # Qubit 0 is measured twice with nothing in between: both records agree.
     circuit.measure([(0, 0), (1, 1), (3, 3)])
-    result = circuit.execute(config=_config(method), shots=4000, return_samples=True)
+    config = _config(method)
+    result = circuit.execute(config=config, shots=4000, return_samples=True)
     assert result["sampling_strategy"] == "terminal_v1"
     rows = _records(result, 4000, 4)
     np.testing.assert_array_equal(rows[:, 0], rows[:, 2])
@@ -224,10 +225,9 @@ def test_raw_terminal_measurements_draw_rows_from_one_prepared_state(method):
     # seeded row order is a uniform subsample instead.
     assert rows[:500, 1].mean() == pytest.approx(0.5, abs=0.1)
     assert rows[:500, 0].any() and not rows[:500, 0].all()
-    np.testing.assert_array_equal(
-        rows, circuit.execute(config=_config(method), shots=4000, return_samples=True)["samples"])
-    assert not np.array_equal(
-        rows, circuit.execute(config=_config(method, seed=24), shots=4000, return_samples=True)["samples"])
+    np.testing.assert_array_equal(rows, circuit.execute(config=config, shots=4000, return_samples=True)["samples"])
+    config.seed = 24
+    assert not np.array_equal(rows, circuit.execute(config=config, shots=4000, return_samples=True)["samples"])
 
 
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])

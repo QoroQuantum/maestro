@@ -1,6 +1,7 @@
 // Small, independent checks of the public C ABI; no Python or GPU is required.
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "../maestrolib/Interface.h"
+#include "NativeTestSuites.h"
 #include <boost/json.hpp>
 #include <cmath>
 #include <cstdint>
@@ -883,7 +884,7 @@ void TestGlobalPhaseQueries()
     checkPhase(Call(request).at("inner_product"), -1.);
 }
 
-int main()
+int RunMaestroRequestTests()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
@@ -1157,9 +1158,10 @@ try
 
     request.at("step_circuit").as_object()["source"] =
         j::array{j::object{{"name", "pauli_channel"}, {"qubits", j::array{0}}, {"probabilities", j::array{0.5, 0.5, 0, 0}}}};
-    for (const bool sampled : {true, false})
+    for (const std::string method : {"statevector", "path_integral", "density_matrix"})
     {
-        request["simulator"].as_object()["method"] = sampled ? "statevector" : "density_matrix";
+        const bool sampled = method != "density_matrix";
+        request["simulator"].as_object()["method"] = method;
         result = Call(request);
         const auto &metadata = result.at("execution_metadata").as_object();
         Check(metadata.at("stochastic_execution").as_bool() == sampled &&
@@ -1458,3 +1460,10 @@ catch (const std::exception &error)
     std::cerr << "Native request API failure after " << checks << " checks: " << error.what() << '\n';
     return 1;
 }
+
+#ifndef MAESTRO_EMBEDDED_NATIVE_TESTS
+int main()
+{
+    return RunMaestroRequestTests();
+}
+#endif

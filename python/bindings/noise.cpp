@@ -225,15 +225,15 @@ void bind_noise(nb::module_ &m)
              "is configured: generalized amplitude damping, correlated phase "
              "flips or custom Kraus maps. Such a backend applies them exactly "
              "(density matrix, MPO or the QCSim Pauli propagator) or samples "
-             "them from its state (statevector, matrix product state); the "
+             "them from its state (statevector, matrix product state, QCSim path integral); the "
              "other methods reject the model. Phase damping and thermal "
              "relaxation are excluded -- both have an exact or well-defined "
              "stochastic realization on every sampled backend.")
         .def("has_thermal_in_sampled_overdephasing_regime", &noise::NoiseModel::has_thermal_in_sampled_overdephasing_regime,
              "Return True if any thermal-relaxation layer has T2 > T1, where "
              "the sampled reset+Z mixture over-dephases. Use density-matrix "
-             "or MPO execution in that regime, or the statevector or the "
-             "matrix product state, which sample the channel itself.")
+             "or MPO execution in that regime, or sample the channel on the "
+             "statevector, matrix product state or QCSim path integral.")
         .def("requires_exact_quantum_channels", &noise::NoiseModel::requires_exact_quantum_channels,
              "Return True if injection into gates and resets cannot faithfully "
              "realize this model (Kraus maps, or T2 > T1, which it "

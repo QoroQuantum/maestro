@@ -202,29 +202,30 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
              {"p", 1},  {"rx", 1},  {"ry", 1},    {"rz", 1}, {"u", 3},   {"u1", 1},  {"u2", 2},  {"u3", 3}, {"swap", 0}, {"cx", 0},  {"cy", 0},    {"cz", 0},
              {"ch", 0}, {"csx", 0}, {"csxdg", 0}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"cu", 4}, {"rxx", 1},  {"rzz", 1}, {"cswap", 0}, {"ccx", 0}})
         gates.emplace_back(json::object{{"name", name}, {"params", count}});
-    const json::object instructions{{"gates", std::move(gates)},
-                                    {"operations", json::array{"measure", "reset", "delay", "kraus", "pauli_channel", "channel"}},
-                                    {"fields", json::object{{"conditional_reg", json::array{"gates"}},
-                                                            {"noiseless", json::array{"gates"}},
-                                                            {"readout_error", json::array{"measure"}},
-                                                            {"clbits", json::array{"measure"}},
-                                                            {"duration", json::array{"delay"}},
-                                                            {"operators", json::array{"kraus"}},
-                                                            {"probabilities", json::array{"pauli_channel"}},
-                                                            {"factors", json::array{"channel"}}}},
-                                    {"channel_factors", json::object{{"pauli", "probabilities"},
-                                                                     {"unitary_mixture", "probabilities unitaries"},
-                                                                     {"kraus", "operators"},
-                                                                     {"depolarizing", "probability"},
-                                                                     {"amplitude_damping", "gamma"},
-                                                                     {"phase_damping", "gamma"},
-                                                                     {"generalized_amplitude_damping", "gamma excited_population"},
-                                                                     {"thermal_relaxation", "duration t1 t2 excited_population"}}},
-                                    {"channel_evaluation",
-                                     "Mixed-state methods and the qcsim pauli_propagator apply kraus, pauli_channel and channel instructions exactly; "
-                                     "statevector and matrix_product_state sample them from their state, one branch each time the circuit runs; the "
-                                     "other pure-state methods draw them per noise realization, need a trajectory noise block (whose channels may then "
-                                     "be omitted) and take only factors whose branches need no state"}};
+    const json::object instructions{
+        {"gates", std::move(gates)},
+        {"operations", json::array{"measure", "reset", "delay", "kraus", "pauli_channel", "channel"}},
+        {"fields", json::object{{"conditional_reg", json::array{"gates"}},
+                                {"noiseless", json::array{"gates"}},
+                                {"readout_error", json::array{"measure"}},
+                                {"clbits", json::array{"measure"}},
+                                {"duration", json::array{"delay"}},
+                                {"operators", json::array{"kraus"}},
+                                {"probabilities", json::array{"pauli_channel"}},
+                                {"factors", json::array{"channel"}}}},
+        {"channel_factors", json::object{{"pauli", "probabilities"},
+                                         {"unitary_mixture", "probabilities unitaries"},
+                                         {"kraus", "operators"},
+                                         {"depolarizing", "probability"},
+                                         {"amplitude_damping", "gamma"},
+                                         {"phase_damping", "gamma"},
+                                         {"generalized_amplitude_damping", "gamma excited_population"},
+                                         {"thermal_relaxation", "duration t1 t2 excited_population"}}},
+        {"channel_evaluation",
+         "Mixed-state methods and the QCSim pauli_propagator apply kraus, pauli_channel and channel instructions exactly; "
+         "statevector, matrix_product_state and QCSim path_integral sample them from their state, one branch each time the circuit runs; the "
+         "other pure-state methods draw them per noise realization, need a trajectory noise block (whose channels may then "
+         "be omitted) and take only factors whose branches need no state"}};
     const json::object adjoint{
         {"operations", json::array{"adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
         {"supported_configurations",
@@ -244,6 +245,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
         {"modes", json::array{"combined", "pauli", "coherent", "analytical"}},
         {"evaluations", json::array{"auto", "exact", "trajectories"}},
         {"exact_configurations", exactConfigurations},
+        {"sampled_channel_configurations", Configurations([](const auto &config) { return SamplesQuantumChannels(config); })},
         {"realizations",
          json::object{
              {"accepts", json::array{"positive_integer", "null", "auto"}},
@@ -252,6 +254,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
                                         {"sampled_execute", 64},
                                         {"sampled_estimate", 100},
                                         {"sampled_noisy_fidelity", 100},
+                                        {"sampled_noisy_prob", kMeasurementTrajectories},
                                         {"rule", "one realization when exact channels need no sampled disturbance (coherent, correlated) and, for "
                                                  "estimates, the circuit records no branch; explicit counts are honored, capped to shots for execution; "
                                                  "when the backend samples every noise term from its state, execution runs each shot as a realization"}}}}},
@@ -285,6 +288,11 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"noise", noise},
             {"estimate", estimate},
             {"noisy_fidelity", noisyFidelity},
+            {"noisy_prob", json::object{{"supported_configurations", json::array{json::object{{"backend", "qcsim"}, {"method", "path_integral"}}}},
+                                        {"modes", json::array{"combined", "pauli", "coherent"}},
+                                        {"evaluations", json::array{"deterministic", "trajectory_average"}},
+                                        {"readout_approximation", "first_order_readout"},
+                                        {"single_stochastic_realization_standard_error", "null"}}},
             {"automatic_selection", automaticSelection},
             {"sampling_strategies", json::array{"reference_frame_v1", "extended_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
             {"api", "maestro.native.request"},

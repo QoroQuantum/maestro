@@ -10,6 +10,7 @@
 #include <optional>
 #include <random>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace MaestroExecution
@@ -22,6 +23,35 @@ enum class NoiseLayer
     kCoherent,
     kCombined
 };
+
+inline std::optional<NoiseLayer> NoiseLayerForMode(std::string_view mode)
+{
+    if (mode == "combined")
+        return NoiseLayer::kCombined;
+    if (mode == "pauli")
+        return NoiseLayer::kPauli;
+    if (mode == "coherent")
+        return NoiseLayer::kCoherent;
+    return std::nullopt;
+}
+
+// Single-target probability modes constrain the external gate noise. Classical readout is independent,
+// and channels in the circuit remain part of the preparation for every mode.
+inline const char *NoisyProbabilityLayerError(const noise::NoiseModel &model, NoiseLayer layer)
+{
+    switch (layer)
+    {
+    case NoiseLayer::kCombined:
+        return nullptr;
+    case NoiseLayer::kPauli:
+        return model.compute_damping_covers_model() ? nullptr
+                                                    : "noisy_prob pauli mode accepts per-qubit Pauli noise and readout. Use combined for other channels.";
+    case NoiseLayer::kCoherent:
+        return model.inject_coherent_noise_covers_model() ? nullptr
+                                                          : "noisy_prob coherent mode accepts coherent rotations and readout. Use combined for other channels.";
+    }
+    return "noisy_prob mode must be combined, pauli or coherent.";
+}
 
 // InjectNoise(layer, plan.circuit(), plan.model(), rng, exact) drawn from the
 // plan: identical operations and RNG use, without per-realization lookups.

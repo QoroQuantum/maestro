@@ -1,3 +1,4 @@
+#include "NativeTestSuites.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Core/Factory.h"
 #include "Simulators/Fusion/FusionSimulator.h"
@@ -6,6 +7,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <unordered_map>
 
 namespace
 {
@@ -42,6 +44,51 @@ auto Make(Method method, size_t n = 4)
     sim->AllocateQubits(n);
     sim->Initialize();
     return sim;
+}
+
+void PathIntegralMeasurementPrefix()
+{
+    Circuit circuit;
+    circuit.AddOperation(CF::CreateMeasurement({{0, 0}}));
+    circuit.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    circuit.AddOperation(CF::CreateMeasurement({{1, 1}}));
+
+    Check(!circuit.HasOpsAfterMeasurements(), "Wire-local planning treated an independent X as a measurement dependency");
+
+    auto nested = std::make_shared<Circuit>();
+    nested->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(.5)));
+    Circuit noisy;
+    noisy.AddOperation(nested);
+    noisy.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    noisy.AddOperation(CF::CreateMeasurement({{1, 1}}));
+
+    auto simulator = Make(Method::kPathIntegral, 2);
+    const auto checkThreshold = [&](const char *threshold, bool shareAfterMeasurement, bool shareAfterChannel) {
+        std::unordered_map<std::string, std::string> options;
+        if (threshold)
+        {
+            simulator->Configure("path_integral_threshold", threshold);
+            options.emplace("path_integral_threshold", threshold);
+        }
+        const auto configured = Simulators::ShotPrefixPolicy::FromConfiguration(Backend::kQCSim, Method::kPathIntegral, options);
+        const auto live = simulator->GetShotPrefixPolicy();
+        Check(circuit.HasOpsAfterMeasurementsOn(live) == !shareAfterMeasurement, "Incorrect terminal classification after a measurement");
+        Check(noisy.HasOpsAfterMeasurementsOn(live), "A drawn channel was classified as terminal sampling");
+        const auto checkMask = [&](const Circuit &input, bool shareGate) {
+            Circuits::OperationState state(2);
+            const std::vector<bool> expected{false, shareGate, false};
+            Check(input.PlanNonMeasurements(state, configured) == expected, "Configured prefix planned an incorrect suffix");
+            Check(input.ExecuteNonMeasurements(simulator, state) == expected, "Live prefix executed an incorrect suffix");
+        };
+        checkMask(circuit, shareAfterMeasurement);
+        checkMask(noisy, shareAfterChannel);
+    };
+    checkThreshold(nullptr, true, false);
+    checkThreshold("1e-16", true, false);
+    checkThreshold("1e-15", true, false);
+    checkThreshold("1.0000000000000003e-15", false, false);
+    checkThreshold("0.2", false, false);
+    checkThreshold("0", true, true);
 }
 
 void RealBatches()
@@ -548,7 +595,7 @@ void ChannelsOnAHandle()
         Check(!MaestroApplyKrausChannel(sim.get(), &q, 3, damping, 2) && !MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 0),
               "A malformed channel call was accepted");
     }
-    for (auto method : {Method::kStatevector, Method::kMatrixProductState})
+    for (auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kPathIntegral})
     {
         size_t kept = 0;
         for (unsigned seed = 1; seed <= 60; ++seed)
@@ -564,6 +611,21 @@ void ChannelsOnAHandle()
         }
         Check(kept > 29 && kept < 55, "The branches drawn through the C interface do not follow the channel");
     }
+    auto wide = Make(Method::kPathIntegral, 67);
+    const unsigned long high = 66;
+    wide->ApplyX(high);
+    std::vector<unsigned char> bits(67);
+    bits[high] = 1;
+    double probability = -1.;
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C path integral probability rejected a wide label");
+    Near(probability, 1.);
+    const double reset[16] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+    Check(MaestroApplyKrausChannel(wide.get(), &high, 1, reset, 2), "C Kraus channel rejected qubit 66");
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C wide label lost after a Kraus channel");
+    Near(probability, 0.);
+    bits[high] = 0;
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C wide label rejected the reset state");
+    Near(probability, 1.);
     auto tensors = Make(Method::kTensorNetwork, 1);
     Check(!MaestroSupportsQuantumChannels(tensors.get()) && !MaestroSamplesQuantumChannels(tensors.get()) &&
               !MaestroApplyKrausChannel(tensors.get(), &q, 1, damping, 2),
@@ -609,14 +671,10 @@ void JsonTensorQueries()
 }
 } // namespace
 
-int main(int argc, char **argv)
+int RunMaestroExpectationBatchTests()
 {
     try
     {
-        if (argc > 1)
-            backend = Backend::kGpuSim;
-        if (argc > 2)
-            single = true;
 #ifdef __linux__
         if (backend == Backend::kGpuSim)
         {
@@ -629,6 +687,8 @@ int main(int argc, char **argv)
                   "GPU tensor extensions unavailable");
         }
 #endif
+        if (backend == Backend::kQCSim)
+            PathIntegralMeasurementPrefix();
         RealBatches();
         ComplexAndC();
         ProbabilityQueriesInC();
@@ -638,6 +698,7 @@ int main(int argc, char **argv)
         JsonTensorQueries();
         ChannelsOnAHandle();
         std::cout << checks << " expectation batch checks passed\n";
+        return 0;
     }
     catch (const std::exception &e)
     {
@@ -645,3 +706,14 @@ int main(int argc, char **argv)
         return 1;
     }
 }
+
+#ifndef MAESTRO_EMBEDDED_NATIVE_TESTS
+int main(int argc, char **)
+{
+    if (argc > 1)
+        backend = Backend::kGpuSim;
+    if (argc > 2)
+        single = true;
+    return RunMaestroExpectationBatchTests();
+}
+#endif

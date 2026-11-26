@@ -198,6 +198,11 @@ class FusionState : public ISimulator
         return immediate_->SamplesQuantumChannels();
     }
 
+    ShotPrefixPolicy GetShotPrefixPolicy() const override
+    {
+        return immediate_->GetShotPrefixPolicy();
+    }
+
     void ApplySuperoperator(const Types::qubits_vector &qs, const Eigen::MatrixXcd &superoperator) override
     {
         Flush();

@@ -270,9 +270,9 @@ class ExecutionCost
     {
         // sampling works very differenty for such circuits
         Circuits::OperationState dummyState;
-        const bool exactChannels = method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
-        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements(exactChannels);
-        const std::vector<bool> executedOps = circuit->ExecuteNonMeasurements(nullptr, dummyState, nullptr, exactChannels);
+        const auto policy = Simulators::ShotPrefixPolicy::FromConfiguration(Simulators::SimulatorType::kQCSim, method, {});
+        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurementsOn(policy);
+        const std::vector<bool> executedOps = circuit->PlanNonMeasurements(dummyState, policy);
 
         const size_t dif = circuit->size() - executedOps.size();
 
@@ -746,7 +746,7 @@ class ExecutionCost
         Types::qubits_vector qubitsSampled(nrQubitsSampled);
         std::iota(qubitsSampled.begin(), qubitsSampled.end(), 0);
 
-        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements(sim->SupportsQuantumChannels());
+        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy());
 
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -815,7 +815,7 @@ class ExecutionCost
 
         info.nrQubits = circuit->GetMaxQubitIndex() + 1;
         Circuits::OperationState dummyState(info.nrQubits);
-        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
+        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurementsOn({false, false});
         const std::vector<bool> executedOps = circuit->ExecuteNonMeasurements(nullptr, dummyState);
 
         const size_t dif = circuit->size() - executedOps.size();

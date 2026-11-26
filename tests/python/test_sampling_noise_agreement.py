@@ -720,8 +720,7 @@ def test_set_t1_differs_from_exact_damping_only_in_coherence():
     """A documented difference, pinned so it cannot change silently.
 
     set_t1 is exact amplitude damping on mixed states and on the backends that
-    sample channels from their state (the statevector, the matrix product
-    state). On the other trajectory backends it is a reset with probability
+    sample channels from their state. On the other trajectory backends it is a reset with probability
     gamma: the populations agree, the coherence is (1 - gamma) instead of
     sqrt(1 - gamma). The agreement tests above therefore use
     set_thermal_relaxation, which is consistent everywhere.
@@ -733,7 +732,7 @@ def test_set_t1_differs_from_exact_damping_only_in_coherence():
     circuit.h(0)
     exact = circuit.noisy_estimate_montecarlo(["Z", "X"], model, None, _config(S.DensityMatrix))["expectation_values"]
     assert exact == pytest.approx([gamma, math.sqrt(1 - gamma)], abs=1e-10)
-    for method in (S.Statevector, S.MatrixProductState, S.TensorNetwork):
+    for method in (S.Statevector, S.MatrixProductState, S.PathIntegral, S.TensorNetwork):
         sampled = circuit.noisy_estimate_montecarlo(["Z", "X"], model, 4000, _config(method, seed=97), noise_seed=101)
         (z, x), (ez, ex) = sampled["expectation_values"], sampled["realization_standard_errors"]
         if method == S.Statevector:
@@ -798,6 +797,7 @@ def _channel_circuit():
 # resolves whole blocks of gates and channels from one reduced density matrix.
 SAMPLING_BACKENDS = [pytest.param(B.QCSim, S.Statevector, {}, id="qcsim-statevector"),
                      pytest.param(B.QCSim, S.Statevector, {"gate_fusion": True}, id="qcsim-statevector-fused"),
+                     pytest.param(B.QCSim, S.PathIntegral, {}, id="qcsim-path-integral"),
                      pytest.param(B.QCSim, S.MatrixProductState, {}, id="qcsim-mps"),
                      pytest.param(B.CompositeQCSim, S.Statevector, {}, id="composite-qcsim-statevector"),
                      pytest.param(getattr(B, "QiskitAer", None), S.Statevector, {}, id="aer-statevector"),
@@ -1037,6 +1037,78 @@ def test_channel_instructions_are_drawn_per_shot_in_plain_execution(backend, met
         assert ones(circuit, 43) == pytest.approx(0.5, abs=0.04), name
 
 
+@pytest.mark.parametrize("return_samples", [False, True], ids=["counts", "rows"])
+def test_path_integral_pruning_keeps_independent_gates_after_a_channel(return_samples):
+    # The four incoming rows have weight 1/4. Damping leaves two rows of weight
+    # 1/2. Running X on the original rows before the channel prunes all four.
+    result = _native_request({
+        "schema_version": 2, "operation": "execute",
+        "circuit": {"format": "instructions", "num_qubits": 2, "num_clbits": 2, "source": [
+            {"name": "h", "qubits": [0]}, {"name": "h", "qubits": [1]},
+            {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 1.0}]},
+            {"name": "x", "qubits": [1]}, {"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]},
+        "simulator": {"backend": "qcsim", "method": "path_integral", "selection": "fixed",
+                      "options": {"path_integral_threshold": 0.3, "optimize_circuit": False}},
+        "execution": {"shots": 512, "seed": 73, "return_samples": return_samples}})
+    assert result["ok"], result
+    if return_samples:
+        rows = result["samples"]
+        assert len(rows) == 512 and set(rows) == {"00", "01"}
+        ones = rows.count("01")
+    else:
+        assert set(result["counts"]) == {"00", "01"}
+        ones = result["counts"]["01"]
+    assert 190 < ones < 322
+
+
+@pytest.mark.parametrize("checkpoint", [False, True], ids=["execute", "checkpoint"])
+@pytest.mark.parametrize("return_samples", [False, True], ids=["counts", "rows"])
+@pytest.mark.parametrize("collapse", ["measure", "reset"])
+@pytest.mark.parametrize("threshold", [None, 0.0, 1e-15, 0.2], ids=["default", "exact", "explicit-default", "coarse"])
+def test_path_integral_prefix_respects_collapse_on_an_independent_wire(checkpoint, return_samples, collapse, threshold):
+    shots = 2048
+    config = _config(S.PathIntegral, seed=73, path_integral_threshold=threshold)
+    prefix = QuantumCircuit()
+    prefix.ry(0, 2 * math.asin(math.sqrt(0.30)))
+    prefix.cx(0, 2)
+    body = QuantumCircuit() if checkpoint else prefix
+    body.ry(1, 2 * math.asin(math.sqrt(0.35)))
+    if collapse == "measure":
+        body.measure([(0, 0)])
+    else:
+        body.reset(0)
+    body.x(1)
+    body.measure([(1, 1), (2, 2)])
+    if checkpoint:
+        result = maestro.PrefixCheckpointedSimulator(prefix, 3, config).execute_suffix(body, shots=shots, return_samples=return_samples)
+    else:
+        result = body.execute(config, shots, return_samples=return_samples)
+
+    # Before collapse the rows with q2=1 weigh .105 and .195. Hoisting X1
+    # prunes both at .2. After collapse the surviving rows weigh .35 and .65.
+    # Checking q1 as well catches a terminal sampler that omits the deferred X.
+    if return_samples:
+        assert result["samples"].shape == (shots, 3)
+        p1, p2 = result["samples"][:, 1:].mean(axis=0)
+    else:
+        counts = result["counts"]
+        assert sum(counts.values()) == shots
+        p1, p2 = (sum(n for bits, n in counts.items() if bits[q] == "1") / shots for q in (1, 2))
+    assert p1 == pytest.approx(0.65, abs=0.06)
+    assert p2 == pytest.approx(0.30, abs=0.06)
+    if (checkpoint or return_samples) and collapse == "measure":
+        assert result["sampling_strategy"] == ("trajectory_v1" if threshold == 0.2 else "terminal_v1")
+
+
+def test_path_integral_counts_execute_gates_after_an_empty_measurement():
+    circuit = QuantumCircuit()
+    circuit.measure([])
+    circuit.x(0)
+    circuit.measure([(0, 0)])
+    result = circuit.execute(_config(S.PathIntegral, path_integral_threshold=0.2), 50)
+    assert result["counts"] == {"1": 50}
+
+
 # ---------------------------------------------------------------- channels drawn without the state
 
 def _stateless_channel_circuit(noisy=True):
@@ -1077,7 +1149,6 @@ def _stateless_channel_circuit(noisy=True):
 
 @pytest.mark.parametrize("method, shots", [
     pytest.param(S.TensorNetwork, SLOW_SHOTS, id="qcsim-tensor-network"),
-    pytest.param(S.PathIntegral, SHOTS, id="qcsim-path-integral"),
     pytest.param(S.ExtendedStabilizer, SLOW_SHOTS, id="qcsim-extended-stabilizer"),
 ])
 def test_channel_instructions_that_need_no_state_run_on_every_pure_state_method(method, shots):
@@ -1324,6 +1395,36 @@ def _native_request(request):
     return result
 
 
+@pytest.mark.parametrize("seed, noise_seed", [(None, 0), (0, None), (0, 19), ((1 << 46) + 7, 0)])
+def test_noisy_probability_replays_the_same_kraus_trajectories_in_python_and_json(seed, noise_seed):
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    operators = [[[1, 0], [0, 0.8]], [[0, 0.6], [0, 0]]]
+    model = maestro.NoiseModel()
+    model.set_kraus_channel([0], operators)
+    model.set_readout_error(0, 0.1, 0.3)
+    config = maestro.SimulatorConfig(simulation_type=S.PathIntegral, fixed_backend=True, seed=seed)
+    bound = circuit.noisy_prob("1", model, 71, noise_seed, config)
+    module = maestro.noisy_prob(circuit, "1", model, 71, noise_seed, config)
+    request = {
+        "schema_version": 2, "operation": "noisy_prob", "target_state": "1",
+        "circuit": {"format": "instructions", "num_qubits": 1, "source": [{"name": "x", "qubits": [0]}]},
+        "noise": {"realizations": 71, "channels": [
+            {"kind": "kraus", "targets": [0], "operators": [[1, 0, 0, 0.8], [0, 0.6, 0, 0]]},
+            {"kind": "readout", "targets": [0], "p_meas1_prep0": 0.1, "p_meas0_prep1": 0.3}]}}
+    if noise_seed is not None:
+        request["noise"]["seed"] = noise_seed
+    if seed is not None:
+        request["execution"] = {"seed": seed}
+    native = _native_request(request)
+    assert native["ok"], native
+    assert 0.1 < bound["probability"] < 0.7 and bound["std_error"] > 0
+    for result in (module, native):
+        assert bound["noise_realizations"] == result["noise_realizations"] == 71
+        for key in ("probability", "std_error"):
+            assert bound[key] == pytest.approx(result[key], abs=1e-14, rel=0)
+
+
 _SURFACE_FACTORS = [
     {"kind": "depolarizing", "probability": 0.1},
     {"kind": "amplitude_damping", "qubits": [1], "gamma": 0.3},
@@ -1424,7 +1525,8 @@ def test_a_structured_channel_is_the_same_map_in_python_and_in_a_request():
     assert _native_request(request)["fidelity"] == pytest.approx(fidelity, abs=1e-12)
 
 
-@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state")])
+@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
+                                          (S.PathIntegral, "path_integral")])
 def test_a_structured_channel_is_sampled_alike_in_python_and_in_a_request(method, name):
     """Both entry points draw one branch per shot from the state, and agree with the density matrix."""
     shots = 20000
@@ -1444,7 +1546,8 @@ def test_a_structured_channel_is_sampled_alike_in_python_and_in_a_request(method
             assert abs(counts.get(key, 0) / shots - probability) < 5 * error, (key, counts, exact)
 
 
-def test_one_state_of_a_sampled_channel_is_one_branch_in_python_and_in_a_request():
+@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.PathIntegral, "path_integral")])
+def test_one_state_of_a_sampled_channel_is_one_branch_in_python_and_in_a_request(method, name):
     """get_statevector and a statevector request both run the circuit once: one branch, picked by the seed."""
     damping = maestro.QuantumChannel.amplitude_damping(0.3)
     circuit = QuantumCircuit()
@@ -1452,7 +1555,7 @@ def test_one_state_of_a_sampled_channel_is_one_branch_in_python_and_in_a_request
     circuit.channel([0], damping)
     kept = 0
     for seed in range(1, 41):
-        state = maestro.get_statevector(circuit, maestro.SimulatorConfig(simulation_type=S.Statevector, seed=seed))
+        state = maestro.get_statevector(circuit, _config(method, seed=seed))
         populations = [abs(a) ** 2 for a in state]
         assert max(populations) == pytest.approx(1.0, abs=1e-12)
         kept += populations[1] > 0.5
@@ -1463,7 +1566,7 @@ def test_one_state_of_a_sampled_channel_is_one_branch_in_python_and_in_a_request
                    "circuit": {"format": "instructions", "num_qubits": 1, "num_clbits": 1,
                                "source": [{"name": "x", "qubits": [0]},
                                           {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 0.3}]}]},
-                   "simulator": {"backend": "qcsim", "method": "statevector"}, "execution": {"seed": seed}}
+                   "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"}, "execution": {"seed": seed}}
         result = _native_request(request)
         assert result["ok"], result
         assert max(result["probabilities"]) == pytest.approx(1.0, abs=1e-12)
@@ -1497,7 +1600,7 @@ def _handle(method, qubits=2, seed=5):
 
 
 def test_a_simulator_handle_applies_channels_as_its_method_does():
-    """Exactly on the density matrix; one branch drawn from the state on the statevector and the MPS."""
+    """A handle reports whether it applies an ensemble channel or draws a branch."""
     damping = maestro.QuantumChannel.amplitude_damping(0.3)
     owner, handle, simulator = _handle(S.DensityMatrix)
     try:
@@ -1509,7 +1612,7 @@ def test_a_simulator_handle_applies_channels_as_its_method_does():
         assert statistics.unreadBlocks == 0 and statistics.rereadBlocks == 0
     finally:
         owner.destroy_simulator(handle)
-    for method in (S.Statevector, S.MatrixProductState):
+    for method in (S.Statevector, S.MatrixProductState, S.PathIntegral):
         kept = 0
         for seed in range(1, 41):
             owner, handle, simulator = _handle(method, seed=seed)
@@ -1644,7 +1747,7 @@ def test_a_checkpoint_prefix_refuses_channels_it_would_sample_once():
     prefix.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
     suffix = QuantumCircuit()
     suffix.measure_all()
-    for method in (S.Statevector, S.MatrixProductState):
+    for method in (S.Statevector, S.MatrixProductState, S.PathIntegral):
         config = maestro.SimulatorConfig(simulation_type=method, seed=3, fixed_backend=True)
         with pytest.raises(ValueError, match="prefix runs once"):
             maestro.PrefixCheckpointedSimulator(prefix, 1, config)
@@ -1662,7 +1765,7 @@ def test_a_checkpoint_prefix_refuses_channels_it_would_sample_once():
     assert abs(counts.get("1", 0) / 8000 - 0.7) < 0.03
 
 
-@pytest.mark.parametrize("other", [S.TensorNetwork, S.PathIntegral, S.ExtendedStabilizer, S.Stabilizer])
+@pytest.mark.parametrize("other", [S.TensorNetwork, S.ExtendedStabilizer, S.Stabilizer])
 @pytest.mark.parametrize("first", [False, True])
 def test_a_candidate_list_runs_channels_on_the_backend_that_holds_them_in_either_order(other, first):
     """A candidate that neither holds nor samples channels yields to one that does, also when it
@@ -1801,7 +1904,7 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
                          {"name": "channel", "qubits": [0], "factors": [{"kind": "depolarizing", "probability": 0.3}]}, 0.8),
     }
     exact = {"density_matrix": S.DensityMatrix, "matrix_product_operator": S.MatrixProductOperator}
-    sampling = {"statevector": S.Statevector, "matrix_product_state": S.MatrixProductState}
+    sampling = {"statevector": S.Statevector, "matrix_product_state": S.MatrixProductState, "path_integral": S.PathIntegral}
     neither = {"tensor_network": S.TensorNetwork}
     one_branch = ("one unitary", "damping of zero")
     shots = 4000
@@ -1943,7 +2046,7 @@ def test_probabilities_answer_on_every_method_in_python_and_in_a_request(method,
 @pytest.mark.parametrize("method, name, exact", [
     (S.DensityMatrix, "density_matrix", True), (S.MatrixProductOperator, "matrix_product_operator", True),
     (S.PauliPropagator, "pauli_propagator", True), (S.Statevector, "statevector", False),
-    (S.MatrixProductState, "matrix_product_state", False)])
+    (S.MatrixProductState, "matrix_product_state", False), (S.PathIntegral, "path_integral", False)])
 def test_probabilities_of_a_channel_in_python_and_in_a_request(method, name, exact):
     """Where a channel instruction is applied exactly, the probabilities are those of the mixed state,
     which has no statevector to square. Where it is sampled, they are those of the one branch drawn."""
@@ -2117,7 +2220,7 @@ def test_probabilities_of_measured_circuits_agree_with_a_request(method, name):
 # ---- A channel instruction that sampled noise injection draws into a gate ----
 
 @pytest.mark.parametrize("method, name, drawn_while_running", [
-    (S.PathIntegral, "path_integral", {"pauli": False, "mixture": False, "relaxation": True}),
+    (S.PathIntegral, "path_integral", {"pauli": False, "mixture": True, "relaxation": True}),
     (S.TensorNetwork, "tensor_network", {"pauli": False, "mixture": False, "relaxation": True}),
     (S.Statevector, "statevector", {"pauli": False, "mixture": True, "relaxation": True}),
 ])

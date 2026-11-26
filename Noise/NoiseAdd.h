@@ -529,24 +529,24 @@ class NoiseAdd
         return networks;
     }
 
-    // Whether the network samples every shot of a batch from one prepared
+    // Whether realization workers can each sample a batch from one prepared
     // state: terminal measurements on a dense QCSim method (run with one
     // thread) or a QCSim MPO (whose workers only clone the prepared state, and
     // realization worker networks have one simulator each).
-    static bool SamplesFromOnePreparedState(const CircuitPtr &circuit, const NetworkPtr &network)
+    static bool CanParallelizePreparedBatches(const CircuitPtr &circuit, const NetworkPtr &network)
     {
         const auto backend = PinnedBackend(network);
         if (!backend || backend->first != Simulators::SimulatorType::kQCSim)
             return false;
+        using Method = Simulators::SimulationType;
+        // A sparse path-integral register has no size bound for RealizationWorkers.
+        if (backend->second != Method::kStatevector && backend->second != Method::kDensityMatrix && backend->second != Method::kMatrixProductOperator)
+            return false;
         // As the realizations are built (ResolvePolicy): channels stay for the
         // backend to draw only on a simple network.
         const bool runtime_channels = IsSimpleNetwork(*network) && Simulators::SamplesQuantumChannels(backend->first, backend->second);
-        if (circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(runtime_channels),
-                                                 MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
-            return false;
-        const auto method = backend->second;
-        return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
-               method == Simulators::SimulationType::kPathIntegral || method == Simulators::SimulationType::kMatrixProductOperator;
+        return !circuit->HasOpsAfterMeasurementsWith(MaestroExecution::InjectedChannelDraws(runtime_channels),
+                                                     MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second));
     }
 
     // The width of the register the caller's network keeps allocated.
@@ -670,7 +670,7 @@ class NoiseAdd
             message << qubits[i];
         }
         message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
-                   "statevector or the matrix product state, which sample the channel itself, "
+                   "statevector, matrix product state or QCSim path integral, which sample the channel itself, "
                    "to preserve the calibrated T2.";
         if (warning_handler)
             warning_handler(message.str());
@@ -905,7 +905,7 @@ class NoiseAdd
         // A realization depends on its own circuit and derived seed. Batches
         // sampled from one prepared state run single-threaded in the network,
         // so realization workers supply their parallelism too.
-        const bool independent = batches == shots || SamplesFromOnePreparedState(circuit, execution.network);
+        const bool independent = batches == shots || CanParallelizePreparedBatches(circuit, execution.network);
         const size_t workers =
             independent ? RealizationWorkers(RealizationWidth(circuit, plan), execution.network, host, batches, RetainedQubits(*network), batches < shots) : 1;
         if (workers > 1)

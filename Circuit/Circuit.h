@@ -2217,49 +2217,50 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return true;
     }
 
-    /**
-     * @brief Checks if the circuit has measurements that are followed by
-     * operations that affect the measured qubits.
-     *
-     * Checks if the circuit has measurements that are followed by operations that
-     * affect the measured qubits.
-     *
-     * @param exactChannels Whether resets can be evolved as deterministic mixed-state channels.
-     * @return True if the circuit has measurements that are followed by
-     * operations that affect the measured qubits, or has a reset that is not
-     * the first operation on its qubit, false otherwise.
-     */
+    // Check dependencies on the measured wires. A caller choosing a terminal
+    // sampler for a particular backend should use HasOpsAfterMeasurementsOn
+    // with its policy, since pruning can also constrain independent wires.
     bool HasOpsAfterMeasurements(bool exactChannels = false) const
     {
+        return HasOpsAfterMeasurementsOn({exactChannels, false});
+    }
+
+    bool HasOpsAfterMeasurementsOn(Simulators::ShotPrefixPolicy policy) const
+    {
         size_t measuredWidth;
-        return HasOpsAfterMeasurementsWithWidth(exactChannels, measuredWidth);
+        return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, measuredWidth, policy.contiguous);
     }
 
     // As HasOpsAfterMeasurements, and report the number of distinct measured
     // qubits when all measurements can be sampled together. Early exits for
     // dynamic circuits leave the width zero. A separate name keeps
     // &Circuit::HasOpsAfterMeasurements unambiguous for callers that bind it.
-    bool HasOpsAfterMeasurementsWithWidth(bool exactChannels, size_t &measuredWidth) const
+    bool HasOpsAfterMeasurementsWithWidth(bool exactChannels, size_t &measuredWidth, bool contiguousPrefix = false) const
     {
-        return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, exactChannels, measuredWidth);
+        return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, exactChannels, measuredWidth, contiguousPrefix);
     }
 
     // As HasOpsAfterMeasurements, saying how channels count.
-    bool HasOpsAfterMeasurementsWith(ChannelDraws draws, bool exactChannels) const
+    bool HasOpsAfterMeasurementsWith(ChannelDraws draws, bool exactChannels, bool contiguousPrefix = false) const
     {
         size_t measuredWidth;
-        return HasOpsAfterMeasurementsDrawing(draws, exactChannels, measuredWidth);
+        return HasOpsAfterMeasurementsDrawing(draws, exactChannels, measuredWidth, contiguousPrefix);
     }
 
-    bool HasOpsAfterMeasurementsDrawing(ChannelDraws draws, bool exactChannels, size_t &measuredWidth) const
+    bool HasOpsAfterMeasurementsDrawing(ChannelDraws draws, bool exactChannels, size_t &measuredWidth, bool contiguousPrefix = false) const
     {
         measuredWidth = 0;
         std::unordered_set<Types::qubit_t> measuredQubits;
         std::unordered_set<Types::qubit_t> affectedQubits;
         std::unordered_set<Types::qubit_t> resetQubits;
+        bool sawMeasurement = false;
 
         for (const auto &op : operations)
         {
+            // A terminal batch can skip collapse only when no later operation
+            // must run on the collapsed (and renormalized) state.
+            if (contiguousPrefix && sawMeasurement && op->GetType() != OperationType::kMeasurement)
+                return true;
             // Deterministic nested circuits execute as one prefix operation. Keep
             // composites with classical results opaque to terminal extraction.
             if (op->GetType() == OperationType::kComposite &&
@@ -2274,6 +2275,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             if (op->GetType() == OperationType::kMeasurement)
             {
+                sawMeasurement = true;
                 for (const auto qbit : qubits)
                     if (resetQubits.find(qbit) != resetQubits.end()) // there is a reset on this qubit already and
                                                                      // it's not at the beginning of the circuit
@@ -2340,6 +2342,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return !resetQubits.empty();
     }
 
+    // Plan the same prefix as an execution on the backend with this policy.
+    std::vector<bool> PlanNonMeasurements(OperationState &state, Simulators::ShotPrefixPolicy policy) const
+    {
+        return ExecuteNonMeasurements(nullptr, state, nullptr, policy.exactChannels, RequiresContiguousPrefix(policy));
+    }
+
     /**
      * @brief Execute the non-measurements operations from the circuit on the
      * given simulator.
@@ -2350,15 +2358,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @param state The classical state containing the classical bits.
      * @param curMaxBondDim Pointer to the current maximum bond dimension, if
      * applicable.
+     * @param contiguousPrefix Stop at the first deferred operation during a dry run.
      * @return A bool vector with the executed operations marked.
      * @sa ISimulator
      * @sa OperationState
      */
     std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr,
-                                             bool exactChannels = false) const
+                                             bool exactChannels = false, bool contiguousPrefix = false) const
     {
         if (sim)
-            exactChannels = sim->SupportsQuantumChannels();
+        {
+            const auto policy = sim->GetShotPrefixPolicy();
+            exactChannels = policy.exactChannels;
+            contiguousPrefix = RequiresContiguousPrefix(policy);
+        }
         // With gate fusion, the look-ahead routing of an MPS/MPO follows the
         // simulator's upcoming operations in order, and stepping over an operation
         // that is deferred to the shots breaks that plan for the rest of this
@@ -2369,7 +2382,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         if (planExecutionOrder)
         {
             OperationState dryState(state);
-            mask = ExecuteNonMeasurements(nullptr, dryState, nullptr, exactChannels);
+            mask = ExecuteNonMeasurements(nullptr, dryState, nullptr, exactChannels, contiguousPrefix);
             planExecutionOrder = std::find(mask.begin(), mask.end(), true) != mask.end() && std::find(mask.begin(), mask.end(), false) != mask.end();
         }
         if (planExecutionOrder)
@@ -2493,6 +2506,13 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             if (!executed)
             {
+                if (contiguousPrefix)
+                {
+                    // Earlier operations all ran. Replay this entire suffix
+                    // in its original order on each trajectory.
+                    executedOps.resize(operations.size() - i, false);
+                    break;
+                }
                 // Every deferred operation already recorded its wires in measuredQubits.
                 executionStopped = true;
                 if (sim && sim->IsGateFusionEnabled())
@@ -3229,6 +3249,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     }
 
   private:
+    bool RequiresContiguousPrefix(Simulators::ShotPrefixPolicy policy) const
+    {
+        return policy.contiguous || (policy.contiguousWithDrawnChannels && HasDrawnChannels());
+    }
+
     std::vector<std::shared_ptr<Circuit<Time>>> BuildLayers(bool multiQubitLayers, bool clone) const
     {
         std::vector<std::shared_ptr<Circuit<Time>>> layers{std::make_shared<Circuit<Time>>()};

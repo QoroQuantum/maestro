@@ -222,12 +222,12 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     return false;
 }
 
-inline SimulatorConfig ParseConfig(const json::object &simulator)
+inline SimulatorConfig ParseConfig(const json::object &simulator, const char *defaultMethod = "statevector")
 {
     Keys(simulator, {"backend", "method", "selection", "options", "distribution", "candidates"});
     SimulatorConfig config;
     const auto backend = Backends().find(String(simulator, "backend", "qcsim"));
-    std::string methodName = String(simulator, "method", "statevector");
+    std::string methodName = String(simulator, "method", defaultMethod);
     if (methodName == "mps")
         methodName = "matrix_product_state";
     if (methodName == "mpo")

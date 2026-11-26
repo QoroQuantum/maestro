@@ -8,6 +8,7 @@
 #include "Estimation.h"
 #include "IncrementalEvolution.h"
 #include "NoisyEstimation.h"
+#include "PathIntegralStorage.h"
 #include "ReferenceFrameSampler.h"
 #include "SampleRecords.h"
 #include "Sampling.h"
@@ -44,6 +45,7 @@ const std::set<std::string> operations{"execute",
                                        "probabilities",
                                        "amplitudes",
                                        "state_probability",
+                                       "noisy_prob",
                                        "mirror_fidelity",
                                        "inner_product",
                                        "noisy_fidelity",
@@ -577,7 +579,7 @@ CircuitPtr SharedRuntimeCircuit(const noise::NoiseInjectionPlan &plan, const Noi
     CircuitPtr shared;
     if (!noise.enabled || noise.mode == "analytical" || noise.exact || !noise.policy.runtime_channels)
         return shared;
-    const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    const auto layer = noise.Layer();
     ResolveRuntimeNoise(layer, plan, rng, shared, first);
     return shared;
 }
@@ -627,7 +629,7 @@ bool HasMeasurementReadout(const CircuitPtr &circuit)
 //  - exactly, on a mixed-state backend or the propagator, unless trajectories
 //    were requested;
 //  - as one branch drawn from the state each time the circuit runs, on a
-//    backend that samples channels (statevector, matrix product state), where
+//    backend that samples channels (statevector, matrix product state, QCSim path integral), where
 //    the operation runs the circuit once per shot or realization
 //    (`trajectories`: execute, estimate, noisy_fidelity, checkpoint suffixes)
 //    or once in all, for a query of one state, which then returns the state of
@@ -647,8 +649,8 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         if (const char *refusal = SampledPrefixRefusal(*circuit, config))
             Supported(false, refusal);
         Supported(!circuit->HasQuantumChannels() || ExactNoiseApplies(config) || SamplesQuantumChannels(config),
-                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the qcsim pauli_propagator, which apply them "
-                  "exactly, or statevector or matrix_product_state for channels with one branch");
+                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the QCSim pauli_propagator, which apply them "
+                  "exactly, or a channel-sampling backend for channels with one branch");
         return;
     }
     const bool sampled = noise.enabled && !noise.exact && noise.mode != "analytical";
@@ -674,7 +676,7 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
         Supported(noise::has_sampled_form(channel->GetChannel()),
                   "Channel instructions that need the state (amplitude damping, relaxation with T2 > T1, Kraus maps) require density_matrix, "
-                  "MPO or the qcsim pauli_propagator, with exact evaluation, or statevector or matrix_product_state, which sample them in "
+                  "MPO or the QCSim pauli_propagator, with exact evaluation, or statevector, matrix_product_state or QCSim path_integral, which sample them in "
                   "execute, estimate, noisy_fidelity, checkpoint suffixes and queries of one state; other backends sample only channels whose "
                   "branches need no state");
         Supported(sampled, "Channel instructions on this backend require a noise block with trajectory evaluation; "
@@ -1087,7 +1089,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     const std::map<std::string, std::set<std::string>> operationFields{
         {"observables", {"estimate", "incremental_evolve", "diagnostics", "mirror_fidelity", "adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
         {"basis_states", {"statevector", "amplitudes", "probabilities"}},
-        {"target_state", {"state_probability"}},
+        {"target_state", {"state_probability", "noisy_prob"}},
         {"other_circuit", {"inner_product", "density_matrix_overlap"}},
         {"target_statevector", {"fidelity_with_statevector"}},
         {"step_circuit", {"incremental_evolve"}},
@@ -1130,7 +1132,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             }
         return {{"schema_version", SchemaVersion}, {"operation", operation}, {"results", results}};
     }
-    auto config = ParseConfig(Sub(request, "simulator"));
+    const bool noisyProbability = operation == "noisy_prob";
+    auto config = ParseConfig(Sub(request, "simulator"), noisyProbability ? "path_integral" : "statevector");
+    const bool pathIntegral = config.simulator_type == Backend::kQCSim && config.simulation_type == Method::kPathIntegral;
+    Supported(!noisyProbability || (pathIntegral && config.fixed_backend), "noisy_prob requires the fixed QCSim path_integral method.");
     const auto &execution = Sub(request, "execution");
     Keys(execution, {"shots", "seed", "return_samples"});
     Require(!execution.contains("shots") || operation == "execute" || operation == "checkpoint_batch", "execution.shots does not apply to " + operation);
@@ -1158,7 +1163,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             Require(UInt(q) < input.qubits, "Global qubit exceeds register");
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
-    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits, noisyProbability);
     if (noise.enabled && !noise.automatic && !noise.exact)
         config.terminal_channel_policy = "trajectories";
     // Automatic evaluation follows the circuit too. A checkpoint's noise acts
@@ -1189,7 +1194,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // a reset on any pure-state backend), which the metadata reports.
     const bool oneState = operation == "statevector" || operation == "amplitudes" || operation == "probabilities" || operation == "state_probability";
     CheckChannels(input.circuit, config, noise,
-                  operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || operation == "incremental_evolve" || oneState,
+                  operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || operation == "incremental_evolve" || noisyProbability ||
+                      oneState,
                   operation == "checkpoint_batch");
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
@@ -1203,11 +1209,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     Supported(!noise.enabled || config.fixed_backend, "Noise requires fixed backend selection");
     Supported(noise.mode != "analytical" || operation == "estimate", "Analytical noise is an estimator approximation");
     Supported(!noise.prefix || operation == "checkpoint_batch", "noise.prefix applies to checkpoint_batch prefixes only");
-    Supported(!noise.model.has_readout_error() || operation == "execute" || operation == "checkpoint_batch",
-              "Readout noise applies to measurement counts only");
-    if (noise.enabled)
+    Supported(!noise.model.has_readout_error() || operation == "execute" || operation == "checkpoint_batch" || noisyProbability,
+              "Readout noise requires measurement counts or noisy_prob");
+    if (noise.enabled && !noisyProbability)
         ValidateNoisyCircuit(input.circuit);
-    auto circuit = unitaryPreparation || operation == "execute" || operation == "checkpoint_batch" || operation == "incremental_evolve" ? input.circuit
+    auto circuit = unitaryPreparation || operation == "execute" || operation == "checkpoint_batch" || operation == "incremental_evolve" || noisyProbability
+                       ? input.circuit
                    : operation == "estimate"       ? input.circuit->RemoveEndMeasurements()
                    : operation == "noisy_fidelity" ? NoisyFidelityCircuit(input.circuit)
                                                    : Unmeasured(input.circuit);
@@ -1219,8 +1226,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                                                         : Circuits::Circuit<double>::ChannelDraws::kAll);
     // Runs again if a checkpoint's suffixes change the automatic evaluation.
     const auto resolveNoisePolicy = [&] {
-        const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
-        const bool estimator = operation == "estimate" || operation == "noisy_fidelity";
+        const auto layer = noise.Layer();
+        const bool estimator = operation == "estimate" || operation == "noisy_fidelity" || noisyProbability;
         noise.policy =
             ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact);
         noise.realizations = noise.mode == "analytical" ? 1 : noise.policy.realizations;
@@ -1301,7 +1308,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         {
             // The saved prefix evolves once, so noise applied to it must be
             // deterministic there: exact channels without sampled layers.
-            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            const auto layer = noise.Layer();
             const auto prefixPolicy = ResolveNoiseRealizations(std::nullopt, noise.model, config, layer, 64, circuit, false, noise.exact);
             Supported(noise.exact && !prefixPolicy.stochastic_noise,
                       "noise.prefix requires deterministic exact evaluation: density_matrix, matrix_product_operator or the qcsim "
@@ -1337,7 +1344,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             CheckStabilizerGates(other.circuit, config, false);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
     }
-    Require(!noise.enabled || noise.channel_count > 0 || circuitChannels,
+    Require(!noise.enabled || noise.channel_count > 0 || circuitChannels || noisyProbability,
             "noise.channels may be empty only when the circuit's channel instructions supply the noise");
     const bool amplitudes = operation == "statevector" || operation == "amplitudes";
     const bool query = amplitudes || operation == "probabilities" || operation == "state_probability" || operation == "diagnostics";
@@ -1356,7 +1363,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
                   ((query || MixedStateQuery(operation)) && noise.exact && noise.realizations == 1) || operation == "noisy_fidelity" ||
-                  operation == "checkpoint_batch",
+                  operation == "checkpoint_batch" || noisyProbability,
               "This operation requires a single exact noisy state or an explicit "
               "batch");
     // <psi|rho|psi> for every noise layer: sampled Pauli/T1/coherent
@@ -1401,16 +1408,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     Types::qubits_vector moveQubits;
     Types::qubits_vector expectationQubits;
     std::vector<Eigen::MatrixXcd> expectationOperators;
-    if (operation == "state_probability")
+    if (operation == "state_probability" || noisyProbability)
     {
-        Supported(nativeMpo || input.qubits < 63, "Wide state probability requires CPU or GPU MPO");
-        const auto state = String(Field(request, "target_state"));
-        Require(state.size() == input.qubits && state.find_first_not_of("01") == std::string::npos,
-                "target_state must be a q0-first bitstring of num_qubits characters");
+        Supported(nativeMpo || pathIntegral || input.qubits < 63, "Wide state probability requires CPU or GPU MPO or QCSim path_integral");
+        Supported(!pathIntegral || input.qubits <= QC::PathIntegral::FastVectorBool::MaxWords * 64, "Path integral targets support at most 1024 qubits");
         targetBits = readBits("target_state");
-        for (size_t q = 0; q < std::min(size_t{64}, state.size()); ++q)
-            if (state[q] == '1')
-                target |= uint64_t{1} << q;
+        if (noisyProbability && validate)
+            ValidateNoisyStateProbability(circuit, targetBits);
+        else if (!nativeMpo && !pathIntegral)
+            for (size_t q = 0; q < targetBits.size(); ++q)
+                if (targetBits[q])
+                    target |= uint64_t{1} << q;
     }
     Eigen::VectorXcd targetVector;
     if (operation == "fidelity_with_statevector")
@@ -1605,6 +1613,38 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
         noise.seed = static_cast<uint32_t>(*config.seed);
     }
+    if (noisyProbability)
+    {
+        const auto estimate = NoisyStateProbability(circuit, targetBits, noise.model, noise.requested_realizations, config,
+                                                    noise.enabled ? std::optional<uint64_t>(noise.seed) : std::nullopt, noise.Layer());
+        noise.policy = estimate.policy;
+        SamplingResult executionResult;
+        executionResult.simulator = config.simulator_type;
+        executionResult.method = config.simulation_type;
+        auto metadata = ReductionMetadata(executionResult, config);
+        metadata["stochastic_execution"] = estimate.policy.stochastic_execution;
+        metadata["estimate_evaluation"] = estimate.EstimateEvaluation();
+        json::object result{{"schema_version", SchemaVersion},
+                            {"operation", operation},
+                            {"num_qubits", input.qubits},
+                            {"num_clbits", input.clbits},
+                            {"target_state", Field(request, "target_state")},
+                            {"probability", estimate.probability},
+                            {"std_error", estimate.std_error ? json::value(*estimate.std_error) : json::value(nullptr)},
+                            {"noise_realizations", estimate.realizations},
+                            {"realizations_evaluated", estimate.realizations_evaluated},
+                            {"has_readout_error", noise.model.has_readout_error()},
+                            {"seed", *config.seed},
+                            {"time_taken", estimate.time_taken},
+                            {"execution_metadata", std::move(metadata)}};
+        if (noise.enabled)
+        {
+            if (noise.model.has_readout_error())
+                AddApproximation(noise, "first_order_readout");
+            result["noise"] = NoiseMetadata(noise, estimate.realizations);
+        }
+        return result;
+    }
     if (operation == "execute" && return_samples)
     {
         // The row samplers shared with Python and C++ (SampleRecords.h).
@@ -1614,7 +1654,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (noise.enabled)
         {
             NoisyExecutionOptions options;
-            options.layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            options.layer = noise.Layer();
             options.rows = true;
             options.exact_channels = noise.exact;
             options.allow_terminal_channels = noise.automatic;
@@ -1791,7 +1831,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             terminal = PrepareTerminalExpectation(circuit, observables, config);
         else if (noise.automatic && !noise.exact && noise.mode != "analytical")
         {
-            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            const auto layer = noise.Layer();
             terminal = PrepareTerminalNoiseExpectation(plan, layer, runtime_circuit, observables, config);
         }
         const bool stochastic_prefix = terminal ? terminal->RequiresTrajectories() : stochastic_estimation;
@@ -2087,7 +2127,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             terminal_counts = SampleTerminalChannels(circuit, config, shots, false);
         else if (noise.automatic && !noise.exact)
         {
-            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            const auto layer = noise.Layer();
             terminal_counts = SampleNoisyTerminalChannels(plan, runtime_circuit, layer, config, shots, realizations, false, noise.seed);
         }
         if (terminal_counts)
@@ -2243,7 +2283,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     {
         Prepare(context, Inject(circuit, noise, rng), input.clbits);
         if (operation == "state_probability")
-            result["probability"] = nativeMpo ? simulator->ProbabilityBits(targetBits) : simulator->Probability(target);
+            result["probability"] = nativeMpo || pathIntegral ? simulator->ProbabilityBits(targetBits) : simulator->Probability(target);
         else if (operation == "diagnostics")
         {
             for (const auto &op : localOperators)

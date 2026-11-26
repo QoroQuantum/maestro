@@ -17,6 +17,7 @@ MIXED = [
 
 @pytest.mark.parametrize("method, sampled", [
     (maestro.SimulationType.Statevector, True),
+    (maestro.SimulationType.PathIntegral, True),
     (maestro.SimulationType.DensityMatrix, False),
 ])
 def test_incremental_channel_trajectory_metadata(method, sampled):

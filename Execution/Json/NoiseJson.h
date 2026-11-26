@@ -79,6 +79,11 @@ struct NoiseConfig
     size_t channel_count = 0;
     json::array approximations;
     std::string thermal_approximation_warning;
+
+    NoiseLayer Layer() const
+    {
+        return NoiseLayerForMode(mode).value_or(NoiseLayer::kCombined);
+    }
 };
 
 // The warning for the sampled T2 clamp on these qubits.
@@ -93,7 +98,7 @@ inline std::string ThermalClampWarning(const std::vector<int> &qubits)
         message << qubits[i];
     }
     message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
-               "statevector or the matrix product state, which sample the channel itself, "
+               "statevector, matrix product state or QCSim path integral, which sample the channel itself, "
                "to preserve the calibrated T2.";
     return message.str();
 }
@@ -109,8 +114,8 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     // is clamped, drawn as a reset or refused there.
     const bool runtime = InjectsRuntimeChannels(config, result.exact);
     Supported(result.exact || runtime || !result.model.has_additional_quantum_channels(),
-              "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the qcsim pauli_propagator) or a "
-              "backend that samples channels from its state (statevector, matrix_product_state)");
+              "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the QCSim pauli_propagator) or a "
+              "backend that samples channels from its state (statevector, matrix_product_state, QCSim path_integral)");
     // Match Python's sampled thermal policy without altering calibrated channels
     // used by exact density-matrix/MPO evolution.
     if (!result.exact && !runtime)
@@ -124,8 +129,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     }
     if (!result.exact && !runtime && result.model.has_t1())
         result.approximations.emplace_back("sampled_T1_reset");
-    const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
-    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);
+    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, result.Layer(), 64, {}, false, result.exact);
     result.realizations = result.mode == "analytical" ? 1 : result.policy.realizations;
     if (result.policy.stochastic_noise && result.mode != "analytical")
         result.approximations.emplace_back("finite_noise_realizations");
@@ -141,7 +145,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
         result.approximations.emplace_back("extended_stabilizer_pruning");
 }
 
-inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits)
+inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits, bool noisyProbability = false)
 {
     NoiseConfig result;
     if (object.empty())
@@ -150,13 +154,14 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     result.enabled = true;
     result.prefix = Boolean(object, "prefix", false);
     result.mode = String(object, "mode", "combined");
-    Require(result.mode == "combined" || result.mode == "pauli" || result.mode == "coherent" || result.mode == "analytical", "Unknown noise mode");
+    Require(NoiseLayerForMode(result.mode).has_value() || result.mode == "analytical", "Unknown noise mode");
+    Supported(!noisyProbability || result.mode != "analytical", "noisy_prob mode must be combined, pauli or coherent.");
     const auto evaluation = String(object, "evaluation", "auto");
     Require(evaluation == "auto" || evaluation == "exact" || evaluation == "trajectories", "Unknown noise evaluation");
     // "auto" is settled once the channels are known: see InjectsExactChannels.
     result.automatic = evaluation == "auto";
     result.exact = evaluation == "exact";
-    Supported(!result.exact || ExactNoiseApplies(config), "Exact noise requires density_matrix, matrix_product_operator or the qcsim pauli_propagator");
+    Supported(!result.exact || ExactNoiseApplies(config), "Exact noise requires density_matrix, matrix_product_operator or the QCSim pauli_propagator");
     if (const auto *value = object.if_contains("realizations"); value && !value->is_null())
     {
         if (value->is_string())
@@ -338,12 +343,15 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
                     }
                 }
             }
-        if (result.mode == "pauli" || result.mode == "analytical")
+        if (!noisyProbability && (result.mode == "pauli" || result.mode == "analytical"))
             Supported(kind == "pauli" || kind == "depolarizing" || kind == "dephasing" || kind == "bit_flip" || (kind == "readout" && result.mode == "pauli"),
                       "This noise mode does not model the selected channel; use combined");
-        if (result.mode == "coherent")
+        if (!noisyProbability && result.mode == "coherent")
             Supported(kind.find("coherent_") == 0, "coherent mode accepts only coherent channels");
     }
+    if (noisyProbability)
+        if (const auto *error = NoisyProbabilityLayerError(result.model, result.Layer()))
+            throw Error("unsupported_capability", error);
     result.model.EnsureNoT1ThermalStack();
     if (result.automatic)
         result.exact = Mixed(config) || InjectsExactChannels(config, result.model);

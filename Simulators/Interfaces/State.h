@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -161,11 +162,41 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
     if (type == SimulatorType::kCompositeQiskitAer)
         return method == SimulationType::kStatevector;
 #endif
-    // QCSim samples them on the statevector and on the matrix product state.
-    return type == SimulatorType::kQCSim && (method == SimulationType::kStatevector || method == SimulationType::kMatrixProductState);
+    return type == SimulatorType::kQCSim &&
+           (method == SimulationType::kStatevector || method == SimulationType::kMatrixProductState || method == SimulationType::kPathIntegral);
 }
 
 class IState;
+
+// A shot planner can run before the selected simulator has allocated a register.
+struct ShotPrefixPolicy
+{
+    bool exactChannels;
+    bool contiguous;
+    bool contiguousWithDrawnChannels = false;
+
+    // QCSim's native default. At this tolerance measurement-only circuits can
+    // share independent gates across shots. Coarser pruning preserves the
+    // order of every collapse. Sampled channels retain their ordering guard
+    // whenever pruning is enabled.
+    static constexpr double kDefaultPathIntegralThreshold = 1e-15;
+
+    static ShotPrefixPolicy ForPathIntegral(double threshold)
+    {
+        return {false, threshold > kDefaultPathIntegralThreshold, threshold > 0.};
+    }
+
+    static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
+                                              std::optional<double> pathIntegralThreshold = std::nullopt)
+    {
+        if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
+            return {EvolvesExactQuantumChannels(type, method), false};
+        if (pathIntegralThreshold)
+            return ForPathIntegral(*pathIntegralThreshold);
+        const auto value = options.find("path_integral_threshold");
+        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second));
+    }
+};
 
 // The probability of every basis state, also where AllProbabilities is not defined (defined below).
 inline std::vector<double> BasisProbabilities(IState &state);
@@ -648,9 +679,8 @@ class IState
      * @brief Returns whether this state retains channel ensembles directly.
      *
      * This is true for QCSim density-matrix/MPO states and Aer density-matrix
-     * states. MPO results remain subject to configured bond truncation. A
-     * statevector or MPS can sample Kraus trajectories, but does not retain the
-     * resulting ensemble in a single state.
+     * states. MPO results remain subject to configured bond truncation.
+     * Statevectors, MPS and the path integral can sample Kraus trajectories.
      */
     virtual bool SupportsQuantumChannels() const
     {
@@ -670,12 +700,20 @@ class IState
         return false;
     }
 
+    // A gate on a disjoint wire may still depend on a preceding collapse or
+    // conditional gate when the simulator prunes the whole state per operation.
+    virtual ShotPrefixPolicy GetShotPrefixPolicy() const
+    {
+        return {SupportsQuantumChannels(), false};
+    }
+
     /**
      * @brief Applies a local CPTP quantum channel to one or two qubits.
      *
      * The order of target qubits has the same matrix convention as
      * ApplyGenericTwoQubitGate: targets[0] is the least-significant local basis
-     * bit. Backends that do not represent mixed states exactly throw.
+     * bit. The backend applies the ensemble map or samples one trajectory
+     * according to its channel capabilities.
      */
     virtual void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel)
     {
@@ -750,16 +788,17 @@ class IState
         throw std::runtime_error("This simulator does not apply superoperators");
     }
 
-    /** MPO extensions: bit vectors are q0-first; matrices use logical basis
-     * order. Element queries return the raw operator. Dense output and complex
-     * Pauli expectations are trace-normalized unless normalized is false.
-     * ApplyOperator computes A rho A^dagger; normalize also restores unit trace.
-     */
+    /** Probability of a full q0-first bitstring, including registers wider than a machine word. */
     virtual double ProbabilityBits(const std::vector<bool> &)
     {
         throw std::runtime_error("This simulator does not support ProbabilityBits");
     }
 
+    /** MPO extensions: bit vectors are q0-first; matrices use logical basis
+     * order. Element queries return the raw operator. Dense output and complex
+     * Pauli expectations are trace-normalized unless normalized is false.
+     * ApplyOperator computes A rho A^dagger; normalize also restores unit trace.
+     */
     virtual std::complex<double> DensityMatrixElementBits(const std::vector<bool> &, const std::vector<bool> &) const
     {
         throw std::runtime_error("This simulator does not support DensityMatrixElementBits");

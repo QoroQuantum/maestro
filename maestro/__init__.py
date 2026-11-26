@@ -224,6 +224,7 @@ _NOISE_SEED_FUNCTIONS = (
     "coherent_estimate",
     "full_noise_estimate",
     "noisy_fidelity",
+    "noisy_prob",
 )
 
 for _fn_name in _NOISE_SEED_FUNCTIONS:
