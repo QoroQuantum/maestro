@@ -548,7 +548,7 @@ void ChannelsOnAHandle()
         Check(!MaestroApplyKrausChannel(sim.get(), &q, 3, damping, 2) && !MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 0),
               "A malformed channel call was accepted");
     }
-    for (auto method : {Method::kStatevector, Method::kMatrixProductState})
+    for (auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kPathIntegral})
     {
         size_t kept = 0;
         for (unsigned seed = 1; seed <= 60; ++seed)
@@ -564,6 +564,21 @@ void ChannelsOnAHandle()
         }
         Check(kept > 29 && kept < 55, "The branches drawn through the C interface do not follow the channel");
     }
+    auto wide = Make(Method::kPathIntegral, 67);
+    const unsigned long high = 66;
+    wide->ApplyX(high);
+    std::vector<unsigned char> bits(67);
+    bits[high] = 1;
+    double probability = -1.;
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C path integral probability rejected a wide label");
+    Near(probability, 1.);
+    const double reset[16] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+    Check(MaestroApplyKrausChannel(wide.get(), &high, 1, reset, 2), "C Kraus channel rejected qubit 66");
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C wide label lost after a Kraus channel");
+    Near(probability, 0.);
+    bits[high] = 0;
+    Check(MaestroProbabilityBits(wide.get(), bits.data(), bits.size(), &probability), "C wide label rejected the reset state");
+    Near(probability, 1.);
     auto tensors = Make(Method::kTensorNetwork, 1);
     Check(!MaestroSupportsQuantumChannels(tensors.get()) && !MaestroSamplesQuantumChannels(tensors.get()) &&
               !MaestroApplyKrausChannel(tensors.get(), &q, 1, damping, 2),

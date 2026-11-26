@@ -117,7 +117,7 @@ void bind_simulator(nb::module_ &m)
         .def("SupportsQuantumChannels", &Simulators::ISimulator::SupportsQuantumChannels,
              "Whether the simulator applies a channel exactly, to the ensemble it holds (density matrix, MPO, Pauli propagator).")
         .def("SamplesQuantumChannels", &Simulators::ISimulator::SamplesQuantumChannels,
-             "Whether the simulator applies a channel as one branch drawn from its state (statevector, matrix product state).")
+             "Whether the simulator applies a channel as one branch drawn from its state (statevector, matrix product state, QCSim path integral).")
         .def("Probability", &Simulators::ISimulator::Probability, "outcome"_a)
         .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
         .def("AllProbabilities", &Simulators::ISimulator::AllProbabilities)

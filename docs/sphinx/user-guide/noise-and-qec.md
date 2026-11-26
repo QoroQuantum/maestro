@@ -45,7 +45,7 @@ for more physical detail:
 | `full_noise_estimate` | N noisy runs | Every configured noise layer | Device-level expectation values |
 | `full_noise_execute` | N noisy runs | Every configured noise layer, plus shot noise | Device-level sampling |
 | `noisy_fidelity` | N inner products | Every noise layer | Fidelity to the ideal state |
-| `qc.noisy_prob` | Path integral | Readout error correction | Single-outcome probabilities |
+| `qc.noisy_prob` | Path integral | Sampled circuit and model noise, first-order readout correction | Single-outcome probabilities |
 
 N is the effective `noise_realizations`. Its default, `None`, selects one
 realization for deterministic density-matrix/MPO evolution, and for Pauli-type
@@ -55,7 +55,7 @@ positive count is honored (execution caps it at `shots`). Noisy estimates also
 compute an ideal baseline. {doc}`/examples/noise-modes` compares the analytical
 and Monte Carlo modes on one circuit.
 
-The statevector and the matrix product state can draw state-dependent noise as
+QCSim path integral and channel-sampling statevector and matrix product state methods can draw state-dependent noise as
 each shot runs. For independent runtime noise, `noise_realizations` reports the
 shot count. QCSim and Qiskit Aer statevectors, including their composite
 simulators, can also average a final channel layer when estimating observables
@@ -215,11 +215,11 @@ print(thermal.has_thermal_relaxation())
 ```
 
 T2 must be at most 2·T1. Density-matrix and supported MPO backends apply the
-exact thermal channel. The statevector and the matrix product state sample it
+exact thermal channel. QCSim path integral and channel-sampling statevector and matrix product state methods sample it
 from their state, one branch per shot, and keep the calibrated T2 (see
 {ref}`py_noise_sampled_channels`).
 
-The other pure-state methods (tensor network, path integral, stabilizer,
+The other pure-state methods (tensor network, stabilizer,
 extended stabilizer, and the GPU and QuEST backends) run realizations made of
 gates and resets only. For T2 ≤ T1 that is exact: the channel is a mixture of
 nothing, a phase flip and a reset to the thermal state. They approximate
@@ -260,12 +260,11 @@ for method in ["DensityMatrix", "MatrixProductOperator"]:
 from a dephasing time.
 
 (py_noise_sampled_channels)=
-### Sampled from the state: statevector and matrix product state
+### Sampled channels on pure-state backends
 
-A pure state holds no ensemble, so the statevector and the matrix product state
-take a channel as one sampled branch, a quantum trajectory. For every channel a
+A channel-sampling backend takes a channel as one sampled branch, a quantum trajectory. For every channel a
 shot applies one Kraus operator, chosen with the probability its state gives
-it, and the shots average to the channel. Nothing is approximated: `set_t1` is
+it, and the shots average to the channel. In this mode `set_t1` is
 amplitude damping, thermal and idle relaxation keep their T2, and the model
 above runs as it is, with no extra qubit:
 
@@ -274,14 +273,14 @@ measured = QuantumCircuit()
 measured.x(0)
 measured.cx(0, 1)
 measured.measure_all()
-for method in ["Statevector", "MatrixProductState"]:
+for method in ["Statevector", "MatrixProductState", "PathIntegral"]:
     config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, method), seed=7)
     result = measured.full_noise_execute(exact, config=config, shots=2000, noise_seed=11)
     print(method, result["noise_evaluation"], result["noise_realizations"], sorted(result["counts"].items()))
 ```
 
 This holds for the QCSim and Qiskit Aer statevector and matrix product state,
-and for the composite statevector, in the execute and estimate functions,
+the QCSim path integral and the composite statevector, in the execute and estimate functions,
 `noisy_fidelity`, checkpoint suffixes and native requests.
 
 - **Every shot is a trajectory.** The execute functions and native `execute`
@@ -420,8 +419,8 @@ for method in ["DensityMatrix", "Statevector"]:
     print(method, sorted(noisy_bell.execute(config=config, shots=2000)["counts"].items()))
 ```
 
-A mixed-state method applies each instruction exactly. The statevector and the
-matrix product state can draw a branch of it in each shot, in a plain `execute`
+A mixed-state method applies each instruction exactly. QCSim path integral and channel-sampling
+statevector and matrix product state methods can draw a branch of it in each shot, in a plain `execute`
 as under a noise model. Eligible final statevector measurements can use the
 joint-population sampler described above. The other pure-state methods need a noise function
 (`noisy_execute`, `full_noise_execute`), whose realizations draw the
@@ -520,7 +519,7 @@ checkpoint ends at a reset of a qubit already used, which may collapse a branch.
 such deterministic noise to a prefix (it raises `ValueError` otherwise); crosstalk
 spectators outside the register stay in `|0>` and only contribute a phase, as for
 suffixes. The prefix's own channel instructions follow the same rule: the
-statevector and the matrix product state would draw one branch of them for every
+channel-sampling methods would draw one branch of them for every
 suffix shot to share, so a prefix that holds channel instructions with a branch
 to draw raises `ValueError` there; put those channels in the suffixes. A channel
 with one branch is a gate and may stay in the prefix. Only suffixes are sampled,
@@ -579,6 +578,22 @@ print(bell.noisy_prob("11", readout)["probability"])  # 0.5 * (1 - 0.06)**2
 
 `noisy_prob` expands to first order in the readout error rates, so outcomes two
 flips away from `"11"`, such as `"00"`, don't contribute.
+
+For circuit channels or gate noise, `noisy_prob` averages the target probability
+over trajectories. For example, damping an excited qubit with probability 0.36
+gives a mean probability of 0.64 for `"1"`.
+
+```{code-cell} python
+decay = QuantumCircuit()
+decay.x(0)
+decay.channel([0], maestro.QuantumChannel.amplitude_damping(0.36))
+result = decay.noisy_prob("1", maestro.NoiseModel(), noise_realizations=1000, seed=7)
+print(result["probability"], result["std_error"])
+```
+
+`noise_realizations` gives the count. A single stochastic trajectory has no
+sample standard error and returns `None`. For coherent amplitudes, use
+`qc.prob` or `maestro.state_probability` with a unitary preparation.
 
 `set_all_readout_error(num_qubits, p_error)` sets a symmetric rate on every
 qubit.

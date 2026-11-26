@@ -377,15 +377,15 @@ void bind_api(nb::module_ &m)
         },
         "circuit"_a, "config"_a = SimulatorConfig{},
         "Get the full probability distribution after executing a circuit.\n\n"
-        "Every simulation type answers, the ones whose state has no statevector too (density matrix, matrix "
-        "product operator, tensor network, Pauli propagator, extended stabilizer): on those, channel "
-        "instructions give the distribution of the mixed state. End measurements are not executed.");
+        "A backend that evolves channels exactly returns the ensemble distribution. A backend that samples "
+        "channels, including QCSim PathIntegral, returns the probabilities of one trajectory. "
+        "End measurements are not executed.");
 
     m.def(
         "get_statevector", [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config) { return statevector_core(circuit, config); },
         "circuit"_a, "config"_a = SimulatorConfig{},
-        "Get the full statevector (complex amplitudes) after executing a "
-        "circuit.");
+        "Get the full statevector (complex amplitudes) after executing a circuit. "
+        "On a backend that samples channels, this is the state of one trajectory.");
 
     m.def(
         "mirror_fidelity",

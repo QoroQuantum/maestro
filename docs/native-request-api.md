@@ -118,8 +118,9 @@ The following array illustrates the native instructions and options.
 
 Kraus matrices are flat row-major arrays with real or complex entries, on one or
 two targets. A mixed-state backend and the QCSim `pauli_propagator` apply a
-channel instruction (`kraus`, `pauli_channel`, `channel`) exactly. `statevector`
-and `matrix_product_state` sample it from their state, one branch each time the
+channel instruction (`kraus`, `pauli_channel`, `channel`) exactly. The QCSim
+`path_integral` method and supported `statevector` and `matrix_product_state`
+methods sample it from their state, one branch each time the
 circuit runs: in `execute`, `estimate`, `noisy_fidelity` and `checkpoint_batch`
 suffixes, with or without a noise block. A query of one state (`statevector`,
 `amplitudes`, `probabilities`, `state_probability`) runs the circuit once, so
@@ -136,8 +137,8 @@ method (a mixed-state backend applies a reset exactly): every suffix shot then
 continues from that one outcome, which is not returned. Plain `execute` keeps
 its measurements: they are what it samples. A prefix's channel instructions run
 where the backend takes them: a mixed-state
-backend and the `pauli_propagator` apply them exactly; `statevector` and
-`matrix_product_state` take only a channel with one branch, which is a gate,
+backend and the `pauli_propagator` apply them exactly; channel-sampling methods
+take only a channel with one branch, which is a gate,
 since every suffix shot would share a branch drawn there (put channels that are
 sampled in the suffixes); the other methods take none. Under a `candidates` list and without a noise block, one candidate
 that holds channels is enough: the network tries its candidates in turn and
@@ -234,6 +235,7 @@ they cannot override the simulator or specify their own launch profiles.
 | `statevector`, `amplitudes` | optional `basis_states` | Pure-state amplitudes; these two names have the same output shape |
 | `probabilities` | optional `basis_states` | Selected or full basis probabilities |
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
+| `noisy_prob` | `target_state`, optional `noise` | Mean probability of a q0-first bitstring on QCSim `path_integral` (the default for this operation), with standard error |
 | `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
 | `density_matrix_overlap` | `other_circuit` | `Tr(rho sigma)` of two mixed-state preparations, as `overlap` |
@@ -270,12 +272,22 @@ A terminal measurement runs when a following step needs the bit it writes,
 after recording the preceding boundary. Unused terminal readout is discarded
 in every repetition. Mid-circuit measurements and classical feedback within a
 fragment execute in order. Channels act exactly on supporting mixed-state
-backends and draw one branch on statevector or MPS backends that sample them.
+backends and draw one branch on QCSim path integral and channel-sampling statevector or MPS backends.
 When the evolution can draw a branch, `execution_metadata` reports
 `stochastic_execution: true`, `measurement_trajectories: 1`, and
 `estimate_evaluation: "single_trajectory"`. Deterministic runs report
 `false`, `0`, and `"deterministic"`, respectively.
 The evolution takes explicit channel instructions and rejects a top-level noise model.
+
+`noisy_prob` averages the target probability across independent path integral trajectories.
+It accepts circuit channels and a noise model, with 100 realizations by default when sampling.
+`std_error` is the standard error of the mean, or `null` for a single stochastic realization.
+Readout error uses the first-order, single-bit-flip approximation of Python's `qc.noisy_prob`.
+With only readout noise or an ideal circuit, the query evaluates coherent endpoint probabilities directly.
+The same calculation is available in C++ as `MaestroExecution::NoisyStateProbability`
+from `Execution/NoisyEstimation.h`. On a live simulator, `ISimulator::ApplyQuantumChannel`
+and the C ABI's `MaestroApplyKrausChannel` draw one branch. Use `MaestroSamplesQuantumChannels`
+to discover this capability and `MaestroProbabilityBits` to read the resulting trajectory.
 
 Each `checkpoint_batch` suffix shot starts with the saved quantum state and
 the classical bits written by measurements that ran in the prefix. An end
@@ -622,7 +634,7 @@ for every approximate method; disable optimization when making such comparisons.
 realizations on pure-state methods. `exact` requires a mixed-state method or the
 QCSim `pauli_propagator`; `trajectories` runs sampled realizations.
 
-On `statevector` and `matrix_product_state` those are trajectories of the
+On channel-sampling `statevector`, `matrix_product_state` and QCSim `path_integral` those are trajectories of the
 channels themselves. A realization draws what needs no state (Pauli and
 depolarizing errors, relaxation with T2 <= T1) and keeps every other channel for
 the backend, which applies one of its Kraus operators with the probability the
@@ -703,9 +715,9 @@ reported as approximations. Analytical mode is estimator-only. Exact channels do
 not imply untruncated MPO evolution or remove stochastic coherent realizations.
 
 For thermal relaxation (including two-qubit gate and idle noise) with
-`T1 < T2 <= 2*T1`, sampled execution follows Python. `statevector` and
-`matrix_product_state` sample the channel and keep the calibrated T2. The other
-pure-state methods (tensor network, path integral, stabilizer, extended
+`T1 < T2 <= 2*T1`, sampled execution follows Python. QCSim `path_integral` and channel-sampling
+`statevector` and `matrix_product_state` methods keep the calibrated T2. The other
+pure-state methods (tensor network, stabilizer, extended
 stabilizer) use effective `T2 = T1` instead of rejecting the request. Results
 identify this approximation as
 `thermal_T2_clamped_to_T1` in `noise.approximations` when the request's noisy
@@ -1083,7 +1095,8 @@ and both Python extensions when upgrading (the generic state interface has new
 virtual methods).
 
 `execute` counts support registers wider than 64 qubits. `state_probability` accepts
-an arbitrary-width, q0-first `target_state` bitstring for CPU and GPU MPO. Integer basis
+a q0-first `target_state` bitstring for CPU and GPU MPO and for QCSim path integral
+(up to 1024 qubits). Integer basis
 queries retain their documented bounds; full state enumeration is exponential.
 `max_bond_dimension: 0` removes the MPO bond cap. The two
 `mpo_*_after_truncation` options now apply to GPU as well as CPU MPO.
@@ -1246,11 +1259,13 @@ catalog and request validation for feature negotiation. Python returns the
 version.
 
 `noise` describes the noise block: its `modes`, `evaluations`, the
-`exact_configurations` that apply channels exactly, how omitted, `null` or `"auto"`
+`exact_configurations` that apply channels exactly, the `sampled_channel_configurations`
+that draw a branch from the simulator state, how omitted, `null` or `"auto"`
 `realizations` resolve (`automatic`), the reported `metadata`, and
 `checkpoint_prefix` (the `prefix` field and its requirements). `estimate` lists the
 `evaluations` and the number of `dynamic_measurement_trajectories`. `noisy_fidelity`
 lists its modes and configurations, including the exact mixed-state ones.
+`noisy_prob` identifies its supported backend and readout approximation.
 `automatic_selection` states the rules for `candidates`, and `sampling_strategies`
 the `sampling_strategy` values results may report.
 

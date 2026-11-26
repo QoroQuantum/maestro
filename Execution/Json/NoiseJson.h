@@ -79,6 +79,11 @@ struct NoiseConfig
     size_t channel_count = 0;
     json::array approximations;
     std::string thermal_approximation_warning;
+
+    NoiseLayer Layer() const
+    {
+        return mode == "pauli" ? NoiseLayer::kPauli : mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    }
 };
 
 // The warning for the sampled T2 clamp on these qubits.
@@ -93,7 +98,7 @@ inline std::string ThermalClampWarning(const std::vector<int> &qubits)
         message << qubits[i];
     }
     message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
-               "statevector or the matrix product state, which sample the channel itself, "
+               "statevector, matrix product state or QCSim path integral, which sample the channel itself, "
                "to preserve the calibrated T2.";
     return message.str();
 }
@@ -110,7 +115,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     const bool runtime = InjectsRuntimeChannels(config, result.exact);
     Supported(result.exact || runtime || !result.model.has_additional_quantum_channels(),
               "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the qcsim pauli_propagator) or a "
-              "backend that samples channels from its state (statevector, matrix_product_state)");
+              "backend that samples channels from its state (statevector, matrix_product_state, qcsim path_integral)");
     // Match Python's sampled thermal policy without altering calibrated channels
     // used by exact density-matrix/MPO evolution.
     if (!result.exact && !runtime)
@@ -124,8 +129,7 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     }
     if (!result.exact && !runtime && result.model.has_t1())
         result.approximations.emplace_back("sampled_T1_reset");
-    const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
-    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);
+    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, result.Layer(), 64, {}, false, result.exact);
     result.realizations = result.mode == "analytical" ? 1 : result.policy.realizations;
     if (result.policy.stochastic_noise && result.mode != "analytical")
         result.approximations.emplace_back("finite_noise_realizations");

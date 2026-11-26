@@ -1,3 +1,4 @@
+#include "Execution/NoisyEstimation.h"
 #include "Simulators/PathIntegral/PathIntegralSimulator.h"
 #include "core.h"
 #include "module.h"
@@ -177,11 +178,8 @@ void SetAmplitudeCircuit(Simulators::PathIntegralSimulator &sim, const CircuitPt
         throw nb::value_error(error.c_str());
 }
 
-} // namespace
-
-nb::dict state_probability_core(const CircuitPtr &circuit, const std::string &target_state)
+std::vector<bool> TargetBits(const std::string &target_state)
 {
-    require_circuit(circuit);
     if (target_state.empty())
         throw nb::value_error("target_state must be a non-empty bitstring.");
 
@@ -192,6 +190,54 @@ nb::dict state_probability_core(const CircuitPtr &circuit, const std::string &ta
             throw nb::value_error("target_state must contain only '0' and '1' characters.");
         end_state[i] = target_state[i] == '1';
     }
+    return end_state;
+}
+
+constexpr char NoisyProbDoc[] = "Estimate the probability of a target bitstring (qubit zero first) using the path integral simulator.\n\n"
+                                "Gate noise and circuit channels are averaged over independent realizations. With only readout noise, the "
+                                "coherent probability is computed directly. Readout error includes the zero-flip and single-flip terms, "
+                                "with asymmetric rates supported. Supply readout error in noise_model. Measurements must be unconditional "
+                                "and terminal on their wires.\n\n"
+                                "noise_realizations defaults to 100 for quantum noise and one for coherent queries. noise_seed selects "
+                                "the random realizations and also seeds execution when config.seed is omitted. An optional QCSim "
+                                "PathIntegral config controls the simulation seed and path trimming. Returns probability, "
+                                "std_error (None for one stochastic realization), "
+                                "noise_realizations, target_state, time_taken and has_readout_error.";
+
+nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, const noise::NoiseModel &noise_model, std::optional<int> noise_realizations,
+                   std::optional<uint64_t> noise_seed, std::optional<SimulatorConfig> config)
+{
+    require_circuit(circuit);
+    require_realizations(noise_realizations);
+    const auto bits = TargetBits(target_state);
+    if (!config)
+    {
+        config.emplace();
+        config->simulation_type = Simulators::SimulationType::kPathIntegral;
+        config->fixed_backend = true;
+    }
+    MaestroExecution::NoisyProbabilityResult probability;
+    {
+        nb::gil_scoped_release release;
+        probability = MaestroExecution::NoisyStateProbability(circuit, bits, noise_model, noise_realizations, *config, noise_seed);
+    }
+    nb::dict result;
+    result["probability"] = probability.probability;
+    result["target_state"] = target_state;
+    result["time_taken"] = probability.time_taken;
+    result["has_readout_error"] = noise_model.has_readout_error();
+    result["noise_realizations"] = probability.realizations;
+    result["std_error"] = nb::cast(probability.std_error);
+    AddNoisePolicyMetadata(result, probability.policy);
+    return result;
+}
+
+} // namespace
+
+nb::dict state_probability_core(const CircuitPtr &circuit, const std::string &target_state)
+{
+    require_circuit(circuit);
+    const auto end_state = TargetBits(target_state);
 
     Simulators::PathIntegralSimulator sim;
     sim.SetStartZeroState(target_state.size());
@@ -347,7 +393,7 @@ void bind_circuit(nb::module_ &m)
             "ZZ.\n\n"
             "Density-matrix and MPO backends, and the QCSim Pauli propagator, "
             "apply the channel exactly. The statevector and the matrix product "
-            "state (QCSim and Qiskit Aer) and the composite statevector draw one "
+            "state (QCSim and Qiskit Aer), the composite statevector and QCSim path integral draw one "
             "Pauli each time the circuit runs, in a plain execute as in "
             "noisy_execute or full_noise_execute. The other pure-state methods "
             "draw one Pauli per noise realization: run the circuit through "
@@ -364,7 +410,7 @@ void bind_circuit(nb::module_ &m)
             "channel once and pass it at every place it acts.\n\n"
             "Density-matrix and MPO backends, and the QCSim Pauli propagator, "
             "apply the channel exactly. The statevector and the matrix product "
-            "state (QCSim and Qiskit Aer) and the composite statevector sample "
+            "state (QCSim and Qiskit Aer), the composite statevector and QCSim path integral sample "
             "it from their state: every execution draws one branch, so the shots "
             "average to the channel, in a plain execute as in noisy_execute or "
             "full_noise_execute. The other pure-state methods hold and sample no "
@@ -424,113 +470,8 @@ void bind_circuit(nb::module_ &m)
             "Returns:\n"
             "    dict with 'probability', 'amplitude', 'target_state', "
             "'time_taken'.")
-        .def(
-            "noisy_prob",
-            [](std::shared_ptr<Circuits::Circuit<double>> self, const std::string &target_state, const noise::NoiseModel &noise_model) -> nb::dict {
-                if (!self)
-                    throw nb::value_error("Circuit is null.");
-                if (target_state.empty())
-                    throw nb::value_error("target_state must be a non-empty bitstring.");
-                // The path integral is noiseless; only readout is modelled here.
-                if (noise_model.has_non_readout_noise())
-                    throw nb::value_error("noisy_prob models only readout error, but this NoiseModel has gate noise. "
-                                          "Use noisy_execute or full_noise_execute to include it.");
-
-                const size_t n = target_state.size();
-                for (size_t i = 0; i < n; ++i)
-                {
-                    if (target_state[i] != '0' && target_state[i] != '1')
-                        throw nb::value_error("target_state must contain only '0' and '1' characters.");
-                }
-
-                // Helper: compute P(bitstring) via path integral
-                auto pi_prob = [&](const std::string &bs) -> double {
-                    std::vector<bool> end_state(bs.size());
-                    for (size_t i = 0; i < bs.size(); ++i)
-                        end_state[i] = (bs[i] == '1');
-
-                    Simulators::PathIntegralSimulator sim;
-                    sim.SetStartZeroState(bs.size());
-                    SetAmplitudeCircuit(sim, self);
-                    auto amplitude = sim.AmplitudeFromZero(end_state);
-                    return std::norm(amplitude);
-                };
-
-                auto start = std::chrono::high_resolution_clock::now();
-
-                double p_noisy;
-
-                if (noise_model.has_readout_error())
-                {
-                    // First-order readout error expansion, with b the target:
-                    // P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕e_i)
-                    // where a_i = P(read ¬b_i | prepared b_i) flips away from b_i,
-                    // and c_i = P(read b_i | prepared ¬b_i) flips into it. The two
-                    // differ for asymmetric readout error.
-                    std::vector<double> p_flip_away(n, 0.0), p_flip_into(n, 0.0);
-                    for (size_t i = 0; i < n; ++i)
-                    {
-                        const auto *re = noise_model.get_readout_error(static_cast<int>(i));
-                        if (!re)
-                            continue;
-                        const bool zero = target_state[i] == '0';
-                        p_flip_away[i] = zero ? re->p_meas1_prep0 : re->p_meas0_prep1;
-                        p_flip_into[i] = zero ? re->p_meas0_prep1 : re->p_meas1_prep0;
-                    }
-
-                    // Π_{j≠skip}(1-a_j), computed directly so that a_i = 1 cannot
-                    // produce 0/0 by dividing it back out.
-                    auto keep_prob = [&](size_t skip) {
-                        double prob = 1.0;
-                        for (size_t j = 0; j < n; ++j)
-                            if (j != skip)
-                                prob *= 1.0 - p_flip_away[j];
-                        return prob;
-                    };
-
-                    p_noisy = keep_prob(n) * pi_prob(target_state);
-
-                    // 1-flip terms: qubit i was prepared as ¬b_i and read as b_i
-                    for (size_t i = 0; i < n; ++i)
-                    {
-                        if (p_flip_into[i] <= 0.0)
-                            continue;
-                        std::string flipped = target_state;
-                        flipped[i] = (flipped[i] == '0') ? '1' : '0';
-                        p_noisy += p_flip_into[i] * keep_prob(i) * pi_prob(flipped);
-                    }
-                }
-                else
-                {
-                    // No readout error — just compute exact probability
-                    p_noisy = pi_prob(target_state);
-                }
-
-                auto end = std::chrono::high_resolution_clock::now();
-
-                nb::dict result;
-                result["probability"] = p_noisy;
-                result["target_state"] = target_state;
-                result["time_taken"] = std::chrono::duration<double>(end - start).count();
-                result["has_readout_error"] = noise_model.has_readout_error();
-                return result;
-            },
-            "target_state"_a, "noise_model"_a,
-            "Compute readout-corrected probability using path integral. " MAESTRO_UNITARY_PREPARATION_DOC "\n\n"
-            "When the noise model has readout error, uses first-order expansion:\n"
-            "P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕eᵢ)\n"
-            "where a_i = P(read ¬b_i | prepared b_i) and "
-            "c_i = P(read b_i | prepared ¬b_i).\n\n"
-            "This requires n+1 path integral evaluations (target + n flipped "
-            "variants).\n\n"
-            "Args:\n"
-            "    target_state: Bitstring like '10001001'.\n"
-            "    noise_model: NoiseModel with readout error set. Any other "
-            "(gate) noise raises ValueError, since the path integral is "
-            "noiseless.\n\n"
-            "Returns:\n"
-            "    dict with 'probability', 'target_state', 'time_taken', "
-            "'has_readout_error'.")
+        .def("noisy_prob", &NoisyProb, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "config"_a = nb::none(),
+             NoisyProbDoc)
 
         // ---- Bound Methods for Noisy Execution ----
         .def("noisy_execute", &NoisyExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
@@ -595,6 +536,8 @@ void bind_circuit(nb::module_ &m)
             "Returns dict with 'fidelity', 'infidelity', 'std_error', "
             "'time_taken', 'noise_realizations'.\n\n"
             "Example: qc.noisy_fidelity(nm, noise_realizations=200)");
+    m.def("noisy_prob", &NoisyProb, "circuit"_a, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(),
+          "config"_a = nb::none(), NoisyProbDoc);
 }
 
 } // namespace maestro_bindings

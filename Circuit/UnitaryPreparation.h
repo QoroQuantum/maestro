@@ -11,7 +11,8 @@ namespace Circuits
 enum class UnitaryPreparationQuery
 {
     Amplitude,
-    Overlap
+    Overlap,
+    NoisyProbability
 };
 
 // Visit the gates preparing the coherent state before readout. A measurement may
@@ -22,11 +23,14 @@ void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::st
     if (!circuit)
         throw std::invalid_argument(query + " received a null circuit.");
 
-    const auto nonunitaryOperation = [&](const std::string &operation, const char *backend = "SimulationType.PathIntegral") {
+    const auto nonunitaryOperation = [&](const std::string &operation) {
         const auto message = query + " does not support " + operation + ".";
         if (kind == UnitaryPreparationQuery::Overlap)
             return std::invalid_argument(message + " This comparison requires a unitary preparation.");
-        return std::invalid_argument(message + " Use execute() for measurement counts or estimate() for observable expectations with " + backend + ".");
+        if (kind == UnitaryPreparationQuery::NoisyProbability)
+            return std::invalid_argument(message);
+        return std::invalid_argument(message +
+                                     " Use execute() for measurement counts or estimate() for observable expectations with SimulationType.PathIntegral.");
     };
     std::unordered_set<Types::qubit_t> measured;
     for (const auto &op : circuit->GetOperations())
@@ -48,7 +52,10 @@ void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::st
             break;
         }
         case OperationType::kMeasurement: {
-            const auto &qubits = std::static_pointer_cast<MeasurementOperation<>>(op)->GetQubits();
+            const auto measurement = std::static_pointer_cast<MeasurementOperation<>>(op);
+            if (kind == UnitaryPreparationQuery::NoisyProbability && measurement->HasReadout())
+                throw std::invalid_argument(query + " requires readout error to be supplied in the noise model.");
+            const auto &qubits = measurement->GetQubits();
             measured.insert(qubits.begin(), qubits.end());
             break;
         }
@@ -68,7 +75,17 @@ void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::st
         case OperationType::kComposite:
             throw std::invalid_argument(query + " does not support composite operations. Pass the constituent operations directly.");
         case OperationType::kQuantumChannel:
-            throw nonunitaryOperation("quantum channels", "SimulationType.DensityMatrix");
+            if (kind == UnitaryPreparationQuery::NoisyProbability)
+            {
+                for (const auto q : op->AffectedQubits())
+                    if (measured.count(q))
+                        throw nonunitaryOperation("mid-circuit measurement on qubit " + std::to_string(q));
+                break;
+            }
+            if (kind == UnitaryPreparationQuery::Amplitude)
+                throw std::invalid_argument(query + " does not support quantum channels. Use noisy_prob() for an ensemble probability, or execute() and "
+                                                    "estimate() with SimulationType.PathIntegral for counts and observable expectations.");
+            throw nonunitaryOperation("quantum channels");
         default:
             throw std::invalid_argument(query + " encountered an unknown operation type.");
         }

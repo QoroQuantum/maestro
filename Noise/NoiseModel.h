@@ -2307,7 +2307,7 @@ inline void append_sampled_channel_(std::shared_ptr<Circuits::Circuit<double>> &
     if (!has_sampled_form(channel))
         throw std::invalid_argument("Only channels whose branches are drawn without the state (Pauli channels, one-qubit unitary mixtures, "
                                     "relaxation with T2 <= T1) can be sampled on this pure-state backend; use a density-matrix or MPO backend, "
-                                    "the QCSim Pauli propagator, or a backend that samples channels (the QCSim statevector and matrix product "
+                                    "the QCSim Pauli propagator, or a backend that samples channels (the QCSim path integral, statevector and matrix product "
                                     "state), for general Kraus channels");
     const auto &factors = channel.GetFactors();
     Channel::ThermalMixture mixture;
@@ -2457,7 +2457,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
     if (!exact_channels && !runtime_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
                                     "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
-                                    "propagator, or a backend that samples channels from its state (statevector, matrix product "
+                                    "propagator, or a backend that samples channels from its state (QCSim path integral, statevector, matrix product "
                                     "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
@@ -2942,7 +2942,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
     if (!exact_channels && !runtime_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
                                     "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
-                                    "propagator, or a backend that samples channels from its state (statevector, matrix product "
+                                    "propagator, or a backend that samples channels from its state (QCSim path integral, statevector, matrix product "
                                     "state)");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();

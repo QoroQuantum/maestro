@@ -1018,14 +1018,13 @@ class TestStateProbability:
         with pytest.raises(ValueError, match="(?i)reset"):
             maestro.state_probability(qc, "0")
 
-    def test_noisy_prob_rejects_circuit_channel(self):
+    def test_coherent_probability_queries_reject_circuit_channels(self):
         qc = maestro.circuits.QuantumCircuit()
         qc.x(0)
         qc.pauli_channel([0], [0.5, 0.5, 0.0, 0.0])
-        noise = maestro.NoiseModel()
-        noise.set_readout_error_symmetric(0, 0.1)
-        with pytest.raises(ValueError, match=r"quantum channels.*SimulationType\.DensityMatrix"):
-            qc.noisy_prob("1", noise)
+        for query in (lambda: qc.prob("1"), lambda: maestro.state_probability(qc, "1")):
+            with pytest.raises(ValueError, match="quantum channels"):
+                query()
 
     @pytest.mark.parametrize("operation", ["x q[1]", "measure q[1] -> c[0]"])
     def test_state_probability_rejects_qasm_conditional(self, operation):
@@ -6749,12 +6748,26 @@ class TestNoisyProbReadout:
         assert qc.noisy_prob(target, ideal)["probability"] == pytest.approx(
             qc.prob(target)["probability"], abs=1e-12)
 
-    def test_rejects_gate_noise(self):
+    @pytest.mark.parametrize("in_model", [False, True], ids=["circuit", "model"])
+    def test_kraus_noise_and_asymmetric_readout(self, in_model):
+        qc = maestro.circuits.QuantumCircuit()
+        qc.x(0)
         nm = maestro.NoiseModel()
-        nm.set_readout_error_symmetric(0, 0.01)
-        nm.set_depolarizing(0, 0.01)
-        with pytest.raises(ValueError, match="only readout"):
-            self._circuit().noisy_prob("00", nm)
+        if in_model:
+            nm.set_kraus_channel([0], _AMPLITUDE_DAMPING_KRAUS)
+        else:
+            qc.channel([0], maestro.QuantumChannel.from_kraus(_AMPLITUDE_DAMPING_KRAUS))
+        nm.set_readout_error(0, 0.1, 0.3)
+        count = 1024
+        result = qc.noisy_prob("1", nm, noise_realizations=count, noise_seed=41)
+        # Each trajectory contributes either 0.1 or 0.7 after readout, with weights 0.36 and 0.64.
+        mean = result["probability"]
+        assert result["has_readout_error"] and "amplitude" not in result
+        assert result["noise_realizations"] == count
+        assert result["std_error"] == pytest.approx(math.sqrt((mean - 0.1) * (0.7 - mean) / (count - 1)))
+        assert mean == pytest.approx(0.36 * 0.1 + 0.64 * 0.7, abs=5 * result["std_error"])
+        assert qc.noisy_prob("1", nm, count, 41)["probability"] == mean
+        assert qc.noisy_prob("1", nm, 1, 41)["std_error"] is None
 
 
 class TestPhaseDamping:

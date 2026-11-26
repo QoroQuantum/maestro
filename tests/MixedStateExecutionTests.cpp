@@ -157,6 +157,68 @@ std::shared_ptr<Simulators::ISimulator> Simulator(Method method)
     return simulator;
 }
 
+void PathIntegralKrausBranches()
+{
+    auto simulator = Simulators::SimulatorsFactory::CreateSimulatorUnique(Simulators::SimulatorType::kQCSim, Method::kPathIntegral);
+    simulator->AllocateQubits(7);
+    simulator->Initialize();
+    simulator->SetSeed(42);
+    Check(simulator->SamplesQuantumChannels() && !simulator->SupportsQuantumChannels(), "Path integral reported the wrong channel capability");
+
+    // Target order is {q6,q1}: local |01> becomes |10> on a jump.
+    // q4 is entangled with q6 and remains set on the jumped branch.
+    Eigen::Matrix4cd stay = Eigen::Matrix4cd::Identity(), jump = Eigen::Matrix4cd::Zero();
+    stay(1, 1) = std::complex<double>(0., .6);
+    jump(2, 1) = .8;
+    const Simulators::QuantumChannel channel(Simulators::QuantumChannel::KrausOperators{stay, jump});
+    simulator->ApplyH(4);
+    simulator->ApplyCX(4, 6);
+    simulator->SaveState();
+    size_t jumps = 0;
+    for (size_t shot = 0; shot < 1024; ++shot)
+    {
+        simulator->RestoreState();
+        simulator->ApplyQuantumChannel({6, 1}, channel);
+        Check(std::abs(simulator->TotalProbability() - 1.) < 1e-12, "A Kraus trajectory lost normalization");
+        if (simulator->Probability(18) > .5)
+        {
+            ++jumps;
+            Check(std::abs(simulator->Probability(18) - 1.) < 1e-12, "The jump lost the entangled spectator");
+        }
+        else
+        {
+            const auto zero = simulator->Amplitude(0);
+            Check(std::abs(std::norm(zero) - 1. / 1.36) < 1e-12, "The surviving amplitudes have the wrong weights");
+            Check(std::abs(simulator->Amplitude(80) - std::complex<double>(0., .6) * zero) < 1e-12, "The no-jump branch lost its relative phase");
+        }
+    }
+    Check(std::abs(jumps / 1024. - .32) < .07, "Kraus jumps did not follow the incoming state");
+
+    simulator->Reset();
+    simulator->ApplyX(6);
+    Eigen::Matrix4cd controlled = Eigen::Matrix4cd::Identity();
+    controlled.row(1).swap(controlled.row(3));
+    simulator->ApplyQuantumChannel({6, 1}, Simulators::QuantumChannel::UnitaryMixture({1.}, {controlled}));
+    Check(std::abs(simulator->Probability(66) - 1.) < 1e-12, "A two-qubit unitary channel reversed its targets");
+
+    simulator->Reset();
+    simulator->Configure("path_integral_threshold", "0.3");
+    simulator->ApplyRy(0, std::acos(-1.) / 3.);
+    simulator->ApplyX(0);
+    Check(std::abs(simulator->TotalProbability() - .75) < 1e-12, "Kraus pruning fixture lost its retained mass");
+    simulator->SaveState();
+    const auto damping = Simulators::QuantumChannel::AmplitudeDamping(.125);
+    jumps = 0;
+    for (size_t shot = 0; shot < 512; ++shot)
+    {
+        simulator->RestoreState();
+        simulator->ApplyQuantumChannel({0}, damping);
+        Check(std::abs(simulator->TotalProbability() - 1.) < 1e-12, "A sampled Kraus branch kept the pruned input norm");
+        jumps += simulator->Probability(0) > .5;
+    }
+    Check(std::abs(jumps / 512. - .125) < .055, "A Kraus branch below the gate threshold was dropped");
+}
+
 void PreparedStateContract(Method method)
 {
     auto simulator = Simulator(method);
@@ -1060,6 +1122,7 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 
 void TestMixedStateExecution()
 {
+    PathIntegralKrausBranches();
     CheckUnitaryPreparation();
     CheckPreparationGateAdjoints();
     CheckRealizationFidelityIdeal();

@@ -415,7 +415,8 @@ extern "C"
     __declspec(dllexport)
 #endif
         int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma);
-// MPO extensions. Return 1 on success, 0 on invalid arguments/backend failure.
+// State queries. Return 1 on success, 0 on invalid arguments/backend failure.
+// MaestroProbabilityBits also reads the current QCSim path integral trajectory.
 // Bit vectors are q0-first; matrices are column-major interleaved doubles.
 // GetDensityMatrix capacity counts doubles. SampleCountsBits capacity counts
 // histogram entries and must be >= shots; outcomes needs capacity*width bytes,

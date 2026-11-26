@@ -1,4 +1,5 @@
 // Numerical contract tests through the public request API, without Python/GPU.
+#include "../Execution/NoisyEstimation.h"
 #include "../maestrolib/Interface.h"
 #include <array>
 #include <boost/json.hpp>
@@ -90,8 +91,8 @@ void TestThermalApproximation()
     for (const char *method : {"tensor_network", "path_integral", "statevector", "matrix_product_state", "density_matrix", "matrix_product_operator"})
     {
         const std::string name(method);
-        const bool clamped = name == "tensor_network" || name == "path_integral";
-        const bool trajectories = name == "statevector" || name == "matrix_product_state";
+        const bool clamped = name == "tensor_network";
+        const bool trajectories = name == "statevector" || name == "matrix_product_state" || name == "path_integral";
         for (const char *kind : {"thermal_relaxation", "thermal_relaxation_2q", "idle"})
         {
             for (const double t2 : {1.5, 2.0})
@@ -166,13 +167,13 @@ void TestThermalApproximation()
                                         Channel("kraus", {{"operators", j::array{j::value(j::array{1, 0, 0, 1})}}})})
     {
         request["noise"].as_object()["channels"] = j::array{thermal, channel};
-        for (const char *method : {"tensor_network", "path_integral", "extended_stabilizer"})
+        for (const char *method : {"tensor_network", "extended_stabilizer"})
         {
             request["simulator"].as_object()["method"] = method;
             Check(Call(request, false, true).at("error").at("code") == "unsupported_capability",
                   "A channel that needs the state was accepted by a method that cannot sample it");
         }
-        for (const char *method : {"statevector", "matrix_product_state"})
+        for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
         {
             request["simulator"].as_object()["method"] = method;
             Check(Call(request, true, true).at("valid").as_bool(), "A method that samples channels refused one");
@@ -180,11 +181,81 @@ void TestThermalApproximation()
     }
 }
 
-// The statevector and the matrix product state sample channels from their
-// state. Noise that has no branch drawn without it (relaxation with T2 > T1,
-// amplitude damping, generalized amplitude damping, Kraus maps) runs there as
-// trajectories of the channels themselves, in a model or as an instruction:
-// nothing is clamped, drawn as a reset or refused.
+void TestPathIntegralNoisyProbability()
+{
+    auto request = Request("noisy_prob", 1, "x q[0];", "path_integral");
+    request["target_state"] = "1";
+    const auto readout = Channel("readout", {{"p_meas1_prep0", 0.1}, {"p_meas0_prep1", 0.3}});
+    request["noise"] = j::object{{"channels", j::array{readout}}};
+    const auto ideal = Call(request);
+    Near(Real(ideal.at("probability")), 0.7);
+    Near(Real(ideal.at("std_error")), 0.);
+
+    const j::array operators{j::array{1, 0, 0, 0.8}, j::array{0, 0.6, 0, 0}};
+    request["noise"].as_object()["channels"] = j::array{Channel("kraus", {{"operators", operators}}), readout};
+    request["noise"].as_object()["seed"] = 19;
+    request["noise"].as_object()["realizations"] = 1024;
+    Call(request, true, true);
+    const auto noisy = Call(request);
+    const double mean = Real(noisy.at("probability")), error = Real(noisy.at("std_error"));
+    Near(error, std::sqrt((mean - 0.1) * (0.7 - mean) / 1023.));
+    Check(std::abs(mean - 0.484) < 5. * error && Real(noisy.at("noise_realizations")) == 1024 && !noisy.contains("amplitude"),
+          "noisy_prob did not average readout-adjusted populations over the Kraus trajectories");
+    Near(Real(Call(request).at("probability")), mean);
+    request["noise"].as_object()["realizations"] = 1;
+    Check(Call(request).at("std_error").is_null(), "One noisy trajectory cannot estimate a standard error");
+    // A zero noise seed and a wide simulation seed must survive both entry points.
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    Eigen::Matrix2cd stay = Eigen::Matrix2cd::Identity(), jump = Eigen::Matrix2cd::Zero();
+    stay(1, 1) = .8;
+    jump(0, 1) = .6;
+    noise::NoiseModel model;
+    model.set_kraus_channel({0}, {stay, jump});
+    model.set_readout_error(0, .1, .3);
+    MaestroExecution::SimulatorConfig config;
+    config.simulation_type = Simulators::SimulationType::kPathIntegral;
+    config.fixed_backend = true;
+    config.seed = (uint64_t{1} << 46) + 7;
+    request["noise"].as_object()["seed"] = 0;
+    request["execution"].as_object()["seed"] = *config.seed;
+    request["noise"].as_object()["realizations"] = 71;
+    const auto direct = MaestroExecution::NoisyStateProbability(circuit, {true}, model, 71, config, 0);
+    const auto seeded = Call(request);
+    Check(direct.std_error.has_value(), "C++ noisy probability omitted its standard error");
+    Near(Real(seeded.at("probability")), direct.probability);
+    Near(Real(seeded.at("std_error")), *direct.std_error);
+    request["simulator"].as_object()["method"] = "statevector";
+    Call(request, false, true);
+
+    request = Request("noisy_prob", 1, "h q[0]; measure q[0]->c[0]; x q[0];", "path_integral");
+    request["target_state"] = "1";
+    Call(request, false, true);
+
+    // A sparse register can retain bit 66 even when bits 0 through 65 are idle.
+    request = Request("state_probability", 67, "x q[66];", "path_integral");
+    request["target_state"] = std::string(66, '0') + "1";
+    for (const char *operation : {"state_probability", "noisy_prob"})
+    {
+        request["operation"] = operation;
+        Near(Real(Call(request).at("probability")), 1.);
+    }
+    request["target_state"] = "1" + std::string(66, '0');
+    Near(Real(Call(request).at("probability")), 0.);
+    request["target_state"] = std::string(67, '0');
+    request["noise"] = j::object{{"channels", j::array{Channel("t1", {{"gamma", 1.}}, {66})}}};
+    Near(Real(Call(request).at("probability")), 1.);
+    for (const char *operation : {"state_probability", "noisy_prob"})
+    {
+        auto tooWide = Request(operation, 1025, "x q[1024];", "path_integral");
+        tooWide["target_state"] = std::string(1025, '0');
+        for (bool validate : {false, true})
+            Check(Call(tooWide, false, validate).at("error").at("message").as_string().find("1024") != j::string::npos,
+                  "A path integral scalar query did not report its register width limit");
+    }
+}
+
+// Model channels and explicit instructions follow the same Kraus trajectory rules.
 void TestSampledChannelRequests()
 {
     const auto approximated = [](const j::object &result, const char *name) {
@@ -209,7 +280,7 @@ void TestSampledChannelRequests()
     };
     const auto exact = Call(estimate("density_matrix", 0));
     Check(exact.at("noise").at("evaluation") == "exact_channels", "The reference did not apply its channels exactly");
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         Check(Call(estimate(method, 2000), true, true).at("valid").as_bool(), "A sampled model did not validate");
         const auto result = Call(estimate(method, 2000));
@@ -281,7 +352,7 @@ void TestSampledChannelRequests()
         const auto &outcomes = counts.as_object();
         return outcomes.size() == 2 && outcomes.contains("11") && outcomes.contains("01") && std::abs(Real(outcomes.at("11")) / 4096 - 0.7) < 0.04;
     };
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         auto request = Request("execute", 2, "", method);
         request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
@@ -350,7 +421,7 @@ void TestSampledChannelRequests()
         }
     }
     // A method that neither holds nor samples channels has no form for it.
-    for (const char *method : {"tensor_network", "path_integral", "extended_stabilizer"})
+    for (const char *method : {"tensor_network", "extended_stabilizer"})
     {
         auto request = Request("execute", 2, "", method);
         request["circuit"] = circuit({prepare[0], prepare[1], damping, measure});
@@ -363,7 +434,7 @@ void TestSampledChannelRequests()
     // branch, which the seed selects and the metadata reports, as Python's
     // get_statevector and get_probabilities do. |11> stays (index 3) with
     // probability 0.7 and decays to qubit 0 in |0> (index 2) otherwise.
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         auto request = Request("probabilities", 2, "", method);
         request["circuit"] = circuit({prepare[0], prepare[1], damping});
@@ -405,7 +476,7 @@ void TestSampledChannelRequests()
         // yields before it is accepted. Running the circuit's start does not
         // tell, since a channel that is drawn is left to the shots.
         const j::object holds{{"backend", "qcsim"}, {"method", "statevector"}};
-        for (const char *other : {"stabilizer", "tensor_network", "path_integral", "extended_stabilizer"})
+        for (const char *other : {"stabilizer", "tensor_network", "extended_stabilizer"})
             for (const bool first : {false, true})
             {
                 const j::object none{{"backend", "qcsim"}, {"method", other}};
@@ -621,23 +692,24 @@ void TestSampledChannelRequests()
 
     // The fidelity to the ideal state, with relaxation that dephases more
     // slowly than it decays: the clamp would lose a tenth of it.
-    const auto fidelity = [&](const char *method, size_t realizations) {
+    const auto fidelity = [&](const char *method, size_t realizations, double t2 = 1.8) {
         auto request = Request("noisy_fidelity", 2, "h q[0]; cx q[0],q[1];", method);
         request["noise"] = j::object{{"seed", 31},
-                                     {"channels", j::array{Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.8}}, {0, 1}),
-                                                           Channel("thermal_relaxation_2q", {{"duration", 0.4}, {"t1", 1.0}, {"t2", 1.8}}, {0, 1})}}};
+                                     {"channels", j::array{Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", t2}}, {0, 1}),
+                                                           Channel("thermal_relaxation_2q", {{"duration", 0.4}, {"t1", 1.0}, {"t2", t2}}, {0, 1})}}};
         if (realizations)
             request["noise"].as_object()["realizations"] = realizations;
         return Call(request);
     };
     const double reference = Real(fidelity("density_matrix", 0).at("fidelity"));
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         const auto result = fidelity(method, 2000);
         Check(!approximated(result, "thermal_T2_clamped_to_T1") && std::abs(Real(result.at("fidelity")) - reference) < 0.05,
               "Sampled relaxation gave the wrong fidelity");
     }
-    Check(std::abs(Real(fidelity("path_integral", 2000).at("fidelity")) - reference) > 0.05, "The clamp no longer shows in this fidelity");
+    const double clamped = Real(fidelity("density_matrix", 0, 1.0).at("fidelity"));
+    Check(std::abs(clamped - reference) > 0.05, "The clamped T2 control no longer separates the fidelities");
 }
 
 // Where the backend draws channel branches as the circuit runs, noise.seed has
@@ -779,7 +851,7 @@ void TestLoweredChannelDraws()
         bool stochastic;
     };
 
-    for (const Case &entry : {Case{"path_integral", &pauli, false}, Case{"path_integral", &mixture, false}, Case{"path_integral", &relaxation, true},
+    for (const Case &entry : {Case{"path_integral", &pauli, false}, Case{"path_integral", &mixture, true}, Case{"path_integral", &relaxation, true},
                               Case{"tensor_network", &pauli, false}, Case{"tensor_network", &mixture, false}, Case{"tensor_network", &relaxation, true},
                               Case{"statevector", &pauli, false}, Case{"statevector", &mixture, true}, Case{"statevector", &relaxation, true}})
     {
@@ -1013,10 +1085,10 @@ void TestFixedBackendNoisyShots()
     // single-shot execution path as the reference.
     // Amplitude damping (t1) has no branch drawn without the state: only a
     // method that does not sample channels draws it at injection, as a reset.
-    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral", "tensor_network"})
     {
         j::array channels{Channel("bit_flip", {{"probability", 0.5}}), Channel("thermal_relaxation", {{"duration", std::log(2.0)}, {"t1", 1.0}, {"t2", 1.0}})};
-        if (std::string(method) == "path_integral")
+        if (std::string_view(method) == "tensor_network")
             channels.emplace_back(Channel("t1", {{"gamma", 0.5}}));
         for (const auto &channel : channels)
         {
@@ -1041,7 +1113,7 @@ void TestFixedBackendNoisyShots()
 
     // Where channels are sampled from the state, amplitude damping is drawn as
     // each shot runs: one realization does not freeze it.
-    for (const char *method : {"statevector", "matrix_product_state"})
+    for (const char *method : {"statevector", "matrix_product_state", "path_integral"})
     {
         auto request = Request("execute", 1, "x q[0]; measure q->c;", method);
         request["noise"] = j::object{{"seed", 23}, {"realizations", 1}, {"channels", j::array{Channel("t1", {{"gamma", 0.5}})}}};
@@ -1769,6 +1841,11 @@ void TestAutomaticMixedStateNoise()
     char *catalogText = MaestroGetCapabilitiesJson();
     const auto catalog = j::parse(catalogText).as_object();
     FreeResult(catalogText);
+    const j::object pathIntegral{{"backend", "qcsim"}, {"method", "path_integral"}};
+    const auto &channelSamplers = catalog.at("noise").at("sampled_channel_configurations").as_array();
+    Check(std::find(channelSamplers.begin(), channelSamplers.end(), j::value(pathIntegral)) != channelSamplers.end() &&
+              catalog.at("noisy_prob").at("supported_configurations") == j::array{pathIntegral},
+          "Path integral channel capabilities missing from discovery");
     Check(catalog.at("noise").at("realizations").at("accepts") == j::array{"positive_integer", "null", "auto"} &&
               catalog.at("noise").at("checkpoint_prefix").at("field") == "prefix" && !catalog.at("noise").at("exact_configurations").as_array().empty(),
           "Capabilities omit the noise realization policy");
@@ -2515,6 +2592,7 @@ void TestRequestNoiseAndOptions()
     TestReadoutExecution();
     TestRoutedCheckpointSuffixes();
     TestThermalApproximation();
+    TestPathIntegralNoisyProbability();
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();
     TestDeterministicChannelInstructions();

@@ -160,6 +160,70 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         return pathIntegralSimulator->Probability(outcome);
     }
 
+    double ProbabilityBits(const std::vector<bool> &bits) override
+    {
+        if (!pathIntegralSimulator)
+            throw std::runtime_error("Path integral state is not initialized");
+        if (bits.size() != nrQubits)
+            throw std::invalid_argument("The basis bitstring must cover the path integral register");
+        return pathIntegralSimulator->ProbabilityBits(bits);
+    }
+
+    bool SamplesQuantumChannels() const override
+    {
+        return true;
+    }
+
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        if (targets.size() != channel.GetNumberOfQubits() || targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("A quantum channel requires its one or two distinct target qubits");
+        for (const auto target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Quantum-channel qubit is out of range");
+        if (!pathIntegralSimulator)
+            throw std::runtime_error("Path integral state is not initialized");
+
+        auto &current = pathIntegralSimulator->Amplitudes();
+        const auto &factors = channel.GetFactors();
+        // A later factor can fail, for example if an earlier unitary was completely pruned.
+        // Publish the composed operation only when all its factors have run.
+        PathIntegralSimulator::AmplitudeMap work;
+        if (factors.size() > 1)
+            work = current;
+        auto &state = factors.size() > 1 ? work : current;
+        for (const auto &factor : factors)
+        {
+            const size_t first = targets[factor.qubits.front()];
+            const size_t second = factor.qubits.size() == 2 ? targets[factor.qubits[1]] : 0;
+            const double random = ChannelUniform();
+            if (factor.IsStateIndependent())
+            {
+                const size_t branch = SelectChannelBranch(factor.probabilities, random);
+                if (factor.kind == QuantumChannel::FactorKind::kPauli)
+                {
+                    const Eigen::MatrixXcd *const paulis[] = {nullptr, &xgate.getRawOperatorMatrix(), &ygate.getRawOperatorMatrix(),
+                                                              &zgate.getRawOperatorMatrix()};
+                    for (size_t i = 0; i < factor.qubits.size(); ++i)
+                    {
+                        const size_t pauli = (branch >> (2 * i)) & 3;
+                        if (pauli)
+                            pathIntegralSimulator->PropagateStep(QC::Gates::AppliedGate<>(*paulis[pauli], targets[factor.qubits[i]]), state);
+                    }
+                }
+                else
+                    pathIntegralSimulator->PropagateStep(QC::Gates::AppliedGate<>(factor.operators[branch], first, second), state);
+            }
+            else if (factor.qubits.size() == 1)
+                ApplySampledKraus<2>(state, factor.operators, first, second, random);
+            else
+                ApplySampledKraus<4>(state, factor.operators, first, second, random);
+        }
+        if (factors.size() > 1)
+            current.swap(work);
+        NotifyObservers(targets);
+    }
+
     std::complex<double> Amplitude(Types::qubit_t outcome) override
     {
         RequireBasisState(outcome);
@@ -698,6 +762,99 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
     std::unique_ptr<PathIntegralSimulator> pathIntegralSimulator;
 
   private:
+    static size_t SelectChannelBranch(const std::vector<double> &weights, double random)
+    {
+        double total = 0.;
+        for (double weight : weights)
+            total += weight;
+        if (!(total > 0.) || !std::isfinite(total))
+            throw std::domain_error("Path integral channel requires finite positive probability mass");
+        const double target = random * total;
+        double cumulative = 0.;
+        size_t last = 0;
+        for (size_t i = 0; i < weights.size(); ++i)
+            if (weights[i] > 0.)
+            {
+                last = i;
+                cumulative += weights[i];
+                if (target < cumulative)
+                    return i;
+            }
+        return last; // rounding at the upper endpoint
+    }
+
+    template <int Dimension> static void SetLocalRow(QC::PathIntegral::FastVectorBool &key, size_t first, size_t second, int row)
+    {
+        key.set(first, (row & 1) != 0);
+        if constexpr (Dimension == 4)
+            key.set(second, (row & 2) != 0);
+    }
+
+    // Each set of equal spectator bits supplies a 2- or 4-element vector. Visit
+    // it once at its lowest occupied local column, including when column zero is absent.
+    template <int Dimension, class Visit>
+    static void ForEachLocalBlock(const PathIntegralSimulator::AmplitudeMap &state, size_t first, size_t second, double scale, Visit visit)
+    {
+        for (const auto &[label, amplitude] : state)
+        {
+            const int column = int(label.get(first)) + (Dimension == 4 ? 2 * int(label.get(second)) : 0);
+            QC::PathIntegral::FastVectorBool key = label;
+            Eigen::Matrix<std::complex<double>, Dimension, 1> input;
+            int row = 0;
+            for (; row < Dimension; ++row)
+            {
+                if (row == column)
+                    input[row] = amplitude / scale;
+                else
+                {
+                    SetLocalRow<Dimension>(key, first, second, row);
+                    const auto found = state.find(key);
+                    if (row < column && found != state.end())
+                        break;
+                    input[row] = found == state.end() ? 0. : found->second / scale;
+                }
+            }
+            if (row == Dimension)
+                visit(key, input);
+        }
+    }
+
+    template <int Dimension>
+    static void ApplySampledKraus(PathIntegralSimulator::AmplitudeMap &state, const QuantumChannel::KrausOperators &operators, size_t first, size_t second,
+                                  double random)
+    {
+        // The retained state may have a tiny norm after trimming. Scale before
+        // squaring so even a fully subnormal frontier gives the same branch law.
+        const double scale = LargestComponent(state);
+        if (!(scale > 0.) || !std::isfinite(scale))
+            throw std::domain_error("Path integral channel requires finite positive probability mass");
+        using Block = Eigen::Matrix<std::complex<double>, Dimension, 1>;
+        std::vector<double> weights(operators.size());
+        ForEachLocalBlock<Dimension>(state, first, second, scale, [&](const auto &, const Block &input) {
+            for (size_t i = 0; i < operators.size(); ++i)
+            {
+                const Block output = operators[i].topLeftCorner<Dimension, Dimension>() * input;
+                weights[i] += output.squaredNorm();
+            }
+        });
+        const size_t chosen = SelectChannelBranch(weights, random);
+        const double norm = std::sqrt(weights[chosen]);
+        PathIntegralSimulator::AmplitudeMap next;
+        next.reserve(state.size());
+        ForEachLocalBlock<Dimension>(state, first, second, scale, [&](auto &key, const Block &input) {
+            const Block output = operators[chosen].topLeftCorner<Dimension, Dimension>() * input;
+            for (int row = 0; row < Dimension; ++row)
+                if (output[row] != std::complex<double>{})
+                {
+                    SetLocalRow<Dimension>(key, first, second, row);
+                    next[key] = output[row] / norm;
+                }
+        });
+        // A rare nonunitary branch can have every coefficient below the gate
+        // threshold. Keep its normalized state; subsequent gates resume trimming.
+        state.swap(next);
+    }
+
     // A squared magnitude can underflow or overflow before the sampler can
     // rescale the weights. The sampler then rejects the state before its first
     // draw: a total of squares below 2^-970 with TotalUnderflow, a square that

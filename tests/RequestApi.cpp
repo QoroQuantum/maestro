@@ -1157,9 +1157,10 @@ try
 
     request.at("step_circuit").as_object()["source"] =
         j::array{j::object{{"name", "pauli_channel"}, {"qubits", j::array{0}}, {"probabilities", j::array{0.5, 0.5, 0, 0}}}};
-    for (const bool sampled : {true, false})
+    for (const std::string method : {"statevector", "path_integral", "density_matrix"})
     {
-        request["simulator"].as_object()["method"] = sampled ? "statevector" : "density_matrix";
+        const bool sampled = method != "density_matrix";
+        request["simulator"].as_object()["method"] = method;
         result = Call(request);
         const auto &metadata = result.at("execution_metadata").as_object();
         Check(metadata.at("stochastic_execution").as_bool() == sampled &&

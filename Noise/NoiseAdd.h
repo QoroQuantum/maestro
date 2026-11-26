@@ -670,7 +670,7 @@ class NoiseAdd
             message << qubits[i];
         }
         message << "]: effective T2 clamped to T1. Use a density-matrix or MPO backend, or the "
-                   "statevector or the matrix product state, which sample the channel itself, "
+                   "statevector, matrix product state or QCSim path integral, which sample the channel itself, "
                    "to preserve the calibrated T2.";
         if (warning_handler)
             warning_handler(message.str());

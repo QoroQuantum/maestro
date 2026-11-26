@@ -98,4 +98,23 @@ struct NoisyFidelityResult
 MAESTRO_TRANSFORM_API NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model,
                                                         std::optional<size_t> requested_realizations, const SimulatorConfig &config,
                                                         std::optional<uint64_t> noise_seed);
+
+struct NoisyProbabilityResult
+{
+    double probability = 0;
+    std::optional<double> std_error;
+    size_t realizations = 0;
+    NoiseRealizationPolicy policy;
+    double time_taken = 0;
+};
+
+// Validate a single target (qubit zero first) and the circuit before terminal readout.
+MAESTRO_TRANSFORM_API void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target);
+
+// Path integral probability averaged over noise realizations. Readout includes zero and single-bit flips.
+// The error is the standard error across realizations, absent for a single stochastic sample.
+MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target,
+                                                                   const noise::NoiseModel &model, std::optional<size_t> requested_realizations,
+                                                                   const SimulatorConfig &config, std::optional<uint64_t> noise_seed,
+                                                                   NoiseLayer layer = NoiseLayer::kCombined);
 } // namespace MaestroExecution

@@ -2350,15 +2350,27 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @param state The classical state containing the classical bits.
      * @param curMaxBondDim Pointer to the current maximum bond dimension, if
      * applicable.
+     * @param planningSimulator Backend whose prefix rules apply during a dry run.
      * @return A bool vector with the executed operations marked.
      * @sa ISimulator
      * @sa OperationState
      */
     std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr,
-                                             bool exactChannels = false) const
+                                             bool exactChannels = false, const Simulators::ISimulator *planningSimulator = nullptr) const
     {
         if (sim)
-            exactChannels = sim->SupportsQuantumChannels();
+            planningSimulator = sim.get();
+        if (planningSimulator)
+            exactChannels = planningSimulator->SupportsQuantumChannels();
+        // A sampled channel can renormalize the whole sparse state. A gate on
+        // a disjoint wire can prune different rows if it moves before that
+        // channel. Share a contiguous prefix whenever these operations occur.
+        bool contiguousPrefix = false;
+        if (planningSimulator && planningSimulator->GetSimulationType() == Simulators::SimulationType::kPathIntegral && HasDrawnChannels())
+        {
+            const auto threshold = planningSimulator->GetConfiguration("path_integral_threshold");
+            contiguousPrefix = threshold.empty() || std::stod(threshold) > 0.;
+        }
         // With gate fusion, the look-ahead routing of an MPS/MPO follows the
         // simulator's upcoming operations in order, and stepping over an operation
         // that is deferred to the shots breaks that plan for the rest of this
@@ -2369,7 +2381,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         if (planExecutionOrder)
         {
             OperationState dryState(state);
-            mask = ExecuteNonMeasurements(nullptr, dryState, nullptr, exactChannels);
+            mask = ExecuteNonMeasurements(nullptr, dryState, nullptr, exactChannels, planningSimulator);
             planExecutionOrder = std::find(mask.begin(), mask.end(), true) != mask.end() && std::find(mask.begin(), mask.end(), false) != mask.end();
         }
         if (planExecutionOrder)
@@ -2493,6 +2505,13 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             if (!executed)
             {
+                if (contiguousPrefix)
+                {
+                    // Earlier operations all ran. Replay this entire suffix
+                    // in its original order on each trajectory.
+                    executedOps.resize(operations.size() - i, false);
+                    break;
+                }
                 // Every deferred operation already recorded its wires in measuredQubits.
                 executionStopped = true;
                 if (sim && sim->IsGateFusionEnabled())
