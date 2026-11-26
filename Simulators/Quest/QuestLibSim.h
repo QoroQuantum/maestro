@@ -15,7 +15,11 @@
 #define _QUEST_LIB_SIM_H_
 
 #include "../../Utils/Library.h"
+#include <algorithm>
 #include <complex>
+#include <cstdlib>
+#include <mutex>
+#include <stdexcept>
 #include <vector>
 
 namespace Simulators
@@ -37,8 +41,12 @@ class QuestLibSim : public Utils::Library
 
     virtual ~QuestLibSim()
     {
+#if !defined(_WIN32)
+        ExitFinalizer::Remove(this);
+#endif
         // Not while the process exits: the library has destroyed its own
         // instance by then, and Finalize() would destroy it a second time.
+        // (Windows; elsewhere the exit handler has finalized it already.)
         if (initialized && fFinalize && !ProcessIsExiting())
         {
             fFinalize();
@@ -162,6 +170,11 @@ class QuestLibSim : public Utils::Library
             {
                 fInitialize();
                 initialized = true;
+#if !defined(_WIN32)
+                // After Initialize(), so that the handler runs before the
+                // destructors of everything the library has constructed.
+                ExitFinalizer::Add(this);
+#endif
                 return true;
             }
         }
@@ -209,8 +222,10 @@ class QuestLibSim : public Utils::Library
     {
         if (initialized)
             fDestroySimulator(simHandle);
-        else
+        else if (!finalizedAtExit)
             throw std::runtime_error("QuestLibSim: Unable to destroy simulator");
+        // Finalized at exit: the library has destroyed its simulators, and the
+        // states still alive then are destroyed by static destructors.
     }
 
     unsigned long int CloneSimulator(void *sim)
@@ -628,7 +643,78 @@ class QuestLibSim : public Utils::Library
     }
 
   private:
+#if !defined(_WIN32)
+    /**
+     * @brief Finalizes the loaded libraries when the process exits, while
+     * they are intact.
+     *
+     * Outside Windows the static objects of all libraries are destroyed in the
+     * reverse order of their construction. The library's own static objects
+     * are constructed when it is loaded, so they die before any object that
+     * existed by then, such as the factory's library object: Finalize() from
+     * that object's destructor ran on a destroyed library and deleted its
+     * instance a second time. An exit handler registered right after loading
+     * runs before those destructors instead. Windows detaches whole DLLs: see
+     * Utils::Library::ProcessIsExiting().
+     */
+    class ExitFinalizer
+    {
+      public:
+        static void Add(QuestLibSim *library) noexcept
+        {
+            try
+            {
+                auto &registry = Instance();
+                {
+                    const std::lock_guard<std::mutex> lock(registry.mutex);
+                    registry.libraries.push_back(library);
+                }
+                // One per load: only a handler registered after a library was
+                // loaded runs before that library's static destructors.
+                std::atexit(&FinalizeAll);
+            }
+            catch (...)
+            {
+                // Not registered: finalized by the destructor, as before.
+            }
+        }
+
+        static void Remove(QuestLibSim *library) noexcept
+        {
+            auto &registry = Instance();
+            const std::lock_guard<std::mutex> lock(registry.mutex);
+            registry.libraries.erase(std::remove(registry.libraries.begin(), registry.libraries.end(), library), registry.libraries.end());
+        }
+
+      private:
+        static ExitFinalizer &Instance()
+        {
+            // Never destroyed: libraries unregister from static destructors.
+            static auto *registry = new ExitFinalizer;
+            return *registry;
+        }
+
+        static void FinalizeAll() noexcept
+        {
+            auto &registry = Instance();
+            const std::lock_guard<std::mutex> lock(registry.mutex);
+            for (auto *library : registry.libraries)
+                if (library->initialized && library->fFinalize)
+                {
+                    library->fFinalize();
+                    library->initialized = false;
+                    library->finalizedAtExit = true;
+                }
+            registry.libraries.clear();
+        }
+
+        std::mutex mutex;
+        std::vector<QuestLibSim *> libraries;
+    };
+#endif
+
     bool initialized = false;
+    bool finalizedAtExit = false; /**< Finalize() ran from the exit handler */
 
     void (*fInitialize)() = nullptr;
     void (*fFinalize)() = nullptr;

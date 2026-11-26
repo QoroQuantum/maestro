@@ -317,6 +317,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own instance; Maestro's library then called the plugin's `Finalize`, which
   destroyed it again. Maestro no longer calls into a plugin, or frees it,
   while the process is exiting.
+- The same second `Finalize` on Linux: there the plugin's static objects are
+  destroyed before Maestro's library object, so a process that had the QuEST
+  plugin loaded ended with glibc's `double free detected` abort, or never
+  exited at all (the current plugin locks a mutex of its destroyed instance),
+  most visibly when it had run no circuit. Maestro now finalizes the plugin
+  from an exit handler registered right after loading it, which runs while
+  the plugin is intact, so QuEST is still shut down properly (MPI builds
+  included).
 - On Windows, freeing the last module that uses the OpenMP runtime no longer
   crashes the process. The runtime's worker threads outlive the parallel
   regions that started them, and Windows unloaded the runtime under them when
