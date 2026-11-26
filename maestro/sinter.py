@@ -128,9 +128,11 @@ STIM_GATE_ALIASES = {alias: gate.name for gate in stim.gate_data().values() if g
 # NoiseModel adds gate noise after noisy gates only, so the Stim gate gets it
 # once, after the whole gate, as a native gate would: the two-qubit layers on
 # its pair and the per-qubit layers on each of its qubits. Noise before
-# trailing local gates would be equivalent for Pauli noise but not for
-# coherent rotations or T1. Each step is a QuantumCircuit method and the
-# positions of its qubits among the Stim gate's targets.
+# trailing local gates would be equivalent only for noise those gates leave
+# unchanged, such as depolarizing noise: an X error before an H becomes a Z
+# error after it, and coherent rotations and T1 change as well. Each step is
+# a QuantumCircuit method and the positions of its qubits among the Stim
+# gate's targets.
 #
 # The entries come from a search for the fewest noiseless entangling gates,
 # then the fewest gates; the swap family keeps its short forms (ISWAP is S on

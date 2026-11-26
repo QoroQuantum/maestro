@@ -181,8 +181,10 @@ cycles and the `H_...` variants) are built from Maestro gates whose leading
 steps are noiseless. A `NoiseModel` therefore adds a gate's noise once, after
 the whole gate, as for a native gate: the two-qubit layers on its pair and the
 per-qubit layers on each of its qubits. Noise placed before the trailing local
-gates would be equivalent for Pauli noise, but not for coherent over-rotations
-or T1. `SQRT_XX`, `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take
+gates would be equivalent only for noise those gates leave unchanged, such as
+depolarizing noise. Other noise would change: an `X` error before an `H`
+becomes a `Z` error after it, and coherent over-rotations and T1 differ too.
+`SQRT_XX`, `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take
 two Maestro entangling gates, because the noisy last gate must be one of
 Maestro's two-qubit gates, which all have a Z on one side.
 

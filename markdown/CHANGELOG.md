@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last of them is noisy, so a `NoiseModel` adds the gate's noise once, after
   the whole gate, as it does for a native gate: the two-qubit layers on its
   pair and the per-qubit layers on each of its qubits. Noise before trailing
-  local gates would be equivalent for Pauli noise but not for coherent
-  over-rotations or T1. `II`, like `I`, is a zero-duration idle. `SQRT_XX`,
+  local gates would be equivalent only for noise those gates leave unchanged,
+  such as depolarizing noise: an `X` error before an `H` becomes a `Z` error,
+  and coherent over-rotations and T1 differ too. `II`, like `I`, is a
+  zero-duration idle. `SQRT_XX`,
   `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take two Maestro
   entangling gates, because the noisy last gate must be one of Maestro's
   two-qubit gates, which all have a Z on one side.
