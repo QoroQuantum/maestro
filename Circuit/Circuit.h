@@ -2217,13 +2217,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return true;
     }
 
-    // Without a backend, allow for a pure-state simulator whose per-gate pruning
-    // depends on earlier collapses anywhere in the register. A false result must
-    // be safe for callers that sample only the terminal measurements. With a
-    // simulator, HasOpsAfterMeasurementsOn can use its actual reordering policy.
+    // Check dependencies on the measured wires. A caller choosing a terminal
+    // sampler for a particular backend should use HasOpsAfterMeasurementsOn
+    // with its policy, since pruning can also constrain independent wires.
     bool HasOpsAfterMeasurements(bool exactChannels = false) const
     {
-        return HasOpsAfterMeasurementsOn({exactChannels, !exactChannels});
+        return HasOpsAfterMeasurementsOn({exactChannels, false});
     }
 
     bool HasOpsAfterMeasurementsOn(Simulators::ShotPrefixPolicy policy) const
@@ -2343,6 +2342,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return !resetQubits.empty();
     }
 
+    // Plan the same prefix as an execution on the backend with this policy.
+    std::vector<bool> PlanNonMeasurements(OperationState &state, Simulators::ShotPrefixPolicy policy) const
+    {
+        return ExecuteNonMeasurements(nullptr, state, nullptr, policy.exactChannels, RequiresContiguousPrefix(policy));
+    }
+
     /**
      * @brief Execute the non-measurements operations from the circuit on the
      * given simulator.
@@ -2363,8 +2368,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     {
         if (sim)
         {
-            exactChannels = sim->SupportsQuantumChannels();
-            contiguousPrefix = sim->RequiresContiguousPrefix();
+            const auto policy = sim->GetShotPrefixPolicy();
+            exactChannels = policy.exactChannels;
+            contiguousPrefix = RequiresContiguousPrefix(policy);
         }
         // With gate fusion, the look-ahead routing of an MPS/MPO follows the
         // simulator's upcoming operations in order, and stepping over an operation
@@ -3243,6 +3249,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     }
 
   private:
+    bool RequiresContiguousPrefix(Simulators::ShotPrefixPolicy policy) const
+    {
+        return policy.contiguous || (policy.contiguousWithDrawnChannels && HasDrawnChannels());
+    }
+
     std::vector<std::shared_ptr<Circuit<Time>>> BuildLayers(bool multiQubitLayers, bool clone) const
     {
         std::vector<std::shared_ptr<Circuit<Time>>> layers{std::make_shared<Circuit<Time>>()};

@@ -1064,7 +1064,7 @@ def test_path_integral_pruning_keeps_independent_gates_after_a_channel(return_sa
 @pytest.mark.parametrize("checkpoint", [False, True], ids=["execute", "checkpoint"])
 @pytest.mark.parametrize("return_samples", [False, True], ids=["counts", "rows"])
 @pytest.mark.parametrize("collapse", ["measure", "reset"])
-@pytest.mark.parametrize("threshold", [0.0, 0.2], ids=["exact", "pruned"])
+@pytest.mark.parametrize("threshold", [None, 0.0, 1e-15, 0.2], ids=["default", "exact", "explicit-default", "coarse"])
 def test_path_integral_prefix_respects_collapse_on_an_independent_wire(checkpoint, return_samples, collapse, threshold):
     shots = 2048
     config = _config(S.PathIntegral, seed=73, path_integral_threshold=threshold)
@@ -1097,7 +1097,7 @@ def test_path_integral_prefix_respects_collapse_on_an_independent_wire(checkpoin
     assert p1 == pytest.approx(0.65, abs=0.06)
     assert p2 == pytest.approx(0.30, abs=0.06)
     if (checkpoint or return_samples) and collapse == "measure":
-        assert result["sampling_strategy"] == ("trajectory_v1" if threshold else "terminal_v1")
+        assert result["sampling_strategy"] == ("trajectory_v1" if threshold == 0.2 else "terminal_v1")
 
 
 def test_path_integral_counts_execute_gates_after_an_empty_measurement():

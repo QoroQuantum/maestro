@@ -340,8 +340,12 @@ the QCSim path integral and the composite statevector, in the execute and estima
   state-dependent Kraus factor, all retained amplitudes contribute to the branch
   probabilities. The simulator normalizes the selected branch before later
   gates resume pruning, so even a low-probability jump can produce a normalized
-  state. Measurement and reset can also renormalize the state, which is why
-  gate order matters even on disjoint qubits.
+  state. At any positive threshold, a circuit with a sampled channel keeps
+  gates in order across that channel. For circuits without sampled channels,
+  the default threshold (`1e-15`) and smaller thresholds allow independent gates
+  to move ahead of a measurement so multiple shots can share one preparation.
+  A threshold above `1e-15` preserves the order of deferred measurements and
+  resets too, because collapse can change which paths a later gate prunes.
 - **QCSim statevector trajectories.** For amplitude damping and other Kraus
   operators with at most one nonzero entry per row, a pass over the state gives
   the target populations needed to choose the branch. A general operator can

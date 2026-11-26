@@ -63,7 +63,7 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
     if (circuit.HasOpsAfterMeasurementsOn(policy))
         return false;
     Circuits::OperationState dry(width);
-    const auto executed = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, policy.exactChannels, policy.contiguous);
+    const auto executed = circuit.PlanNonMeasurements(dry, policy);
     const auto &operations = circuit.GetOperations();
     const size_t first = operations.size() - executed.size();
     for (size_t i = first; i < operations.size(); ++i)
@@ -204,7 +204,7 @@ bool SampleSharedHead(const Circuits::Circuit<double> &input, const std::shared_
     if (!policy.exactChannels && HasResetOperation(circuit))
         return false;
     Circuits::OperationState dry(state);
-    const auto mask = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, policy.exactChannels, policy.contiguous);
+    const auto mask = circuit.PlanNonMeasurements(dry, policy);
     const size_t shared = circuit.GetOperations().size() - mask.size() + static_cast<size_t>(std::count(mask.begin(), mask.end(), true));
     if (shared == 0)
         return false;

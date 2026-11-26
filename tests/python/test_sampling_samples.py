@@ -214,9 +214,6 @@ def test_raw_terminal_measurements_draw_rows_from_one_prepared_state(method):
     # Qubit 0 is measured twice with nothing in between: both records agree.
     circuit.measure([(0, 0), (1, 1), (3, 3)])
     config = _config(method)
-    if method == maestro.SimulationType.PathIntegral:
-        # Sharing this preparation moves H and CX ahead of the first measurement.
-        config.path_integral_threshold = 0.0
     result = circuit.execute(config=config, shots=4000, return_samples=True)
     assert result["sampling_strategy"] == "terminal_v1"
     rows = _records(result, 4000, 4)

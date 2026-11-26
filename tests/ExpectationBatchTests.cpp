@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <unordered_map>
 
 namespace
 {
@@ -51,18 +52,42 @@ void PathIntegralMeasurementPrefix()
     circuit.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
     circuit.AddOperation(CF::CreateMeasurement({{1, 1}}));
 
-    // The legacy query has no simulator. A caller using it to choose terminal
-    // sampling must never discard an X that its actual simulator defers.
-    Check(circuit.HasOpsAfterMeasurements(), "Backend-independent planning skipped a gate after measurement");
-    auto simulator = Make(Method::kPathIntegral, 2);
-    Circuits::OperationState state(2);
-    Check(circuit.HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()), "Default path-integral pruning reordered a measurement");
-    Check(circuit.ExecuteNonMeasurements(simulator, state) == std::vector<bool>({false, false, false}), "Pruned path integral shared a noncontiguous prefix");
+    Check(!circuit.HasOpsAfterMeasurements(), "Wire-local planning treated an independent X as a measurement dependency");
 
-    simulator->Configure("path_integral_threshold", "0");
-    Check(!circuit.HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()), "Unpruned path integral lost terminal sampling");
-    Check(circuit.ExecuteNonMeasurements(simulator, state) == std::vector<bool>({false, true, false}),
-          "Unpruned path integral did not share an independent gate");
+    auto nested = std::make_shared<Circuit>();
+    nested->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(.5)));
+    Circuit noisy;
+    noisy.AddOperation(nested);
+    noisy.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    noisy.AddOperation(CF::CreateMeasurement({{1, 1}}));
+
+    auto simulator = Make(Method::kPathIntegral, 2);
+    const auto checkThreshold = [&](const char *threshold, bool shareAfterMeasurement, bool shareAfterChannel) {
+        std::unordered_map<std::string, std::string> options;
+        if (threshold)
+        {
+            simulator->Configure("path_integral_threshold", threshold);
+            options.emplace("path_integral_threshold", threshold);
+        }
+        const auto configured = Simulators::ShotPrefixPolicy::FromConfiguration(Backend::kQCSim, Method::kPathIntegral, options);
+        const auto live = simulator->GetShotPrefixPolicy();
+        Check(circuit.HasOpsAfterMeasurementsOn(live) == !shareAfterMeasurement, "Incorrect terminal classification after a measurement");
+        Check(noisy.HasOpsAfterMeasurementsOn(live), "A drawn channel was classified as terminal sampling");
+        const auto checkMask = [&](const Circuit &input, bool shareGate) {
+            Circuits::OperationState state(2);
+            const std::vector<bool> expected{false, shareGate, false};
+            Check(input.PlanNonMeasurements(state, configured) == expected, "Configured prefix planned an incorrect suffix");
+            Check(input.ExecuteNonMeasurements(simulator, state) == expected, "Live prefix executed an incorrect suffix");
+        };
+        checkMask(circuit, shareAfterMeasurement);
+        checkMask(noisy, shareAfterChannel);
+    };
+    checkThreshold(nullptr, true, false);
+    checkThreshold("1e-16", true, false);
+    checkThreshold("1e-15", true, false);
+    checkThreshold("1.0000000000000003e-15", false, false);
+    checkThreshold("0.2", false, false);
+    checkThreshold("0", true, true);
 }
 
 void RealBatches()

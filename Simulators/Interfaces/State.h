@@ -169,23 +169,32 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
 class IState;
 
 // A shot planner can run before the selected simulator has allocated a register.
-// QCSim's default path-integral threshold is positive. An explicit zero keeps
-// its exact, unpruned behavior, including reordering on independent wires.
 struct ShotPrefixPolicy
 {
     bool exactChannels;
     bool contiguous;
+    bool contiguousWithDrawnChannels = false;
+
+    // QCSim's native default. At this tolerance measurement-only circuits can
+    // share independent gates across shots. Coarser pruning preserves the
+    // order of every collapse. Sampled channels retain their ordering guard
+    // whenever pruning is enabled.
+    static constexpr double kDefaultPathIntegralThreshold = 1e-15;
+
+    static ShotPrefixPolicy ForPathIntegral(double threshold)
+    {
+        return {false, threshold > kDefaultPathIntegralThreshold, threshold > 0.};
+    }
 
     static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
                                               std::optional<double> pathIntegralThreshold = std::nullopt)
     {
-        const bool exact = EvolvesExactQuantumChannels(type, method);
         if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
-            return {exact, false};
+            return {EvolvesExactQuantumChannels(type, method), false};
         if (pathIntegralThreshold)
-            return {exact, *pathIntegralThreshold > 0.};
+            return ForPathIntegral(*pathIntegralThreshold);
         const auto value = options.find("path_integral_threshold");
-        return {exact, value == options.end() || std::stod(value->second) > 0.};
+        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second));
     }
 };
 
@@ -693,14 +702,9 @@ class IState
 
     // A gate on a disjoint wire may still depend on a preceding collapse or
     // conditional gate when the simulator prunes the whole state per operation.
-    virtual bool RequiresContiguousPrefix() const
+    virtual ShotPrefixPolicy GetShotPrefixPolicy() const
     {
-        return false;
-    }
-
-    ShotPrefixPolicy GetShotPrefixPolicy() const
-    {
-        return {SupportsQuantumChannels(), RequiresContiguousPrefix()};
+        return {SupportsQuantumChannels(), false};
     }
 
     /**

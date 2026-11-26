@@ -272,7 +272,7 @@ class ExecutionCost
         Circuits::OperationState dummyState;
         const auto policy = Simulators::ShotPrefixPolicy::FromConfiguration(Simulators::SimulatorType::kQCSim, method, {});
         const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurementsOn(policy);
-        const std::vector<bool> executedOps = circuit->ExecuteNonMeasurements(nullptr, dummyState, nullptr, policy.exactChannels, policy.contiguous);
+        const std::vector<bool> executedOps = circuit->PlanNonMeasurements(dummyState, policy);
 
         const size_t dif = circuit->size() - executedOps.size();
 

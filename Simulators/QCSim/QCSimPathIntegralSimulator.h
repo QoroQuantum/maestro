@@ -169,10 +169,10 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         return pathIntegralSimulator->ProbabilityBits(bits);
     }
 
-    bool RequiresContiguousPrefix() const override
+    ShotPrefixPolicy GetShotPrefixPolicy() const override
     {
-        return pathIntegralSimulator ? pathIntegralSimulator->GetTrimValue() > 0.
-                                     : ShotPrefixPolicy::FromConfiguration(GetType(), GetSimulationType(), configuration.GetConfigMap()).contiguous;
+        return pathIntegralSimulator ? ShotPrefixPolicy::ForPathIntegral(pathIntegralSimulator->GetTrimValue())
+                                     : ShotPrefixPolicy::FromConfiguration(GetType(), GetSimulationType(), configuration.GetConfigMap());
     }
 
     bool SamplesQuantumChannels() const override
