@@ -195,6 +195,7 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         for (const auto &factor : factors)
         {
             const size_t first = targets[factor.qubits.front()];
+            // AppliedGate takes its arity from the matrix. A 2x2 operator uses only the first target.
             const size_t second = factor.qubits.size() == 2 ? targets[factor.qubits[1]] : 0;
             const double random = ChannelUniform();
             if (factor.IsStateIndependent())

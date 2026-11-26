@@ -114,8 +114,8 @@ inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &co
     // is clamped, drawn as a reset or refused there.
     const bool runtime = InjectsRuntimeChannels(config, result.exact);
     Supported(result.exact || runtime || !result.model.has_additional_quantum_channels(),
-              "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the qcsim pauli_propagator) or a "
-              "backend that samples channels from its state (statevector, matrix_product_state, qcsim path_integral)");
+              "This noise model requires exact channel evolution (density_matrix, matrix_product_operator or the QCSim pauli_propagator) or a "
+              "backend that samples channels from its state (statevector, matrix_product_state, QCSim path_integral)");
     // Match Python's sampled thermal policy without altering calibrated channels
     // used by exact density-matrix/MPO evolution.
     if (!result.exact && !runtime)
@@ -160,7 +160,7 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     // "auto" is settled once the channels are known: see InjectsExactChannels.
     result.automatic = evaluation == "auto";
     result.exact = evaluation == "exact";
-    Supported(!result.exact || ExactNoiseApplies(config), "Exact noise requires density_matrix, matrix_product_operator or the qcsim pauli_propagator");
+    Supported(!result.exact || ExactNoiseApplies(config), "Exact noise requires density_matrix, matrix_product_operator or the QCSim pauli_propagator");
     if (const auto *value = object.if_contains("realizations"); value && !value->is_null())
     {
         if (value->is_string())

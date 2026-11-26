@@ -222,7 +222,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
                                          {"generalized_amplitude_damping", "gamma excited_population"},
                                          {"thermal_relaxation", "duration t1 t2 excited_population"}}},
         {"channel_evaluation",
-         "Mixed-state methods and the qcsim pauli_propagator apply kraus, pauli_channel and channel instructions exactly; "
+         "Mixed-state methods and the QCSim pauli_propagator apply kraus, pauli_channel and channel instructions exactly; "
          "statevector, matrix_product_state and QCSim path_integral sample them from their state, one branch each time the circuit runs; the "
          "other pure-state methods draw them per noise realization, need a trajectory noise block (whose channels may then "
          "be omitted) and take only factors whose branches need no state"}};

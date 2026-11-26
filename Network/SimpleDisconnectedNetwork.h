@@ -2790,7 +2790,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             ValidateRetainedPhase(candidate->GetType(), candidate->GetSimulationType(), nrQubits);
             if (hasChannels && !candidate->SupportsQuantumChannels() && !candidate->SamplesQuantumChannels())
                 throw std::runtime_error("This backend neither holds nor samples quantum channels: use density_matrix or matrix_product_operator, "
-                                         "which apply them, or statevector, matrix_product_state or qcsim path_integral, which sample them");
+                                         "which apply them, or statevector, matrix_product_state or QCSim path_integral, which sample them");
         };
         const auto prepare = [&](const std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> &candidates,
                                  bool report = true) -> std::shared_ptr<Simulators::ISimulator> {

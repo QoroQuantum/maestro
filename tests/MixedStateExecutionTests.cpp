@@ -201,6 +201,14 @@ void PathIntegralKrausBranches()
     simulator->ApplyQuantumChannel({6, 1}, Simulators::QuantumChannel::UnitaryMixture({1.}, {controlled}));
     Check(std::abs(simulator->Probability(66) - 1.) < 1e-12, "A two-qubit unitary channel reversed its targets");
 
+    // Place H on local target 1 (q6). From |q6=1,q1=1> it must leave q0 and q1 alone.
+    Eigen::Matrix2cd h;
+    h << 1., 1., 1., -1.;
+    const auto hadamard = Simulators::QuantumChannel::UnitaryMixture({1.}, {h / std::sqrt(2.)});
+    simulator->ApplyQuantumChannel({0, 6}, Simulators::QuantumChannel::OnQubit(hadamard, 1));
+    Check(std::abs(simulator->Amplitude(2) - 1. / std::sqrt(2.)) < 1e-12 && std::abs(simulator->Amplitude(66) + 1. / std::sqrt(2.)) < 1e-12,
+          "A one-qubit unitary factor misplaced its target or changed a spectator");
+
     simulator->Reset();
     simulator->Configure("path_integral_threshold", "0.3");
     simulator->ApplyRy(0, std::acos(-1.) / 3.);

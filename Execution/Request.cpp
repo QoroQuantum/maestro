@@ -649,7 +649,7 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         if (const char *refusal = SampledPrefixRefusal(*circuit, config))
             Supported(false, refusal);
         Supported(!circuit->HasQuantumChannels() || ExactNoiseApplies(config) || SamplesQuantumChannels(config),
-                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the qcsim pauli_propagator, which apply them "
+                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the QCSim pauli_propagator, which apply them "
                   "exactly, or a channel-sampling backend for channels with one branch");
         return;
     }
@@ -676,7 +676,7 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
         Supported(noise::has_sampled_form(channel->GetChannel()),
                   "Channel instructions that need the state (amplitude damping, relaxation with T2 > T1, Kraus maps) require density_matrix, "
-                  "MPO or the qcsim pauli_propagator, with exact evaluation, or statevector, matrix_product_state or qcsim path_integral, which sample them in "
+                  "MPO or the QCSim pauli_propagator, with exact evaluation, or statevector, matrix_product_state or QCSim path_integral, which sample them in "
                   "execute, estimate, noisy_fidelity, checkpoint suffixes and queries of one state; other backends sample only channels whose "
                   "branches need no state");
         Supported(sampled, "Channel instructions on this backend require a noise block with trajectory evaluation; "
