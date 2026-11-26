@@ -1061,6 +1061,54 @@ def test_path_integral_pruning_keeps_independent_gates_after_a_channel(return_sa
     assert 190 < ones < 322
 
 
+@pytest.mark.parametrize("checkpoint", [False, True], ids=["execute", "checkpoint"])
+@pytest.mark.parametrize("return_samples", [False, True], ids=["counts", "rows"])
+@pytest.mark.parametrize("collapse", ["measure", "reset"])
+@pytest.mark.parametrize("threshold", [0.0, 0.2], ids=["exact", "pruned"])
+def test_path_integral_prefix_respects_collapse_on_an_independent_wire(checkpoint, return_samples, collapse, threshold):
+    shots = 2048
+    config = _config(S.PathIntegral, seed=73, path_integral_threshold=threshold)
+    prefix = QuantumCircuit()
+    prefix.ry(0, 2 * math.asin(math.sqrt(0.30)))
+    prefix.cx(0, 2)
+    body = QuantumCircuit() if checkpoint else prefix
+    body.ry(1, 2 * math.asin(math.sqrt(0.35)))
+    if collapse == "measure":
+        body.measure([(0, 0)])
+    else:
+        body.reset(0)
+    body.x(1)
+    body.measure([(1, 1), (2, 2)])
+    if checkpoint:
+        result = maestro.PrefixCheckpointedSimulator(prefix, 3, config).execute_suffix(body, shots=shots, return_samples=return_samples)
+    else:
+        result = body.execute(config, shots, return_samples=return_samples)
+
+    # Before collapse the rows with q2=1 weigh .105 and .195. Hoisting X1
+    # prunes both at .2. After collapse the surviving rows weigh .35 and .65.
+    # Checking q1 as well catches a terminal sampler that omits the deferred X.
+    if return_samples:
+        assert result["samples"].shape == (shots, 3)
+        p1, p2 = result["samples"][:, 1:].mean(axis=0)
+    else:
+        counts = result["counts"]
+        assert sum(counts.values()) == shots
+        p1, p2 = (sum(n for bits, n in counts.items() if bits[q] == "1") / shots for q in (1, 2))
+    assert p1 == pytest.approx(0.65, abs=0.06)
+    assert p2 == pytest.approx(0.30, abs=0.06)
+    if (checkpoint or return_samples) and collapse == "measure":
+        assert result["sampling_strategy"] == ("trajectory_v1" if threshold else "terminal_v1")
+
+
+def test_path_integral_counts_execute_gates_after_an_empty_measurement():
+    circuit = QuantumCircuit()
+    circuit.measure([])
+    circuit.x(0)
+    circuit.measure([(0, 0)])
+    result = circuit.execute(_config(S.PathIntegral, path_integral_threshold=0.2), 50)
+    assert result["counts"] == {"1": 50}
+
+
 # ---------------------------------------------------------------- channels drawn without the state
 
 def _stateless_channel_circuit(noisy=True):

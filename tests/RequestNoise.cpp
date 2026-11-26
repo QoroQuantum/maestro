@@ -190,6 +190,30 @@ void TestPathIntegralNoisyProbability()
     const auto ideal = Call(request);
     Near(Real(ideal.at("probability")), 0.7);
     Near(Real(ideal.at("std_error")), 0.);
+    Check(Real(ideal.at("noise_realizations")) == 1 && Real(ideal.at("realizations_evaluated")) == 1,
+          "An automatic readout-only probability should evaluate one realization");
+    // Native state queries require fixed selection, even when the caller omits candidates.
+    auto automatic = request;
+    automatic["simulator"].as_object()["selection"] = "automatic";
+    for (bool validate : {false, true})
+        Check(Call(automatic, false, validate).at("error").at("code") == "unsupported_capability", "Automatic query selection was accepted");
+    automatic["simulator"].as_object()["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "path_integral"}}};
+    for (bool validate : {false, true})
+        Check(Call(automatic, false, validate).at("error").at("code") == "unsupported_capability", "A noisy_prob candidate list was accepted");
+    for (const auto *mode : {"combined", "pauli", "coherent"})
+    {
+        auto selected = request;
+        auto &noise = selected["noise"].as_object();
+        noise["mode"] = mode;
+        noise["realizations"] = 19;
+        Call(selected, true, true);
+        const auto result = Call(selected);
+        Near(Real(result.at("probability")), .7);
+        Near(Real(result.at("std_error")), 0.);
+        Check(Real(result.at("noise_realizations")) == 19 && Real(result.at("noise").at("requested_realizations")) == 19 &&
+                  Real(result.at("realizations_evaluated")) == 1 && result.at("execution_metadata").at("estimate_evaluation") == "deterministic",
+              "An explicit readout-only schedule should evaluate one deterministic realization in every mode");
+    }
 
     const j::array operators{j::array{1, 0, 0, 0.8}, j::array{0, 0.6, 0, 0}};
     request["noise"].as_object()["channels"] = j::array{Channel("kraus", {{"operators", operators}}), readout};
@@ -199,7 +223,8 @@ void TestPathIntegralNoisyProbability()
     const auto noisy = Call(request);
     const double mean = Real(noisy.at("probability")), error = Real(noisy.at("std_error"));
     Near(error, std::sqrt((mean - 0.1) * (0.7 - mean) / 1023.));
-    Check(std::abs(mean - 0.484) < 5. * error && Real(noisy.at("noise_realizations")) == 1024 && !noisy.contains("amplitude"),
+    Check(std::abs(mean - 0.484) < 5. * error && Real(noisy.at("noise_realizations")) == 1024 && Real(noisy.at("realizations_evaluated")) == 1024 &&
+              noisy.at("execution_metadata").at("estimate_evaluation") == "trajectory_average" && !noisy.contains("amplitude"),
           "noisy_prob did not average readout-adjusted populations over the Kraus trajectories");
     Near(Real(Call(request).at("probability")), mean);
     request["noise"].as_object()["realizations"] = 1;
@@ -225,6 +250,41 @@ void TestPathIntegralNoisyProbability()
     Check(direct.std_error.has_value(), "C++ noisy probability omitted its standard error");
     Near(Real(seeded.at("probability")), direct.probability);
     Near(Real(seeded.at("std_error")), *direct.std_error);
+    Check(direct.realizations_evaluated == 71 && std::string_view(direct.EstimateEvaluation()) == "trajectory_average",
+          "Direct noisy probability did not report the evaluated trajectories");
+    auto embedded = request;
+    embedded["circuit"] = j::object{{"format", "instructions"},
+                                    {"num_qubits", 1},
+                                    {"source", j::array{j::object{{"name", "x"}, {"qubits", j::array{0}}},
+                                                        j::object{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", operators}}}}};
+    embedded["noise"].as_object()["channels"] = j::array{readout};
+    for (const auto *mode : {"combined", "pauli", "coherent"})
+    {
+        embedded["noise"].as_object()["mode"] = mode;
+        const auto result = Call(embedded);
+        Near(Real(result.at("probability")), direct.probability);
+        Near(Real(result.at("std_error")), *direct.std_error);
+    }
+    for (const auto *mode : {"pauli", "coherent", "analytical", "invalid"})
+    {
+        auto selected = request;
+        selected["noise"].as_object()["mode"] = mode;
+        for (bool validate : {false, true})
+            Call(selected, false, validate);
+    }
+    for (const auto layer : {MaestroExecution::NoiseLayer::kPauli, MaestroExecution::NoiseLayer::kCoherent})
+    {
+        bool rejected = false;
+        try
+        {
+            MaestroExecution::NoisyStateProbability(circuit, {true}, model, 1, config, 0, layer);
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "A selected layer silently accepted incompatible external Kraus noise");
+    }
     request["simulator"].as_object()["method"] = "statevector";
     Call(request, false, true);
 

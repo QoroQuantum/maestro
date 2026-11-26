@@ -197,19 +197,25 @@ constexpr char NoisyProbDoc[] = "Estimate the probability of a target bitstring 
                                 "Gate noise and circuit channels are averaged over independent realizations. With only readout noise, the "
                                 "coherent probability is computed directly. Readout error includes the zero-flip and single-flip terms, "
                                 "with asymmetric rates supported. Supply readout error in noise_model. Measurements must be unconditional "
-                                "and terminal on their wires.\n\n"
+                                "and terminal on their wires. mode selects the external gate noise: 'combined' accepts every family, "
+                                "'pauli' accepts per-qubit Pauli noise, and 'coherent' accepts coherent rotations. All modes apply "
+                                "circuit channels and readout.\n\n"
                                 "noise_realizations defaults to 100 for quantum noise and one for coherent queries. noise_seed selects "
                                 "the random realizations and also seeds execution when config.seed is omitted. An optional QCSim "
                                 "PathIntegral config controls the simulation seed and path trimming. Returns probability, "
                                 "std_error (None for one stochastic realization), "
-                                "noise_realizations, target_state, time_taken and has_readout_error.";
+                                "noise_realizations (scheduled), realizations_evaluated (one for direct coherent queries), "
+                                "estimate_evaluation ('deterministic' or 'trajectory_average'), target_state, time_taken and has_readout_error.";
 
 nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, const noise::NoiseModel &noise_model, std::optional<int> noise_realizations,
-                   std::optional<uint64_t> noise_seed, std::optional<SimulatorConfig> config)
+                   std::optional<uint64_t> noise_seed, std::optional<SimulatorConfig> config, const std::string &mode)
 {
     require_circuit(circuit);
     require_realizations(noise_realizations);
     const auto bits = TargetBits(target_state);
+    const auto layer = MaestroExecution::NoiseLayerForMode(mode);
+    if (!layer)
+        throw std::invalid_argument("noisy_prob mode must be combined, pauli or coherent.");
     if (!config)
     {
         config.emplace();
@@ -219,7 +225,7 @@ nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, c
     MaestroExecution::NoisyProbabilityResult probability;
     {
         nb::gil_scoped_release release;
-        probability = MaestroExecution::NoisyStateProbability(circuit, bits, noise_model, noise_realizations, *config, noise_seed);
+        probability = MaestroExecution::NoisyStateProbability(circuit, bits, noise_model, noise_realizations, *config, noise_seed, *layer);
     }
     nb::dict result;
     result["probability"] = probability.probability;
@@ -227,6 +233,8 @@ nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, c
     result["time_taken"] = probability.time_taken;
     result["has_readout_error"] = noise_model.has_readout_error();
     result["noise_realizations"] = probability.realizations;
+    result["realizations_evaluated"] = probability.realizations_evaluated;
+    result["estimate_evaluation"] = probability.EstimateEvaluation();
     result["std_error"] = nb::cast(probability.std_error);
     AddNoisePolicyMetadata(result, probability.policy);
     return result;
@@ -471,7 +479,7 @@ void bind_circuit(nb::module_ &m)
             "    dict with 'probability', 'amplitude', 'target_state', "
             "'time_taken'.")
         .def("noisy_prob", &NoisyProb, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "config"_a = nb::none(),
-             NoisyProbDoc)
+             "mode"_a = "combined", NoisyProbDoc)
 
         // ---- Bound Methods for Noisy Execution ----
         .def("noisy_execute", &NoisyExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
@@ -537,7 +545,7 @@ void bind_circuit(nb::module_ &m)
             "'time_taken', 'noise_realizations'.\n\n"
             "Example: qc.noisy_fidelity(nm, noise_realizations=200)");
     m.def("noisy_prob", &NoisyProb, "circuit"_a, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(),
-          "config"_a = nb::none(), NoisyProbDoc);
+          "config"_a = nb::none(), "mode"_a = "combined", NoisyProbDoc);
 }
 
 } // namespace maestro_bindings

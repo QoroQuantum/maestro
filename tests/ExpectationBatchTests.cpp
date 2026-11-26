@@ -44,6 +44,27 @@ auto Make(Method method, size_t n = 4)
     return sim;
 }
 
+void PathIntegralMeasurementPrefix()
+{
+    Circuit circuit;
+    circuit.AddOperation(CF::CreateMeasurement({{0, 0}}));
+    circuit.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    circuit.AddOperation(CF::CreateMeasurement({{1, 1}}));
+
+    // The legacy query has no simulator. A caller using it to choose terminal
+    // sampling must never discard an X that its actual simulator defers.
+    Check(circuit.HasOpsAfterMeasurements(), "Backend-independent planning skipped a gate after measurement");
+    auto simulator = Make(Method::kPathIntegral, 2);
+    Circuits::OperationState state(2);
+    Check(circuit.HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()), "Default path-integral pruning reordered a measurement");
+    Check(circuit.ExecuteNonMeasurements(simulator, state) == std::vector<bool>({false, false, false}), "Pruned path integral shared a noncontiguous prefix");
+
+    simulator->Configure("path_integral_threshold", "0");
+    Check(!circuit.HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()), "Unpruned path integral lost terminal sampling");
+    Check(circuit.ExecuteNonMeasurements(simulator, state) == std::vector<bool>({false, true, false}),
+          "Unpruned path integral did not share an independent gate");
+}
+
 void RealBatches()
 {
     const std::vector<std::string> paulis{"XIZY", "ZZZZ", "IIII", "XIZY", "YIIY", "ZIIZ"};
@@ -644,6 +665,8 @@ int main(int argc, char **argv)
                   "GPU tensor extensions unavailable");
         }
 #endif
+        if (backend == Backend::kQCSim)
+            PathIntegralMeasurementPrefix();
         RealBatches();
         ComplexAndC();
         ProbabilityQueriesInC();

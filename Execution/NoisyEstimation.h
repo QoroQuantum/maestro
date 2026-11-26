@@ -106,6 +106,12 @@ struct NoisyProbabilityResult
     size_t realizations = 0;
     NoiseRealizationPolicy policy;
     double time_taken = 0;
+    size_t realizations_evaluated = 0;
+
+    const char *EstimateEvaluation() const
+    {
+        return policy.stochastic_noise || policy.stochastic_execution ? "trajectory_average" : "deterministic";
+    }
 };
 
 // Validate a single target (qubit zero first) and the circuit before terminal readout.
@@ -113,6 +119,8 @@ MAESTRO_TRANSFORM_API void ValidateNoisyStateProbability(const RecordCircuitPtr 
 
 // Path integral probability averaged over noise realizations. Readout includes zero and single-bit flips.
 // The error is the standard error across realizations, absent for a single stochastic sample.
+// The layer constrains the external gate noise. Readout and circuit channels apply in all three modes.
+// realizations is the logical schedule. realizations_evaluated counts one for a direct coherent endpoint evaluation.
 MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target,
                                                                    const noise::NoiseModel &model, std::optional<size_t> requested_realizations,
                                                                    const SimulatorConfig &config, std::optional<uint64_t> noise_seed,

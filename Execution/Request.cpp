@@ -1135,7 +1135,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     const bool noisyProbability = operation == "noisy_prob";
     auto config = ParseConfig(Sub(request, "simulator"), noisyProbability ? "path_integral" : "statevector");
     const bool pathIntegral = config.simulator_type == Backend::kQCSim && config.simulation_type == Method::kPathIntegral;
-    Supported(!noisyProbability || pathIntegral, "noisy_prob requires the QCSim path_integral method");
+    Supported(!noisyProbability || (pathIntegral && config.fixed_backend), "noisy_prob requires the fixed QCSim path_integral method.");
     const auto &execution = Sub(request, "execution");
     Keys(execution, {"shots", "seed", "return_samples"});
     Require(!execution.contains("shots") || operation == "execute" || operation == "checkpoint_batch", "execution.shots does not apply to " + operation);
@@ -1163,7 +1163,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             Require(UInt(q) < input.qubits, "Global qubit exceeds register");
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
-    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits, noisyProbability);
     if (noise.enabled && !noise.automatic && !noise.exact)
         config.terminal_channel_policy = "trajectories";
     // Automatic evaluation follows the circuit too. A checkpoint's noise acts
@@ -1623,7 +1623,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         executionResult.method = config.simulation_type;
         auto metadata = ReductionMetadata(executionResult, config);
         metadata["stochastic_execution"] = estimate.policy.stochastic_execution;
-        metadata["estimate_evaluation"] = estimate.policy.stochastic_execution || estimate.policy.stochastic_noise ? "trajectory_average" : "deterministic";
+        metadata["estimate_evaluation"] = estimate.EstimateEvaluation();
         json::object result{{"schema_version", SchemaVersion},
                             {"operation", operation},
                             {"num_qubits", input.qubits},
@@ -1632,6 +1632,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                             {"probability", estimate.probability},
                             {"std_error", estimate.std_error ? json::value(*estimate.std_error) : json::value(nullptr)},
                             {"noise_realizations", estimate.realizations},
+                            {"realizations_evaluated", estimate.realizations_evaluated},
                             {"has_readout_error", noise.model.has_readout_error()},
                             {"seed", *config.seed},
                             {"time_taken", estimate.time_taken},

@@ -227,6 +227,78 @@ void PathIntegralKrausBranches()
     Check(std::abs(jumps / 512. - .125) < .055, "A Kraus branch below the gate threshold was dropped");
 }
 
+void PathIntegralChannelComposition()
+{
+    using Channel = Simulators::QuantumChannel;
+    auto simulator = Simulators::SimulatorsFactory::CreateSimulatorUnique(Simulators::SimulatorType::kQCSim, Method::kPathIntegral);
+    simulator->AllocateQubits(3);
+    simulator->Initialize();
+    simulator->Configure("path_integral_threshold", "0.3");
+    // Ry loses its small coefficient. The Hadamards split the remaining
+    // probability 3/4 into four rows, each below the threshold of the next gate.
+    simulator->ApplyRy(0, std::acos(-1.) / 3.);
+    simulator->ApplyH(1);
+    simulator->ApplyH(0);
+    const auto amplitudes = [&] {
+        std::vector<std::complex<double>> result;
+        for (size_t row = 0; row < 8; ++row)
+            result.push_back(simulator->Amplitude(row));
+        return result;
+    };
+    const auto before = amplitudes();
+    Check(std::abs(simulator->TotalProbability() - .75) < 1e-12 && std::abs(std::norm(before[0]) - .1875) < 1e-12, "Invalid channel pruning fixture");
+    const Eigen::Matrix2cd identity = Eigen::Matrix2cd::Identity();
+    const auto unitaryIdentity = Channel::UnitaryMixture({1.}, {identity});
+    const auto pauliIdentity = Channel::Pauli({1., 0., 0., 0.});
+    for (const auto &channel : {pauliIdentity, unitaryIdentity, Channel(Channel::KrausOperators{identity}), Channel::AmplitudeDamping(0.),
+                                unitaryIdentity.Then(Channel::AmplitudeDamping(0.))})
+    {
+        simulator->ApplyQuantumChannel({0}, channel);
+        Check(amplitudes() == before, "An identity channel pruned or normalized retained amplitudes");
+    }
+
+    const auto damping = Channel::AmplitudeDamping(.25);
+    Eigen::Matrix2cd z = identity;
+    z(1, 1) = -1.;
+    const auto phaseFlip = Channel::UnitaryMixture({1.}, {z});
+    for (const auto &channel : {phaseFlip.Then(damping), damping.Then(phaseFlip).Then(damping)})
+    {
+        // q2 is zero, so leading damping has a certain no-jump outcome. Z on
+        // q2 then prunes all four inputs, and the following damping must fail.
+        bool failed = false;
+        try
+        {
+            simulator->ApplyQuantumChannel({2}, channel);
+        }
+        catch (const std::domain_error &)
+        {
+            failed = true;
+        }
+        Check(failed && amplitudes() == before, "A failed channel published a partial sparse state");
+    }
+
+    simulator->Configure("path_integral_threshold", "0");
+    simulator->SaveState();
+    const auto depolarizing = Channel::Depolarizing(.5);
+    for (const auto &first : {unitaryIdentity, depolarizing, damping, phaseFlip})
+    {
+        const auto composed = first.Then(damping);
+        for (uint64_t seed = 1; seed <= 32; ++seed)
+        {
+            simulator->RestoreState();
+            simulator->SetSeed(seed);
+            simulator->ApplyQuantumChannel({0}, composed);
+            const auto joint = amplitudes();
+            const double nextDraw = simulator->ChannelUniform();
+            simulator->RestoreState();
+            simulator->SetSeed(seed);
+            simulator->ApplyQuantumChannel({0}, first);
+            simulator->ApplyQuantumChannel({0}, damping);
+            Check(amplitudes() == joint && simulator->ChannelUniform() == nextDraw, "Composed channel factors changed amplitudes or the seeded draw stream");
+        }
+    }
+}
+
 void PreparedStateContract(Method method)
 {
     auto simulator = Simulator(method);
@@ -1131,6 +1203,7 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 void TestMixedStateExecution()
 {
     PathIntegralKrausBranches();
+    PathIntegralChannelComposition();
     CheckUnitaryPreparation();
     CheckPreparationGateAdjoints();
     CheckRealizationFidelityIdeal();

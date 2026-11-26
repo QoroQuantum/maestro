@@ -26,6 +26,7 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -166,6 +167,27 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
 }
 
 class IState;
+
+// A shot planner can run before the selected simulator has allocated a register.
+// QCSim's default path-integral threshold is positive. An explicit zero keeps
+// its exact, unpruned behavior, including reordering on independent wires.
+struct ShotPrefixPolicy
+{
+    bool exactChannels;
+    bool contiguous;
+
+    static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
+                                              std::optional<double> pathIntegralThreshold = std::nullopt)
+    {
+        const bool exact = EvolvesExactQuantumChannels(type, method);
+        if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
+            return {exact, false};
+        if (pathIntegralThreshold)
+            return {exact, *pathIntegralThreshold > 0.};
+        const auto value = options.find("path_integral_threshold");
+        return {exact, value == options.end() || std::stod(value->second) > 0.};
+    }
+};
 
 // The probability of every basis state, also where AllProbabilities is not defined (defined below).
 inline std::vector<double> BasisProbabilities(IState &state);
@@ -667,6 +689,18 @@ class IState
     virtual bool SamplesQuantumChannels() const
     {
         return false;
+    }
+
+    // A gate on a disjoint wire may still depend on a preceding collapse or
+    // conditional gate when the simulator prunes the whole state per operation.
+    virtual bool RequiresContiguousPrefix() const
+    {
+        return false;
+    }
+
+    ShotPrefixPolicy GetShotPrefixPolicy() const
+    {
+        return {SupportsQuantumChannels(), RequiresContiguousPrefix()};
     }
 
     /**

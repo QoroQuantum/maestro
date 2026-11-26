@@ -960,7 +960,9 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
     config.Validate();
     if (HasCandidateList(config) || config.simulator_type != Simulators::SimulatorType::kQCSim ||
         config.simulation_type != Simulators::SimulationType::kPathIntegral)
-        throw std::invalid_argument("NoisyStateProbability requires fixed QCSim path_integral.");
+        throw std::invalid_argument("noisy_prob requires the fixed QCSim path_integral method.");
+    if (const auto *error = NoisyProbabilityLayerError(model, layer))
+        throw std::invalid_argument(error);
     config.fixed_backend = true;
     // Native requests promote a lone noise seed to the execution seed. Do the same here so that a runtime
     // Kraus branch uses identical streams through C++, JSON and Python, including when only one seed is given.
@@ -989,6 +991,7 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
         out.probability = readout.Evaluate([&](const auto &bits) { return std::norm(paths.AmplitudeFromZero(bits)); });
         out.std_error = 0.;
         out.policy.realizations = requested_realizations.value_or(1);
+        out.realizations_evaluated = 1;
     }
     else
     {
@@ -1024,6 +1027,7 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
             out.std_error = std::sqrt(std::max(0., m2) / static_cast<double>(out.policy.realizations - 1) / static_cast<double>(out.policy.realizations));
         else if (!out.policy.stochastic_execution && !out.policy.stochastic_noise)
             out.std_error = 0.;
+        out.realizations_evaluated = out.policy.realizations;
     }
     out.realizations = out.policy.realizations;
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();

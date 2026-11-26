@@ -55,15 +55,15 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
 {
     const auto inlined = InlinedForSampling(input);
     const auto &circuit = inlined ? *inlined : input;
-    const bool exact = simulator.SupportsQuantumChannels();
+    const auto policy = simulator.GetShotPrefixPolicy();
     // Initial resets are safe for a fresh zero register, but can collapse an
     // entangled arbitrary checkpoint on pure-state methods.
-    if (!exact && !known_zero_initial_state && HasResetOperation(circuit))
+    if (!policy.exactChannels && !known_zero_initial_state && HasResetOperation(circuit))
         return false;
-    if (circuit.HasOpsAfterMeasurements(exact))
+    if (circuit.HasOpsAfterMeasurementsOn(policy))
         return false;
     Circuits::OperationState dry(width);
-    const auto executed = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, exact, &simulator);
+    const auto executed = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, policy.exactChannels, policy.contiguous);
     const auto &operations = circuit.GetOperations();
     const size_t first = operations.size() - executed.size();
     for (size_t i = first; i < operations.size(); ++i)
@@ -200,11 +200,11 @@ bool SampleSharedHead(const Circuits::Circuit<double> &input, const std::shared_
         return false;
     const auto inlined = InlinedForSampling(input);
     const auto &circuit = inlined ? *inlined : input;
-    const bool exact = simulator->SupportsQuantumChannels();
-    if (!exact && HasResetOperation(circuit))
+    const auto policy = simulator->GetShotPrefixPolicy();
+    if (!policy.exactChannels && HasResetOperation(circuit))
         return false;
     Circuits::OperationState dry(state);
-    const auto mask = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, exact, simulator.get());
+    const auto mask = circuit.ExecuteNonMeasurements(nullptr, dry, nullptr, policy.exactChannels, policy.contiguous);
     const size_t shared = circuit.GetOperations().size() - mask.size() + static_cast<size_t>(std::count(mask.begin(), mask.end(), true));
     if (shared == 0)
         return false;

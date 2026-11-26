@@ -169,6 +169,12 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         return pathIntegralSimulator->ProbabilityBits(bits);
     }
 
+    bool RequiresContiguousPrefix() const override
+    {
+        return pathIntegralSimulator ? pathIntegralSimulator->GetTrimValue() > 0.
+                                     : ShotPrefixPolicy::FromConfiguration(GetType(), GetSimulationType(), configuration.GetConfigMap()).contiguous;
+    }
+
     bool SamplesQuantumChannels() const override
     {
         return true;
@@ -186,12 +192,9 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
         auto &current = pathIntegralSimulator->Amplitudes();
         const auto &factors = channel.GetFactors();
-        // A later factor can fail, for example if an earlier unitary was completely pruned.
-        // Publish the composed operation only when all its factors have run.
-        PathIntegralSimulator::AmplitudeMap work;
-        if (factors.size() > 1)
-            work = current;
-        auto &state = factors.size() > 1 ? work : current;
+        // A later factor can fail if a gate prunes every row. Keep the original
+        // amplitudes until commit; a Kraus branch already builds a new frontier.
+        std::optional<PathIntegralSimulator::AmplitudeMap> work;
         for (const auto &factor : factors)
         {
             const size_t first = targets[factor.qubits.front()];
@@ -201,7 +204,15 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             if (factor.IsStateIndependent())
             {
                 const size_t branch = SelectChannelBranch(factor.probabilities, random);
-                if (factor.kind == QuantumChannel::FactorKind::kPauli)
+                const bool pauliFactor = factor.kind == QuantumChannel::FactorKind::kPauli;
+                if (pauliFactor ? branch == 0 : IsLiteralIdentity(factor.operators[branch]))
+                    continue;
+                // Native gate propagation may edit its input in place. Only this
+                // case needs a snapshot when we have more than one factor.
+                if (!work && factors.size() > 1)
+                    work.emplace(current);
+                auto &state = work ? *work : current;
+                if (pauliFactor)
                 {
                     const Eigen::MatrixXcd *const paulis[] = {nullptr, &xgate.getRawOperatorMatrix(), &ygate.getRawOperatorMatrix(),
                                                               &zgate.getRawOperatorMatrix()};
@@ -215,13 +226,15 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
                 else
                     pathIntegralSimulator->PropagateStep(QC::Gates::AppliedGate<>(factor.operators[branch], first, second), state);
             }
-            else if (factor.qubits.size() == 1)
-                ApplySampledKraus<2>(state, factor.operators, first, second, random);
-            else
-                ApplySampledKraus<4>(state, factor.operators, first, second, random);
+            else if (factor.operators.size() != 1 || !IsLiteralIdentity(factor.operators.front()))
+            {
+                const auto &state = work ? *work : current;
+                work = factor.qubits.size() == 1 ? SampleKraus<2>(state, factor.operators, first, second, random)
+                                                 : SampleKraus<4>(state, factor.operators, first, second, random);
+            }
         }
-        if (factors.size() > 1)
-            current.swap(work);
+        if (work)
+            current.swap(*work);
         NotifyObservers(targets);
     }
 
@@ -763,6 +776,11 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
     std::unique_ptr<PathIntegralSimulator> pathIntegralSimulator;
 
   private:
+    static bool IsLiteralIdentity(const QuantumChannel::Matrix &op)
+    {
+        return op == QuantumChannel::Matrix::Identity(op.rows(), op.cols());
+    }
+
     static size_t SelectChannelBranch(const std::vector<double> &weights, double random)
     {
         double total = 0.;
@@ -821,8 +839,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
     }
 
     template <int Dimension>
-    static void ApplySampledKraus(PathIntegralSimulator::AmplitudeMap &state, const QuantumChannel::KrausOperators &operators, size_t first, size_t second,
-                                  double random)
+    static PathIntegralSimulator::AmplitudeMap SampleKraus(const PathIntegralSimulator::AmplitudeMap &state, const QuantumChannel::KrausOperators &operators,
+                                                           size_t first, size_t second, double random)
     {
         // The retained state may have a tiny norm after trimming. Scale before
         // squaring so even a fully subnormal frontier gives the same branch law.
@@ -853,7 +871,7 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         });
         // A rare nonunitary branch can have every coefficient below the gate
         // threshold. Keep its normalized state; subsequent gates resume trimming.
-        state.swap(next);
+        return next;
     }
 
     // A squared magnitude can underflow or overflow before the sampler can

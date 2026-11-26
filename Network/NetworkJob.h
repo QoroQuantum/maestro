@@ -136,9 +136,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        // A reset is a deterministic channel wherever channels are exact.
-        const bool hasMeasurementsOnlyAtEnd =
-            !dcirc->HasOpsAfterMeasurements(optSim ? optSim->SupportsQuantumChannels() : Simulators::EvolvesExactQuantumChannels(simType, method));
+        const bool hasMeasurementsOnlyAtEnd = HasTerminalMeasurements();
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -321,9 +319,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        // A reset is a deterministic channel wherever channels are exact.
-        const bool hasMeasurementsOnlyAtEnd =
-            !dcirc->HasOpsAfterMeasurements(optSim ? optSim->SupportsQuantumChannels() : Simulators::EvolvesExactQuantumChannels(simType, method));
+        const bool hasMeasurementsOnlyAtEnd = HasTerminalMeasurements();
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -554,6 +550,12 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
+    bool HasTerminalMeasurements() const
+    {
+        const auto policy = optSim ? optSim->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap());
+        return !dcirc->HasOpsAfterMeasurementsOn(policy);
+    }
+
     // Whether the job's simulator samples reproducibly. Only the dense methods
     // report that policy when it is unset, so the others count unless they were
     // configured for the ordinary sampler: setting the default explicitly then

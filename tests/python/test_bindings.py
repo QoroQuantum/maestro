@@ -6686,6 +6686,76 @@ class TestNoisyProbReadout:
             result += into[i] * keep * qc.prob(flipped)["probability"]
         return result
 
+    @pytest.mark.parametrize("mode", ["combined", "pauli", "coherent"])
+    def test_readout_only_evaluates_once(self, mode):
+        from maestro.circuits import QuantumCircuit
+
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        model = maestro.NoiseModel()
+        model.set_readout_error(0, .1, .3)
+        for requested in (None, 19):
+            result = circuit.noisy_prob("1", model, noise_realizations=requested, mode=mode)
+            assert result["probability"] == pytest.approx(.7)
+            assert result["noise_realizations_requested"] == requested
+            assert result["noise_realizations"] == (requested or 1)
+            assert result["realizations_evaluated"] == 1
+            assert result["estimate_evaluation"] == "deterministic"
+            assert result["std_error"] == 0.
+
+    @pytest.mark.parametrize("mode", ["combined", "pauli", "coherent"])
+    def test_modes_preserve_embedded_kraus_and_seeded_readout(self, mode):
+        from maestro.circuits import QuantumCircuit
+
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        circuit.channel([0], maestro.QuantumChannel.from_kraus(_AMPLITUDE_DAMPING_KRAUS))
+        model = maestro.NoiseModel()
+        model.set_readout_error(0, .1, .3)
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PathIntegral, seed=(1 << 46) + 7)
+        direct = circuit.noisy_prob("1", model, 71, 0, config, mode)
+        module = maestro.noisy_prob(circuit, "1", model, 71, seed=0, config=config, mode=mode)
+        assert direct["estimate_evaluation"] == "trajectory_average"
+        assert direct["realizations_evaluated"] == direct["noise_realizations"] == 71
+        assert .1 < direct["probability"] < .7
+        for key in ("realizations_evaluated", "estimate_evaluation", "probability", "std_error"):
+            assert direct[key] == module[key]
+
+    @pytest.mark.parametrize("mode", ["pauli", "coherent"])
+    def test_external_gate_family_and_readout(self, mode):
+        from maestro.circuits import QuantumCircuit
+
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        model = maestro.NoiseModel()
+        if mode == "pauli":
+            model.set_bit_flip(0, 1.)
+        else:
+            model.set_coherent_rotation(0, math.pi, 0., 0.)
+        model.set_readout_error(0, .1, .3)
+        # Either external gate turns |1> into |0>. Readout then reports "1" with probability 0.1.
+        result = circuit.noisy_prob("1", model, 5, seed=1, mode=mode)
+        assert result["probability"] == pytest.approx(.1)
+        other_mode = "coherent" if mode == "pauli" else "pauli"
+        with pytest.raises(ValueError, match=f"noisy_prob {other_mode} mode"):
+            circuit.noisy_prob("1", model, mode=other_mode)
+
+    def test_public_errors_for_invalid_mode_and_config(self):
+        circuit = self._circuit()
+        model = maestro.NoiseModel()
+        for mode in ("analytical", "unknown"):
+            with pytest.raises(ValueError, match="noisy_prob mode must"):
+                maestro.noisy_prob(circuit, "00", model, mode=mode)
+        wrong_backend = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+            circuit.noisy_prob("00", model, config=wrong_backend)
+        # The direct API accepts Python's legacy default selection when the path integral is the sole method.
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PathIntegral, fixed_backend=False)
+        assert circuit.noisy_prob("00", model, config=config)["probability"] == pytest.approx(circuit.prob("00")["probability"])
+        config.optimization_candidates = [(maestro.SimulatorType.QCSim, maestro.SimulationType.PathIntegral)]
+        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+            circuit.noisy_prob("00", model, config=config)
+
     def test_symmetric_readout(self):
         qc = self._circuit()
         nm = maestro.NoiseModel()

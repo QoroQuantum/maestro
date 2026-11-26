@@ -281,9 +281,17 @@ The evolution takes explicit channel instructions and rejects a top-level noise 
 
 `noisy_prob` averages the target probability across independent path integral trajectories.
 It accepts circuit channels and a noise model, with 100 realizations by default when sampling.
+`noise.mode` selects the permitted external gate noise. The default `combined` accepts all families.
+`pauli` accepts per-qubit Pauli probabilities (also `depolarizing`, `dephasing` and `bit_flip`).
+`coherent` accepts coherent rotations and their `coherent_*` shorthands.
+All three modes apply embedded circuit channels and external readout error.
+An incompatible external gate channel makes the request invalid. C++ enforces the same rule for explicit `NoiseLayer` values.
 `std_error` is the standard error of the mean, or `null` for a single stochastic realization.
 Readout error uses the first-order, single-bit-flip approximation of Python's `qc.noisy_prob`.
 With only readout noise or an ideal circuit, the query evaluates coherent endpoint probabilities directly.
+`noise_realizations` gives the scheduled count. `realizations_evaluated` gives the number of
+realizations actually evaluated, which is one for a direct calculation even when a larger count was requested.
+`execution_metadata.estimate_evaluation` is `deterministic` or `trajectory_average`.
 The same calculation is available in C++ as `MaestroExecution::NoisyStateProbability`
 from `Execution/NoisyEstimation.h`. On a live simulator, `ISimulator::ApplyQuantumChannel`
 and the C ABI's `MaestroApplyKrausChannel` draw one branch. Use `MaestroSamplesQuantumChannels`
@@ -1265,7 +1273,7 @@ that draw a branch from the simulator state, how omitted, `null` or `"auto"`
 `checkpoint_prefix` (the `prefix` field and its requirements). `estimate` lists the
 `evaluations` and the number of `dynamic_measurement_trajectories`. `noisy_fidelity`
 lists its modes and configurations, including the exact mixed-state ones.
-`noisy_prob` identifies its supported backend and readout approximation.
+`noisy_prob` identifies its supported backend, modes, evaluations and readout approximation.
 `automatic_selection` states the rules for `candidates`, and `sampling_strategies`
 the `sampling_strategy` values results may report.
 

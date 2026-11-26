@@ -334,6 +334,14 @@ the QCSim path integral and the composite statevector, in the execute and estima
   through `network->Configure("terminal_channel_policy", "trajectories")`
   on a native network, and as `simulator.options.terminal_channel_policy`
   in JSON.
+- **QCSim path integral trajectories.** With a positive `path_integral_threshold`,
+  ordinary gates and nonidentity Pauli or unitary branches can prune paths.
+  A sampled identity preserves the amplitudes already retained. For a
+  state-dependent Kraus factor, all retained amplitudes contribute to the branch
+  probabilities. The simulator normalizes the selected branch before later
+  gates resume pruning, so even a low-probability jump can produce a normalized
+  state. Measurement and reset can also renormalize the state, which is why
+  gate order matters even on disjoint qubits.
 - **QCSim statevector trajectories.** For amplitude damping and other Kraus
   operators with at most one nonzero entry per row, a pass over the state gives
   the target populations needed to choose the branch. A general operator can
@@ -591,7 +599,16 @@ result = decay.noisy_prob("1", maestro.NoiseModel(), noise_realizations=1000, se
 print(result["probability"], result["std_error"])
 ```
 
-`noise_realizations` gives the count. A single stochastic trajectory has no
+`qc.noisy_prob` and `maestro.noisy_prob` accept an optional `mode`.
+The default `"combined"` accepts all external gate noise. Use `"pauli"` for
+per-qubit Pauli noise or `"coherent"` for coherent rotations. Each checks
+that the supplied model contains only the selected gate noise family. Circuit
+channels and independent readout error apply in every mode.
+
+`noise_realizations` gives the scheduled count and `realizations_evaluated`
+counts the realizations actually evaluated. An ideal or readout-only query
+evaluates one realization even if you requested more. `estimate_evaluation`
+reports `"deterministic"` or `"trajectory_average"`. A single stochastic trajectory has no
 sample standard error and returns `None`. For coherent amplitudes, use
 `qc.prob` or `maestro.state_probability` with a unitary preparation.
 
