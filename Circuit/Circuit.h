@@ -2359,19 +2359,18 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @param curMaxBondDim Pointer to the current maximum bond dimension, if
      * applicable.
      * @param contiguousPrefix Stop at the first deferred operation during a dry run.
-     * @param shareAcrossIsolatedMeasurements The caller proved that independent gates commute with the collapses for this initial state and layout.
      * @return A bool vector with the executed operations marked.
      * @sa ISimulator
      * @sa OperationState
      */
     std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr,
-                                             bool exactChannels = false, bool contiguousPrefix = false, bool shareAcrossIsolatedMeasurements = false) const
+                                             bool exactChannels = false, bool contiguousPrefix = false) const
     {
         if (sim)
         {
             const auto policy = sim->GetShotPrefixPolicy();
             exactChannels = policy.exactChannels;
-            contiguousPrefix = RequiresContiguousPrefix(policy) && !shareAcrossIsolatedMeasurements;
+            contiguousPrefix = RequiresContiguousPrefix(policy);
         }
         // With gate fusion, the look-ahead routing of an MPS/MPO follows the
         // simulator's upcoming operations in order, and stepping over an operation
@@ -2518,10 +2517,6 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 executionStopped = true;
                 if (sim && sim->IsGateFusionEnabled())
                 {
-                    // Keep the fusion boundary of the original collapse even when
-                    // the remaining, independent gates can be shared across shots.
-                    if (shareAcrossIsolatedMeasurements)
-                        sim->FlushPendingGates();
                     // with the execution order planned, deferred operations are at the
                     // end of the upcoming operations and are not stepped over here
                     if (!planExecutionOrder)

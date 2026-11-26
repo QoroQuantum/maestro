@@ -381,11 +381,13 @@ the QCSim path integral and the composite statevector, in the execute and estima
   operations that read them. When every two-qubit gate and channel of a circuit
   acts on neighbouring qubits, so that nothing has to be routed, the QCSim
   matrix product state runs the operations in an order that stays close along
-  the chain. Operations on different qubits commute, so it is the same circuit;
-  only the order in which the channels draw their branches changes, and with it
-  a seeded trajectory, not the distribution. The QCSim matrix product operator
-  does the same for its exact channels: there the result is the same up to
-  truncation, which acts in another order. A circuit laid out on a line of a
+  the chain. The order preserves each qubit's gates and errors. In exact
+  arithmetic it preserves the joint distribution, although a seeded trajectory
+  can draw different branches. Fresh MPS shot runs can use this ordering for
+  model-injected errors even with a tight cap or a large cutoff. Performing
+  the truncations in a different order can then change the approximation. The
+  QCSim matrix product operator also uses local scheduling for exact channels
+  when its ordering policy permits it. A circuit laid out on a line of a
   device counts as well, although the indices of its qubits are not in order:
   when the two-qubit operations give every qubit at most two partners and close
   no ring, the qubits are placed along the lines they form, which needs no

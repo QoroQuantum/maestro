@@ -109,23 +109,31 @@ ends in measurements counts as terminal.
 
 On MPS and MPO, a bond cap below the register's maximum Schmidt rank or a
 singular-value cutoff above the numerical default can make the result depend on
-operation order. Shot preparation normally stops at the first deferred operation,
-and later gates run in written order. Fresh QCSim and Aer MPS runs can share
-gates across an early measurement when the measured qubit stays independent
-and the gates leave its site alone. The measurements still execute in their
-original order when the cutoff can affect a collapse.
+operation order. Shot preparation normally stops at the first deferred operation.
+Fresh runs on a fixed QCSim or Aer MPS can use bulk terminal sampling even when a measurement
+appears early. The measured qubit must have had only one-qubit gates, and no
+later gate may use it. When the circuit otherwise contains only gates and
+measurements, the planner can move those independent readouts to the end before
+choosing the layout. It preserves the order of classical writes. A measurement
+of an entangled qubit or one used for feedback still needs its dependency checks.
+Bulk readout samples the prepared MPS. At a large cutoff, collapsing the other
+qubits one at a time can truncate them again and change the distribution.
 
 With a bond cap and a numerical-default cutoff, Maestro can also check the
 circuit against each physical bond. For example, four neighboring CNOTs
 crossing the same cut can raise its rank from one to at most 16. A one-qubit
 noise branch cannot raise it further. When every cut fits and the layout is
-known, independent gates can share a preparation. QCSim can also schedule
-errors injected by a noise model near the current tensor site. A circuit
-with explicit channel instructions retains their draw order on this path.
-Checkpoint suffixes start from an existing state and keep their usual ordering rules.
+known, independent gates can share a preparation. A circuit with explicit channel
+instructions retains their draw order on this path. For fresh QCSim MPS shots
+with only model-injected errors on a nearest-neighbor chain, the planner can
+schedule local updates together even when the cap can be reached. It preserves
+dependencies on each wire and stops at measurements, resets, and classical control.
+The configured truncation can affect the resulting approximation. Checkpoint
+suffixes start from an existing state and use their own ordering rules.
 
-Gate fusion on truncating chains combines consecutive gates and channels on overlapping
-targets. The QCSim Pauli propagator also preserves measurement order when a
+Gate fusion can combine independent unitary work between stochastic operations.
+This can reduce the peak bond dimension, including on circuits with routing
+disabled. The QCSim Pauli propagator also preserves measurement order when a
 positive coefficient threshold or a weight limit below the register width
 can discard Pauli terms. Terminal measurements can still share one preparation.
 

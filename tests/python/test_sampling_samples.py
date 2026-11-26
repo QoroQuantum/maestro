@@ -255,7 +255,7 @@ def test_isolated_mps_readout_preserves_joint_distribution_and_seeded_rows(backe
     cfg = maestro.SimulatorConfig(simulator_type=backend_type, simulation_type=maestro.SimulationType.MatrixProductState,
                                   fixed_backend=True, seed=71, max_simulators=1, **options)
     first = circuit.execute(config=cfg, shots=shots, return_samples=True)
-    assert first["sampling_strategy"] == ("terminal_v1" if backend == "QiskitAer" else "trajectory_v1")
+    assert first["sampling_strategy"] == "terminal_v1"
     rows = _records(first, shots, 5)
     counts = Counter("".join(map(str, row)) for row in rows)
     assert set(counts) == set(expected)
@@ -268,6 +268,35 @@ def test_isolated_mps_readout_preserves_joint_distribution_and_seeded_rows(backe
     cfg.max_simulators = 4
     np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=shots, return_samples=True)["samples"])
     assert first_counts == circuit.execute(config=cfg, shots=shots)["counts"]
+
+
+@pytest.mark.parametrize("backend,width,cap", [
+    ("QCSim", 12, 4), ("QCSim", 16, 64), ("QiskitAer", 12, 4),
+])
+def test_isolated_mps_readout_before_routed_gates(backend, width, cap):
+    backend_type = getattr(maestro.SimulatorType, backend, None)
+    if backend_type is None:
+        pytest.skip(f"{backend} is not compiled in")
+    # A long-range gate on other wires routes across the isolated logical site.
+    mid = width // 2
+    sites = [q for q in range(width) if q != mid]
+    circuit = QuantumCircuit()
+    circuit.x(mid)
+    circuit.measure([(mid, mid)])
+    circuit.ry(0, 1.19)
+    for a, b in zip(sites, sites[1:]):
+        circuit.cx(a, b)
+    circuit.measure([(q, q) for q in sites])
+    cfg = maestro.SimulatorConfig(simulator_type=backend_type, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=301, max_simulators=1, max_bond_dimension=cap)
+    result = circuit.execute(config=cfg, shots=769, return_samples=True)
+    assert result["sampling_strategy"] == "terminal_v1"
+    rows = _records(result, 769, width)
+    assert np.all(rows[:, mid] == 1)
+    assert np.all(rows[:, sites] == rows[:, :1])
+    assert rows[:, 0].mean() == pytest.approx(math.sin(1.19 / 2) ** 2, abs=0.06)
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=769, return_samples=True)["samples"])
 
 
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])

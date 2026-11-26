@@ -197,9 +197,16 @@ static void TruncatedChainGateFusion()
                 return sim->AllProbabilities();
             };
             const auto written = distribution(true, true);
-            for (const auto &actual : {distribution(true, false), distribution(false, false)})
-                for (size_t i = 0; i < written.size(); ++i)
-                    Check(std::abs(actual.at(i) - written[i]) < 1e-10, "Fusion reordered disjoint two-site gates on a truncated chain");
+            const auto immediate = distribution(false, false);
+            const auto optimized = distribution(true, false);
+            for (size_t i = 0; i < written.size(); ++i)
+            {
+                Check(std::abs(immediate.at(i) - written[i]) < 1e-10, "An explicit fusion boundary lost the written gate order");
+                // Independent unitaries can be reordered between channel or measurement boundaries.
+                // At full rank the optimized and written orders must still agree.
+                if (cap == (method == SimulationType::kMatrixProductState ? 4 : 16))
+                    Check(std::abs(optimized.at(i) - written[i]) < 1e-10, "Unitary fusion changed an exact chain probability");
+            }
         }
 }
 
@@ -269,12 +276,13 @@ static void IsolatedMeasurementWorkerPrefix()
     std::mutex mutex;
     Network::ExecuteJob<> job(circuit, results, 3, width, width, width, SimulatorType::kQCSim, SimulationType::kMatrixProductState, mutex);
     job.network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{width}, std::vector<size_t>{width});
+    job.network->SetOptimizeSimulator(false);
     job.config.SetConfiguration("matrix_product_state_truncation_threshold", "1e-10");
     job.config.SetConfiguration("reproducible_trajectory", "true");
     job.config.SetConfiguration("seed", "1");
     job.DoWork();
-    // The worker chose the real twelve-site layout. Every gate on the other
-    // sites ran once, and only the original serial readouts reached its shots.
+    // The worker planned a fresh twelve-site register before layout. Only
+    // measurements remain after preparing the state for the terminal sampler.
     const auto &suffix = job.dcirc->GetOperations();
     Check(suffix.size() == width &&
               std::all_of(suffix.begin(), suffix.end(), [](const auto &op) { return op->GetType() == Circuits::OperationType::kMeasurement; }),
@@ -2008,21 +2016,36 @@ static void RankBoundedMpsShots()
         return draws;
     };
     simulator->Configure("matrix_product_state_max_bond_dimension", "16");
-    auto scheduled = Circuits::RankBoundedShotOrder(circuit, width, *simulator, simulator->GetExplicitConfigMap(), true);
+    auto scheduled = Circuits::ScheduleMpsShots(circuit, width, *simulator, simulator->GetExplicitConfigMap(), true);
     Check(channels(scheduled) != channels(circuit) && channels(scheduled) == channels(Circuits::ChainOrdered(circuit)),
           "certified model errors lost chain-local scheduling after cloning and host remapping");
+    // Model errors keep their per-wire dependencies even when the bond cap is
+    // exceeded or a nondefault cutoff prevents proving that every rank fits.
+    auto truncated = simulator->GetExplicitConfigMap();
+    truncated["matrix_product_state_max_bond_dimension"] = "8";
+    const auto local = Circuits::ChainOrdered(circuit);
+    Check(Circuits::ScheduleMpsShots(circuit, width, *simulator, truncated, true)->GetOperations() == local->GetOperations(),
+          "a small bond cap disabled local scheduling of model errors");
+    truncated.erase("matrix_product_state_max_bond_dimension");
+    truncated["matrix_product_state_truncation_threshold"] = "1e-10";
+    Check(Circuits::ScheduleMpsShots(circuit, width, *simulator, truncated, false)->GetOperations() == local->GetOperations(),
+          "a cutoff disabled local scheduling of model errors");
+    const auto explicitAndModel = CF::CreateCircuit(circuit->GetOperations());
+    explicitAndModel->AddOperation(damping(0));
+    Check(Circuits::ScheduleMpsShots(explicitAndModel, width, *simulator, truncated, false) == explicitAndModel,
+          "model scheduling reordered a circuit with an explicit Kraus draw");
     simulator->Configure("matrix_product_state_max_bond_dimension", "2");
     auto options = simulator->GetExplicitConfigMap();
     circuit = CF::CreateCircuit({CF::CreateGate(Kind::kRyGateType, 0, 0, 0, .93), damping(0), CF::CreateGate(Kind::kHadamardGateType, 1),
                                  CF::CreateGate(Kind::kCXGateType, 1, 2), damping(1), CF::CreateGate(Kind::kHadamardGateType, 4), damping(4)});
     circuit->SetGlobalPhase(.6);
-    auto ordered = Circuits::RankBoundedShotOrder(circuit, 6, *simulator, options, true);
+    auto ordered = Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, true);
     Check(ordered->GetOperations() != circuit->GetOperations() && ordered->GetGlobalPhase() == .6,
           "a certified circuit failed to share independent gates or lost its phase");
     Check(channels(circuit) == channels(ordered), "rank-bounded schedule changed the order of stochastic channel draws");
-    Check(Circuits::RankBoundedShotOrder(circuit, 6, *simulator, options, false) == circuit, "unknown physical layout accepted");
+    Check(Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, false) == circuit, "unknown physical layout accepted");
     options["matrix_product_state_truncation_threshold"] = "1e-10";
-    Check(Circuits::RankBoundedShotOrder(circuit, 6, *simulator, options, true) == circuit, "rank proof bypassed an active cutoff");
+    Check(Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, true) == circuit, "rank proof bypassed an active cutoff");
 
     const auto probabilities = [&](const auto &plan, size_t seed) {
         auto state = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);

@@ -479,11 +479,6 @@ class FusionState : public ISimulator
         return immediate_->SupportsMPSSwapOptimization();
     }
 
-    std::vector<long long> CurrentRoutingMap() const override
-    {
-        return immediate_->CurrentRoutingMap();
-    }
-
     bool SwapGatesRelabelQubits() const override
     {
         return immediate_->SwapGatesRelabelQubits();
@@ -1139,10 +1134,6 @@ class FusionState : public ISimulator
 
     template <class EmitBlock> void SubmitToCache(Cache &cache, const FusionGate &gate, uint64_t source, EmitBlock &&emit)
     {
-        // A truncating chain keeps one contiguous block. Source planning uses this same
-        // cache path, so its routing window describes the blocks that actually execute.
-        if (contiguousChainFusion_ && !cache.Empty() && !Overlaps(cache.PendingBlocks().begin()->second.targets, gate.qubits))
-            cache.Flush(emit);
         cache.Submit(gate, source, std::forward<EmitBlock>(emit), PreserveStructuredGates() && gate.IsStructured(),
                      SwapGatesRelabelQubits() && gate.kind == FusionGate::Kind::kSwapGateType);
     }
@@ -1216,10 +1207,12 @@ class FusionState : public ISimulator
     // part of its block and the others are emitted.
     void SubmitSuperoperator(const Types::qubits_vector &order, const Eigen::MatrixXcd &superoperator)
     {
-        // A pending gate on other sites must precede this channel if an intervening SVD can truncate.
-        // Keep a single overlapping block eligible for the usual adjacent gate/channel fusion.
-        if (contiguousChainFusion_ && ((!cache_.Empty() && !Overlaps(cache_.PendingBlocks().begin()->second.targets, order)) ||
-                                       (!channelBlocks_.empty() && !Overlaps(channelBlocks_.front().targets, order))))
+        // Independent unitary blocks can fuse within a run of gates. Emit them
+        // before a channel on a truncating chain. A lone overlapping block can
+        // instead be applied in order as part of the local channel map.
+        if (contiguousChainFusion_ &&
+            (cache_.PendingBlocks().size() > 1 || (!cache_.Empty() && !Overlaps(cache_.PendingBlocks().begin()->second.targets, order)) ||
+             (!channelBlocks_.empty() && !Overlaps(channelBlocks_.front().targets, order))))
             FlushPendingGates();
         Types::qubits_vector support = order;
         std::sort(support.begin(), support.end());

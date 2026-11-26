@@ -518,12 +518,6 @@ class IState
         return false;
     }
 
-    // Logical qubit to current tensor site, when the backend exposes its routing map.
-    virtual std::vector<long long> CurrentRoutingMap() const
-    {
-        return {};
-    }
-
     /**
      * @brief Sets the initial qubits map, if possible.
      *

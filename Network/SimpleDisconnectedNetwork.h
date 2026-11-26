@@ -874,7 +874,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         const bool release = optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized();
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed, release, release);
-        const bool rankBounded = resetBeforeExecution && !optSim && PlanRankBoundedShots(nrQubits, simType, method);
+        const bool reorderedShots = resetBeforeExecution && !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -889,7 +889,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         usedTerminalSampling = shots > 1 && terminalSampling;
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
                                     simulator->GetNumberOfQubits() != nrQubits;
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim, rankBounded);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim, reorderedShots);
         const size_t nrThreads =
             ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, fullTerminalBatch, optSim, executed);
 
@@ -1126,7 +1126,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbits, simType, method, executed, GetOptimizeSimulator() && !distributed, true);
         // Host execution always starts from zero.
-        const bool rankBounded = !optSim && PlanRankBoundedShots(nrQubits, simType, method);
+        const bool reorderedShots = !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1139,7 +1139,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         size_t measuredWidth;
         const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
         usedTerminalSampling = shots > 1 && terminalSampling;
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim, rankBounded);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim, reorderedShots);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
         const size_t nrThreads =
@@ -3045,7 +3045,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 auto plan = freshRegister ? std::make_shared<Circuits::Circuit<Time>>(circuit->GetOperations()) : circuit;
                 // A prefix is part of the work only: a searched layout needs a large predicted gain to be taken.
                 prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister,
-                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0., true);
+                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0.);
             }
         }
         if (!prepared || !mpsOptimizeSwaps)
@@ -3296,18 +3296,32 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             distCirc = std::move(inlined);
     }
 
-    bool PlanRankBoundedShots(size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method)
+    bool PlanFreshMpsShots(size_t shots, size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method)
     {
         if (method != Simulators::SimulationType::kMatrixProductState || GetOptimizeSimulator() || !simulator || simulator->GetType() != type ||
-            simulator->GetSimulationType() != method || !configuration.IsSet("matrix_product_state_max_bond_dimension"))
+            simulator->GetSimulationType() != method)
             return false;
-        const auto cap = std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"));
+        const auto policy = Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
+        if (shots > 1 && policy.contiguous)
+        {
+            auto terminal = Circuits::IsolatedMpsTerminalOrder(distCirc, qubits, type);
+            if (terminal != distCirc)
+            {
+                distCirc = std::move(terminal);
+                return true;
+            }
+        }
+        if (!policy.contiguous)
+            return false;
+        const auto cap = configuration.IsSet("matrix_product_state_max_bond_dimension")
+                             ? std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"))
+                             : 0;
         // Below the layout search threshold only off-index paths may get a new
         // layout. The rank proof itself requires every pair to be adjacent in
         // index order. Aer starts in index order and does no initial layout search.
         const bool knownLayout = !simulator->SupportsMPSSwapOptimization() || !optimizeInitialQubitsMap || qubits < mpsOptimizationQubitsNumberThreshold ||
                                  (cap && cap < mpsOptimizationBondDimensionThreshold);
-        auto planned = Circuits::RankBoundedShotOrder(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout);
+        auto planned = Circuits::ScheduleMpsShots(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout);
         if (planned == distCirc)
             return false;
         distCirc = std::move(planned);
@@ -3352,12 +3366,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // put every block below the crossover. This decision must not depend on
     // the requested worker count, since it also selects the logical RNG layout.
     bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth, bool startsFromZero,
-                               const std::shared_ptr<Simulators::ISimulator> &prepared, bool rankBounded = false) const
+                               const std::shared_ptr<Simulators::ISimulator> &prepared, bool reorderedShots = false) const
     {
 #ifndef NO_QISKIT_AER
         // Newly certified Aer terminal circuits use one stream regardless of
         // the worker budget. The ordinary Aer sampler seeds each physical job.
-        if (rankBounded && type == Simulators::SimulatorType::kQiskitAer && configuration.IsSet("seed"))
+        if (reorderedShots && type == Simulators::SimulatorType::kQiskitAer && configuration.IsSet("seed"))
             return true;
 #endif
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
@@ -3828,7 +3842,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // A searched layout must beat index order by minLayoutGain. A device
     // line placed directly on the chain needs no search.
     bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
-                                     bool freshRegister = true, double minLayoutGain = 0., bool checkpoint = false) const
+                                     bool freshRegister = true, double minLayoutGain = 0.) const
     {
         const bool placeQubits = freshRegister && optimizeInitialQubitsMap;
         if ((sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState ||
@@ -3947,17 +3961,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                                   : effectiveLayerCount < 15                    ? static_cast<int>(lookaheadVal)
                                                   : effectiveLayerCount < 25                    ? static_cast<int>(1.5 * lookaheadVal)
                                                                                                 : 2 * lookaheadVal;
-                            // A short checkpoint round can contain many independent
-                            // two-site gates. Routing each in isolation can push the
-                            // following gate over the cap. Price one successor when the
-                            // legacy planner would otherwise switch its forecast off.
-                            // The combined planner already forecasts at depth zero.
-                            if (checkpoint && lookaheadDepthLocal == 0 && effectiveLayerCount > 0 && nrQubits > 10 && circuitHasDisentangle &&
-                                sim->GetType() == Simulators::SimulatorType::kQCSim &&
-                                sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState &&
-                                Simulators::RoutingConfig::GetStrategy(configuration) == Simulators::RoutingConfig::Strategy::Legacy && maxBondDimValue > 0 &&
-                                sim->GetShotPrefixPolicy().contiguous)
-                                lookaheadDepthLocal = 1;
                         }
 
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
