@@ -119,6 +119,14 @@ of an entangled qubit or one used for feedback still needs its dependency checks
 Bulk readout samples the prepared MPS. At a large cutoff, collapsing the other
 qubits one at a time can truncate them again and change the distribution.
 
+For a fresh QCSim MPS circuit consisting of gates, unconditional resets and
+terminal readout, the initial layout planner can also arrange work in layers
+and prepare independent gates once for the shots. Each qubit keeps its own
+gate and reset order, and terminal measurements keep their classical write
+order. Reset outcomes are discarded. With a restrictive bond cap or cutoff,
+moving a gate on another wire across an entangled reset can change the
+approximation. Runs that keep a fixed layout retain the reset boundary.
+
 With a bond cap and a numerical-default cutoff, Maestro can also check the
 circuit against each physical bond. For example, four neighboring CNOTs
 crossing the same cut can raise its rank from one to at most 16. A one-qubit

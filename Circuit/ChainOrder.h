@@ -391,9 +391,12 @@ template <typename Time> bool FitsMpsBondCap(const Circuit<Time> &circuit, size_
 // restored checkpoints and later measurements on an existing state.
 template <typename Time>
 std::shared_ptr<Circuit<Time>> ScheduleMpsShots(const std::shared_ptr<Circuit<Time>> &circuit, size_t qubits, const Simulators::ISimulator &sim,
-                                                const std::unordered_map<std::string, std::string> &options, bool identityLayout)
+                                                const std::unordered_map<std::string, std::string> &options, bool identityLayout,
+                                                bool *shareResetWires = nullptr)
 {
     using Policy = Simulators::ShotPrefixPolicy;
+    if (shareResetWires)
+        *shareResetWires = false;
     const auto method = sim.GetSimulationType();
     const auto type = sim.GetType();
     const auto cap = options.find("matrix_product_state_max_bond_dimension");
@@ -407,10 +410,43 @@ std::shared_ptr<Circuit<Time>> ScheduleMpsShots(const std::shared_ptr<Circuit<Ti
         return circuit;
     const auto &original = circuit->GetOperations();
     const auto firstDeferred = std::find_if(original.begin(), original.end(), [](const auto &op) {
-        return op->GetType() == OperationType::kMeasurement || op->GetType() == OperationType::kQuantumChannel;
+        return op->GetType() == OperationType::kMeasurement || op->GetType() == OperationType::kQuantumChannel || op->GetType() == OperationType::kReset;
     });
     if (std::none_of(firstDeferred, original.end(), [](const auto &op) { return op->GetType() == OperationType::kGate; }))
         return circuit;
+
+    // A reset discards its outcome. With only gates and resets before the terminal
+    // reads, independent wires can use the normal QCSim schedule. As with gate
+    // fusion, the chosen order can affect the approximation at a finite bond cap.
+    auto scheduled = circuit;
+    if (!identityLayout && type == Simulators::SimulatorType::kQCSim && (*firstDeferred)->GetType() == OperationType::kReset)
+    {
+        const auto readout = std::find_if(firstDeferred, original.end(), [](const auto &op) { return op->GetType() == OperationType::kMeasurement; });
+        const bool wireLocalResets =
+            std::all_of(original.begin(), readout,
+                        [](const auto &op) {
+                            if (const auto *reset = dynamic_cast<const Reset<Time> *>(op.get()))
+                                return !reset->GetQubits().empty();
+                            const auto *gate = dynamic_cast<const IQuantumGate<Time> *>(op.get());
+                            return op->GetType() == OperationType::kGate && gate && gate->GetGateType() != QuantumGateType::kNone;
+                        }) &&
+            std::all_of(readout, original.end(), [](const auto &op) { return dynamic_cast<const MeasurementOperation<Time> *>(op.get()); });
+        if (wireLocalResets)
+        {
+            // The layout optimizer normally orders work in layers. Keep terminal
+            // classical writes in sequence, including repeated destinations.
+            Circuit<Time> body(typename Circuit<Time>::OperationsVector(original.begin(), readout), circuit->GetGlobalPhase());
+            body.ConvertForCutting(); // Use the same gate decomposition as the layout and lookahead planners.
+            scheduled = Circuit<Time>::LayersToCircuit(body.ToMultipleQubitsLayersNoClone());
+            for (auto it = readout; it != original.end(); ++it)
+                scheduled->AddOperation(*it);
+            // Choose the layout from these layers. Only then should a worker
+            // lift the shared gates into its prefix and refresh its routing window.
+            if (shareResetWires)
+                *shareResetWires = true;
+            return scheduled;
+        }
+    }
     const bool rankBounded = identityLayout && cap != options.end() && !Policy::TruncatesChain(type, method, options, qubits, size_t{0}) &&
                              FitsMpsBondCap(*circuit, qubits, std::stoull(cap->second), sim.SwapGatesRelabelQubits());
     if (!rankBounded)
@@ -432,9 +468,8 @@ std::shared_ptr<Circuit<Time>> ScheduleMpsShots(const std::shared_ptr<Circuit<Ti
     // The QCSim gate and trajectory caches merge overlapping supports up to
     // two sites on MPS. A product of the certified local factors on those
     // sites obeys the same cut bounds as the individual instructions.
-    auto scheduled = type == Simulators::SimulatorType::kQCSim && circuit->HasQuantumChannels()
-                         ? ChainOrdered(circuit, ChainOrder::kSampledChannels, nullptr, true)
-                         : circuit;
+    if (type == Simulators::SimulatorType::kQCSim && circuit->HasQuantumChannels())
+        scheduled = ChainOrdered(circuit, ChainOrder::kSampledChannels, nullptr, true);
     OperationState dry;
     const auto mask = scheduled->PlanNonMeasurements(dry, {false, false});
     if (std::find(mask.begin(), mask.end(), true) == mask.end())

@@ -1964,6 +1964,65 @@ template <class Backend> static void TruncatedDeviceLineOrder(size_t n)
     }
 }
 
+static void UnobservedMpsResetOrder()
+{
+    auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
+    const std::unordered_map<std::string, std::string> options{{"matrix_product_state_max_bond_dimension", "2"}};
+    const auto reset = CF::CreateReset({0});
+    const auto local = CF::CreateGate(Kind::kXGateType, 2), after = CF::CreateGate(Kind::kCXGateType, 0, 3);
+    const auto bell = CF::CreateGate(Kind::kCXGateType, 0, 1);
+    const std::vector<Op> gates{CF::CreateGate(Kind::kHadamardGateType, 0), bell, reset, local, after};
+    auto circuit = CF::CreateCircuit(gates);
+    circuit->SetGlobalPhase(.25);
+    bool shareResetWires = false;
+    Check(Circuits::ScheduleMpsShots(circuit, 6, *sim, options, true, &shareResetWires) == circuit && !shareResetWires,
+          "Fixed-layout MPS moved gates across a reset");
+    const auto plan = Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false, &shareResetWires);
+    const auto &ordered = plan->GetOperations();
+    const auto pos = [&](const auto &op) { return std::find(ordered.begin(), ordered.end(), op); };
+    Check(shareResetWires && ordered.size() == gates.size() && pos(bell) < pos(reset) && pos(reset) < pos(after) && pos(reset) < pos(local) &&
+              plan->GetGlobalPhase() == .25,
+          "A QCSim MPS reset lost a wire dependency or the shared head was hoisted before layout");
+    const auto probabilities = [&](const auto &run, bool share) {
+        auto state = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
+        state->Configure("matrix_product_state_max_bond_dimension", "2"); // The circuit has just one entangled pair.
+        state->AllocateQubits(6);
+        state->Initialize();
+        state->SeedForExecution(42);
+        Circuits::OperationState classical;
+        if (share)
+        {
+            const ShotPrefixPolicy byWire{false, false};
+            const auto mask = run->ExecuteNonMeasurements(state, classical, nullptr, false, false, &byWire);
+            Check(mask == std::vector<bool>({false, true, false}), "The reset's independent gate failed to share the prepared state");
+            run->ExecuteMeasurements(state, classical, mask);
+        }
+        else
+            run->Execute(state, classical);
+        return state->AllProbabilities();
+    };
+    const auto written = probabilities(circuit, false), shared = probabilities(plan, shareResetWires);
+    for (size_t i = 0; i < written.size(); ++i)
+        Check(std::abs(written[i] - shared[i]) < 1e-12, "Per-wire reset scheduling changed an exact-rank trajectory");
+    const auto first = CF::CreateMeasurement({{1, 0}}), last = CF::CreateMeasurement({{2, 0}});
+    circuit->AddOperation(first);
+    circuit->AddOperation(last);
+    const auto recorded = Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false);
+    const auto &ops = recorded->GetOperations();
+    Check(ops[ops.size() - 2] == first && ops.back() == last, "Reset scheduling changed the order of terminal classical writes");
+    circuit->AddOperation(local);
+    Check(Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false) == circuit, "Reset scheduling crossed an observable measurement");
+    auto withChannel = CF::CreateCircuit(gates);
+    withChannel->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2}, QuantumChannel::AmplitudeDamping(.5)));
+    Check(Circuits::ScheduleMpsShots(withChannel, 6, *sim, options, false) == withChannel, "Reset scheduling crossed an explicit quantum channel");
+    auto threeSite = CF::CreateCircuit({bell, reset, CF::CreateGate(Kind::kCCXGateType, 1, 2, 3), local});
+    const auto decomposed = Circuits::ScheduleMpsShots(threeSite, 6, *sim, options, false);
+    const auto &primitives = decomposed->GetOperations();
+    Check(primitives.size() > threeSite->size() &&
+              std::all_of(primitives.begin(), primitives.end(), [](const auto &op) { return op->AffectedQubits().size() <= 2; }),
+          "Unobserved reset layers were planned before the router's three-qubit gate decomposition");
+}
+
 static void RankBoundedMpsShots()
 {
     const auto damping = [](size_t q) {
@@ -2609,6 +2668,7 @@ int main(int argc, char **argv)
         RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
         RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
         DecompositionAndFusionRanks();
+        UnobservedMpsResetOrder();
         RankBoundedMpsShots();
         for (auto representation : {SwapRepresentation::Named, SwapRepresentation::Matrix})
         {

@@ -571,13 +571,17 @@ void TestTruncatedChainShotOrder()
                          {"num_clbits", 4},
                          {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
                                              j::object{{"name", "h"}, {"qubits", j::array{2}}}, j::object{{"name", "cx"}, {"qubits", j::array{2, 3}}}}}};
-    const auto check = [&](const char *backend, const char *method, bool measurement, j::object options) {
-        const j::object measure{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}};
-        const j::object damp{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{1, 0, 0, 0}, j::array{0, 1, 0, 0}}}};
+    const auto check = [&](const char *backend, const char *method, std::string_view collapse, j::object options) {
+        const bool measurement = collapse == "measure";
+        j::object collapseOp{{"name", std::string(collapse)}, {"qubits", j::array{0}}};
+        if (measurement)
+            collapseOp["clbits"] = j::array{0};
+        else if (collapse == "kraus")
+            collapseOp["operators"] = j::array{j::array{1, 0, 0, 0}, j::array{0, 1, 0, 0}};
         const j::array all{0, 1, 2, 3}, rest{1, 2, 3};
         const auto &measured = measurement ? rest : all;
-        const j::array tail{measurement ? measure : damp, j::object{{"name", "cx"}, {"qubits", j::array{1, 2}}},
-                            j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}}, j::object{{"name", "measure"}, {"qubits", measured}, {"clbits", measured}}};
+        const j::array tail{collapseOp, j::object{{"name", "cx"}, {"qubits", j::array{1, 2}}}, j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}},
+                            j::object{{"name", "measure"}, {"qubits", measured}, {"clbits", measured}}};
         for (bool checkpoint : {false, true})
         {
             auto request = Request(checkpoint ? "checkpoint_batch" : "execute", 4, "", method);
@@ -618,14 +622,15 @@ void TestTruncatedChainShotOrder()
             }
         }
     };
-    check("qcsim", "matrix_product_state", false, {{"max_bond_dimension", 2}});
-    check("qcsim", "matrix_product_state", true, {{"max_bond_dimension", 2}});
-    check("qcsim", "matrix_product_state", false, {{"singular_value_threshold", .4}});
-    check("qcsim", "matrix_product_operator", true, {{"max_bond_dimension", 4}});
+    check("qcsim", "matrix_product_state", "kraus", {{"max_bond_dimension", 2}});
+    check("qcsim", "matrix_product_state", "measure", {{"max_bond_dimension", 2}});
+    check("qcsim", "matrix_product_state", "reset", {{"max_bond_dimension", 2}});
+    check("qcsim", "matrix_product_state", "kraus", {{"singular_value_threshold", .4}});
+    check("qcsim", "matrix_product_operator", "measure", {{"max_bond_dimension", 4}});
 #ifndef NO_QISKIT_AER
-    check("aer", "matrix_product_state", false, {{"max_bond_dimension", 2}});
-    check("aer", "matrix_product_state", true, {{"max_bond_dimension", 2}});
-    check("aer", "matrix_product_state", false, {{"singular_value_threshold", .4}});
+    check("aer", "matrix_product_state", "kraus", {{"max_bond_dimension", 2}});
+    check("aer", "matrix_product_state", "measure", {{"max_bond_dimension", 2}});
+    check("aer", "matrix_product_state", "kraus", {{"singular_value_threshold", .4}});
 #endif
 }
 

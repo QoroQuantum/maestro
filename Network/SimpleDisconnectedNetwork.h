@@ -874,7 +874,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         const bool release = optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized();
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed, release, release);
-        const bool reorderedShots = resetBeforeExecution && !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method);
+        bool shareResetWires = false;
+        const bool reorderedShots = resetBeforeExecution && !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method, shareResetWires);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -907,7 +908,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbitsResults, simType, method, executed,
                                               nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex,
-                                     logicalTerminal);
+                                     logicalTerminal, shareResetWires);
         }
         else if (nrThreads > 1)
         {
@@ -939,6 +940,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 shots -= curCnt;
 
                 auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType, method, resultsMutex);
+                job->shareResetWires = shareResetWires;
                 job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
                 job->network = BaseClass::getptr();
@@ -979,6 +981,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const size_t curCnt = shots;
 
             auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType, method, resultsMutex);
+            job->shareResetWires = shareResetWires;
             job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
             job->network = BaseClass::getptr();
@@ -1126,7 +1129,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbits, simType, method, executed, GetOptimizeSimulator() && !distributed, true);
         // Host execution always starts from zero.
-        const bool reorderedShots = !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method);
+        bool shareResetWires = false;
+        const bool reorderedShots = !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method, shareResetWires);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1158,8 +1162,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (logicalTerminal && !optSim)
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbits, simType, method, executed,
                                               nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
-            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex,
-                                     logicalTerminal);
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex, logicalTerminal,
+                                     shareResetWires);
         }
         else if (nrThreads > 1)
         {
@@ -1183,6 +1187,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 shots -= curCnt;
 
                 auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
+                job->shareResetWires = shareResetWires;
                 job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
                 job->network = BaseClass::getptr();
@@ -1223,6 +1228,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const size_t curCnt = shots;
 
             auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
+            job->shareResetWires = shareResetWires;
             job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
             job->network = BaseClass::getptr();
@@ -3296,7 +3302,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             distCirc = std::move(inlined);
     }
 
-    bool PlanFreshMpsShots(size_t shots, size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method)
+    bool PlanFreshMpsShots(size_t shots, size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method, bool &shareResetWires)
     {
         if (method != Simulators::SimulationType::kMatrixProductState || GetOptimizeSimulator() || !simulator || simulator->GetType() != type ||
             simulator->GetSimulationType() != method)
@@ -3321,7 +3327,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // index order. Aer starts in index order and does no initial layout search.
         const bool knownLayout = !simulator->SupportsMPSSwapOptimization() || !optimizeInitialQubitsMap || qubits < mpsOptimizationQubitsNumberThreshold ||
                                  (cap && cap < mpsOptimizationBondDimensionThreshold);
-        auto planned = Circuits::ScheduleMpsShots(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout);
+        auto planned = Circuits::ScheduleMpsShots(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout, &shareResetWires);
         if (planned == distCirc)
             return false;
         distCirc = std::move(planned);
@@ -3575,7 +3581,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers, size_t qubits,
                                   size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
                                   const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex,
-                                  bool terminalSampling = false)
+                                  bool terminalSampling = false, bool shareResetWires = false)
     {
         // Terminal native samplers consume one stream per batch. Fixed logical
         // batches preserve those streams across worker counts without replaying
@@ -3711,6 +3717,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         {
             const size_t count = std::min(blockSize, shots - begin);
             auto job = std::make_shared<ExecuteJob<Time>>(jobCircuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
+            job->shareResetWires = shareResetWires;
             // Even a one-shot tail must remove the same deterministic prefix:
             // classical instruction positions are part of shot_v1 stream IDs.
             job->optimiseMultipleShotsExecution = independentShots || terminalSampling || count > 1 || GetOptimizeSimulator();
