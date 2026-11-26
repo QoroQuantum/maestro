@@ -131,6 +131,6 @@ MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordC
                                                                    NoiseLayer layer = NoiseLayer::kCombined);
 MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target,
                                                                    const noise::NoiseModel &model, std::optional<size_t> requested_realizations,
-                                                                   const SimulatorConfig &config, std::optional<uint64_t> noise_seed,
-                                                                   NoiseLayer layer, std::optional<bool> exact_channels, SamplingResult *execution = nullptr);
+                                                                   const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
+                                                                   std::optional<bool> exact_channels, SamplingResult *execution = nullptr);
 } // namespace MaestroExecution

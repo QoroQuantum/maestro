@@ -167,8 +167,8 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     if (!noise_model)
         noise_model = &no_noise;
     // The suffix continues the saved prefix state, not a fresh register.
-    const auto policy = ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false, true,
-                                                 num_qubits_);
+    const auto policy =
+        ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false, true, num_qubits_);
 
     // A checkpoint can alternate counts and ordered rows on the same simulator.
     // Pin the sampler for this call before cloning its workers.

@@ -440,8 +440,7 @@ void TestTruncatedPauliShotOrder()
     auto request = Request("execute", 2, "", "pauli_propagator");
     j::array source{j::object{{"name", "ry"}, {"qubits", j::array{0}}, {"params", j::array{.84}}},
                     j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}},
-                    j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{1.37}}},
-                    j::object{{"name", "x"}, {"qubits", j::array{0}}},
+                    j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{1.37}}}, j::object{{"name", "x"}, {"qubits", j::array{0}}},
                     j::object{{"name", "measure"}, {"qubits", j::array{1}}, {"clbits", j::array{1}}}};
     request["execution"] = j::object{{"shots", 4096}, {"seed", 4}};
     for (double threshold : {0., .49})
@@ -461,10 +460,13 @@ void TestTruncatedPauliShotOrder()
             Check(zeros + ones > 300 && std::abs(ones / (zeros + ones) - expected) < .075, "Pauli truncation moved a disjoint gate ahead of a measurement");
         }
     }
-    j::array weightSource{source[0], j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{.67}}},
+    j::array weightSource{source[0],
+                          j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{.67}}},
                           j::object{{"name", "rx"}, {"qubits", j::array{2}}, {"params", j::array{.93}}},
-                          j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}}, source[1],
-                          j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}}, source[3],
+                          j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
+                          source[1],
+                          j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}},
+                          source[3],
                           j::object{{"name", "measure"}, {"qubits", j::array{1, 2}}, {"clbits", j::array{1, 2}}}};
     for (int weight : {2, 3})
     {
@@ -486,19 +488,18 @@ void TestTruncatedPauliShotOrder()
 
 void TestTruncatedChainShotOrder()
 {
-    const j::object bell{{"format", "instructions"}, {"num_qubits", 4}, {"num_clbits", 4},
-                         {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}},
-                                             j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
-                                             j::object{{"name", "h"}, {"qubits", j::array{2}}},
-                                             j::object{{"name", "cx"}, {"qubits", j::array{2, 3}}}}}};
+    const j::object bell{{"format", "instructions"},
+                         {"num_qubits", 4},
+                         {"num_clbits", 4},
+                         {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
+                                             j::object{{"name", "h"}, {"qubits", j::array{2}}}, j::object{{"name", "cx"}, {"qubits", j::array{2, 3}}}}}};
     const auto check = [&](const char *backend, const char *method, bool measurement, j::object options) {
         const j::object measure{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}};
         const j::object damp{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{1, 0, 0, 0}, j::array{0, 1, 0, 0}}}};
         const j::array all{0, 1, 2, 3}, rest{1, 2, 3};
         const auto &measured = measurement ? rest : all;
         const j::array tail{measurement ? measure : damp, j::object{{"name", "cx"}, {"qubits", j::array{1, 2}}},
-                            j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}},
-                            j::object{{"name", "measure"}, {"qubits", measured}, {"clbits", measured}}};
+                            j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}}, j::object{{"name", "measure"}, {"qubits", measured}, {"clbits", measured}}};
         for (bool checkpoint : {false, true})
         {
             auto request = Request(checkpoint ? "checkpoint_batch" : "execute", 4, "", method);

@@ -72,7 +72,8 @@ class FusionState : public ISimulator
         }
         cache_.SetWidth(GetGateFusionMaxQubits());
         chainPolicyWidth_.reset();
-        if (RefreshChainFusionOrder() || oldWidth != GetGateFusionMaxQubits() || oldEnabled != IsGateFusionEnabled() || oldLookahead != IsRoutingLookaheadEnabled())
+        if (RefreshChainFusionOrder() || oldWidth != GetGateFusionMaxQubits() || oldEnabled != IsGateFusionEnabled() ||
+            oldLookahead != IsRoutingLookaheadEnabled())
             RebuildPlan();
     }
 
@@ -1824,8 +1825,8 @@ class FusionState : public ISimulator
             return false;
         chainPolicyWidth_ = width;
         const auto method = immediate_->GetSimulationType();
-        const bool ordered = (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator) &&
-                             immediate_->GetShotPrefixPolicy().contiguous;
+        const bool ordered =
+            (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator) && immediate_->GetShotPrefixPolicy().contiguous;
         return std::exchange(contiguousChainFusion_, ordered) != ordered;
     }
 

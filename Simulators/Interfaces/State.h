@@ -190,7 +190,7 @@ struct ShotPrefixPolicy
     // A measurement adds a normalized projector to the backward propagation.
     // Its coefficients and Pauli weights can move a term across a trim boundary.
     static bool TruncatesPauli(const std::unordered_map<std::string, std::string> &options, size_t qubits, std::optional<double> coefficient = {},
-                              std::optional<size_t> weight = {})
+                               std::optional<size_t> weight = {})
     {
         if (!coefficient)
             if (const auto it = options.find("pauli_propagator_coefficient_threshold"); it != options.end())
@@ -205,8 +205,8 @@ struct ShotPrefixPolicy
     // can change which terms survive before a measurement or a Kraus draw.
     // Keep ordinary numerical cutoffs fast. A bond cap matters only below
     // the maximum Schmidt rank across the centre (site dimension 2 or 4).
-    static bool TruncatesChain(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                               size_t qubits, std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
+    static bool TruncatesChain(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options, size_t qubits,
+                               std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
     {
         const bool mpo = method == SimulationType::kMatrixProductOperator;
         if (!mpo && method != SimulationType::kMatrixProductState)
@@ -238,8 +238,8 @@ struct ShotPrefixPolicy
     }
 
     static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0,
-                                              std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
+                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0, std::optional<size_t> bondCap = {},
+                                              std::optional<double> cutoff = {})
     {
         if (type == SimulatorType::kQCSim && method == SimulationType::kPauliPropagator)
             return {true, TruncatesPauli(options, qubits)};

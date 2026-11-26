@@ -823,8 +823,8 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     unsigned long probed = 0;
     const auto config = ResolveCandidateBackend(requested_config, qubits, probed);
     spare.handle = probed;
-    const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true, std::nullopt, true,
-                                                 true, qubits);
+    const auto policy =
+        ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true, std::nullopt, true, true, qubits);
     const size_t noise_realizations = policy.realizations;
     auto rng = MakeNoiseRng(config, noise_seed);
     const bool exact = policy.exact_channels;
@@ -986,7 +986,8 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
 
 NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target, const noise::NoiseModel &model,
                                              std::optional<size_t> requested_realizations, const SimulatorConfig &requested_config,
-                                             std::optional<uint64_t> noise_seed, NoiseLayer layer, std::optional<bool> exact_channels, SamplingResult *execution)
+                                             std::optional<uint64_t> noise_seed, NoiseLayer layer, std::optional<bool> exact_channels,
+                                             SamplingResult *execution)
 {
     auto config = requested_config;
     config.Validate();

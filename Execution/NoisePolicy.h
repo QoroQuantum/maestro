@@ -452,7 +452,7 @@ struct NoiseRealizationPolicy
 inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> requested, const noise::NoiseModel &model, const SimulatorConfig &config,
                                                        NoiseLayer layer, size_t fallback, const std::shared_ptr<Circuits::Circuit<double>> &circuit = {},
                                                        bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true,
-                                                        bool runs_channels = true, size_t register_qubits = 0)
+                                                       bool runs_channels = true, size_t register_qubits = 0)
 {
     if ((requested && *requested == 0) || fallback == 0)
         throw std::invalid_argument("noise_realizations must be >= 1.");
