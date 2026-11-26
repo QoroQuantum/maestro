@@ -1498,11 +1498,16 @@ def test_a_memory_checkpoint_keeps_the_bonds_of_index_order():
 
     routed, unrouted = compiled(False), compiled(True)
     assert routed.checkpoint_sim.max_bond_dim == unrouted.checkpoint_sim.max_bond_dim
-    result = routed.checkpoint_sim.execute_suffix(routed.suffix_qc, shots=2, noise_seed=17,
-                                                  num_measurements=routed.num_measurements, return_samples=True)
-    measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
-    events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
-    assert not events.any()  # a noiseless memory flips no detector and no observable
+    converter = circuit.compile_m2d_converter()
+    for seed in (17, 31):
+        result = routed.checkpoint_sim.execute_suffix(routed.suffix_qc, shots=2, noise_seed=seed,
+                                                      num_measurements=routed.num_measurements, return_samples=True)
+        # Reaching the cap can silently discard a branch, even if the sampled
+        # syndrome happens to remain valid for a particular seed.
+        assert result["max_bond_dim_reached"] < 64
+        measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+        events = converter.convert(measurements=measurements, append_observables=True)
+        assert not events.any()  # a noiseless memory flips no detector and no observable
 
 
 def test_routing_crosses_untouched_qubits_as_product_states():

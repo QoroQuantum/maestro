@@ -3045,7 +3045,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 auto plan = freshRegister ? std::make_shared<Circuits::Circuit<Time>>(circuit->GetOperations()) : circuit;
                 // A prefix is part of the work only: a searched layout needs a large predicted gain to be taken.
                 prepared = OptimizeMPSInitialQubitsMap(sim, plan, qubits, freshRegister,
-                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0.);
+                                                       freshRegister ? Simulators::MPSDummySimulator::kCheckpointPrefixLayoutGain : 0., true);
             }
         }
         if (!prepared || !mpsOptimizeSwaps)
@@ -3825,10 +3825,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
     // Returns whether the planner prepared a gate window for this circuit.
-    // minLayoutGain: above zero, the predicted gain a searched layout needs to replace index order
-    // (a line placed along the chain needs none: it is exact).
+    // A searched layout must beat index order by minLayoutGain. A device
+    // line placed directly on the chain needs no search.
     bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
-                                     bool freshRegister = true, double minLayoutGain = 0.) const
+                                     bool freshRegister = true, double minLayoutGain = 0., bool checkpoint = false) const
     {
         const bool placeQubits = freshRegister && optimizeInitialQubitsMap;
         if ((sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState ||
@@ -3947,6 +3947,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                                   : effectiveLayerCount < 15                    ? static_cast<int>(lookaheadVal)
                                                   : effectiveLayerCount < 25                    ? static_cast<int>(1.5 * lookaheadVal)
                                                                                                 : 2 * lookaheadVal;
+                            // A short checkpoint round can contain many independent
+                            // two-site gates. Routing each in isolation can push the
+                            // following gate over the cap. Price one successor when the
+                            // legacy planner would otherwise switch its forecast off.
+                            // The combined planner already forecasts at depth zero.
+                            if (checkpoint && lookaheadDepthLocal == 0 && effectiveLayerCount > 0 && nrQubits > 10 && circuitHasDisentangle &&
+                                sim->GetType() == Simulators::SimulatorType::kQCSim &&
+                                sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState &&
+                                Simulators::RoutingConfig::GetStrategy(configuration) == Simulators::RoutingConfig::Strategy::Legacy && maxBondDimValue > 0 &&
+                                sim->GetShotPrefixPolicy().contiguous)
+                                lookaheadDepthLocal = 1;
                         }
 
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
