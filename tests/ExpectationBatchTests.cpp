@@ -1,3 +1,4 @@
+#include "NativeTestSuites.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Core/Factory.h"
 #include "Simulators/Fusion/FusionSimulator.h"
@@ -670,14 +671,10 @@ void JsonTensorQueries()
 }
 } // namespace
 
-int main(int argc, char **argv)
+int RunMaestroExpectationBatchTests()
 {
     try
     {
-        if (argc > 1)
-            backend = Backend::kGpuSim;
-        if (argc > 2)
-            single = true;
 #ifdef __linux__
         if (backend == Backend::kGpuSim)
         {
@@ -701,6 +698,7 @@ int main(int argc, char **argv)
         JsonTensorQueries();
         ChannelsOnAHandle();
         std::cout << checks << " expectation batch checks passed\n";
+        return 0;
     }
     catch (const std::exception &e)
     {
@@ -708,3 +706,14 @@ int main(int argc, char **argv)
         return 1;
     }
 }
+
+#ifndef MAESTRO_EMBEDDED_NATIVE_TESTS
+int main(int argc, char **)
+{
+    if (argc > 1)
+        backend = Backend::kGpuSim;
+    if (argc > 2)
+        single = true;
+    return RunMaestroExpectationBatchTests();
+}
+#endif

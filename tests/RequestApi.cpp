@@ -1,6 +1,7 @@
 // Small, independent checks of the public C ABI; no Python or GPU is required.
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "../maestrolib/Interface.h"
+#include "NativeTestSuites.h"
 #include <boost/json.hpp>
 #include <cmath>
 #include <cstdint>
@@ -883,7 +884,7 @@ void TestGlobalPhaseQueries()
     checkPhase(Call(request).at("inner_product"), -1.);
 }
 
-int main()
+int RunMaestroRequestTests()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
@@ -1459,3 +1460,10 @@ catch (const std::exception &error)
     std::cerr << "Native request API failure after " << checks << " checks: " << error.what() << '\n';
     return 1;
 }
+
+#ifndef MAESTRO_EMBEDDED_NATIVE_TESTS
+int main()
+{
+    return RunMaestroRequestTests();
+}
+#endif
