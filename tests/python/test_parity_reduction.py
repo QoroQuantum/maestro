@@ -49,18 +49,28 @@ def stabilizer_options(selection):
                 fixed_backend=False, optimization_candidates=candidates)
 
 
+def assert_allowed_simulator(result, options):
+    selected = (result["simulator"], result["method"])
+    if options["fixed_backend"]:
+        assert selected == (options["simulator_type"], options["simulation_type"])
+    else:
+        assert selected in options["optimization_candidates"]
+
+
 @pytest.mark.parametrize("selection", ["fixed", "candidate", "mixed"])
 @pytest.mark.parametrize("with_cx,observable", [(True, "ZI"), (False, "ZZ")])
-def test_reduced_pauli_gate_runs_on_selected_stabilizer(selection, with_cx, observable):
+def test_reduced_pauli_gate_uses_an_allowed_simulator(selection, with_cx, observable):
     circuit = maestro.circuits.QuantumCircuit()
     circuit.x(0)
     if with_cx:
         circuit.cx(0, 1)
-    full = circuit.estimate(observable, cfg(False, **stabilizer_options(selection)))
+    options = stabilizer_options(selection)
+    full = circuit.estimate(observable, cfg(False, **options))
+    assert_allowed_simulator(full, options)
     assert full["expectation_values"] == pytest.approx([-1.0])
-    reduced = circuit.estimate(observable, cfg(True, **stabilizer_options(selection)))
+    reduced = circuit.estimate(observable, cfg(True, **options))
     assert reduced["auto_reduced"] and (reduced["qubits_before"], reduced["qubits_after"]) == (2, 1)
-    assert reduced["method"] == maestro.SimulationType.Stabilizer
+    assert_allowed_simulator(reduced, options)
     assert reduced["expectation_values"] == pytest.approx(full["expectation_values"])
 
 
@@ -71,11 +81,13 @@ def test_reduced_cz_preserves_named_clifford_rotations(selection):
         circuit.h(q)
     circuit.cz(0, 1)
     observables = ["XZI", "ZXI", "YYI", "IIX"]
-    full = circuit.estimate(observables, cfg(False, **stabilizer_options(selection)))
+    options = stabilizer_options(selection)
+    full = circuit.estimate(observables, cfg(False, **options))
+    assert_allowed_simulator(full, options)
     assert full["expectation_values"] == pytest.approx([1.0] * len(observables))
-    reduced = circuit.estimate(observables, cfg(True, **stabilizer_options(selection)))
+    reduced = circuit.estimate(observables, cfg(True, **options))
     assert reduced["auto_reduced"] and (reduced["qubits_before"], reduced["qubits_after"]) == (3, 2)
-    assert reduced["method"] == maestro.SimulationType.Stabilizer
+    assert_allowed_simulator(reduced, options)
     assert reduced["expectation_values"] == pytest.approx(full["expectation_values"])
 
 

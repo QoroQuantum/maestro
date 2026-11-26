@@ -20,7 +20,7 @@ void Check(bool value, const char *message)
         throw std::runtime_error(message);
 }
 
-void CheckCliffordParityReduction(bool dual, bool inverseCheck, bool inverseMixer)
+void CheckCliffordParityReduction(const SimulatorConfig &config, bool dual, bool inverseCheck, bool inverseMixer)
 {
     auto source = std::make_shared<Circuit>();
     if (!dual)
@@ -48,10 +48,6 @@ void CheckCliffordParityReduction(bool dual, bool inverseCheck, bool inverseMixe
             physicalObservables.push_back(std::string{a, b, 'I'});
     auto observables = physicalObservables;
     auto circuit = source;
-    SimulatorConfig config;
-    config.simulation_type = Simulators::SimulationType::kStabilizer;
-    config.fixed_backend = true;
-    config.enable_causal_cone_reduction = false;
     TransformContext ctx{circuit, observables, config.simulator_type, config};
     TransformPipeline::Run(ctx);
     Check(ctx.auto_reduced && ctx.qubits_before == 3 && ctx.qubits_after == 2, "Clifford circuit should reduce to two qubits");
@@ -66,7 +62,7 @@ void CheckCliffordParityReduction(bool dual, bool inverseCheck, bool inverseMixe
         return simulator->ExpectationValues(paulis);
     };
     const auto expected = execute(source, 3, Simulators::SimulationType::kStatevector, physicalObservables);
-    const auto actual = execute(circuit, 2, config.simulation_type, observables);
+    const auto actual = execute(circuit, 2, Simulators::SimulationType::kStabilizer, observables);
     for (size_t i = 0; i < observables.size(); ++i)
         Check(std::abs(actual[i] * ctx.expectation_factors[i] - expected[i]) < 1e-12, "Projected Clifford expectations differ from the full statevector");
 }
@@ -104,10 +100,20 @@ int main()
 {
     try
     {
-        for (const bool dual : {false, true})
-            for (const bool inverseCheck : {false, true})
-                for (const bool inverseMixer : {false, true})
-                    CheckCliffordParityReduction(dual, inverseCheck, inverseMixer);
+        SimulatorConfig fixedStabilizer;
+        fixedStabilizer.fixed_backend = true;
+        fixedStabilizer.simulation_type = Simulators::SimulationType::kStabilizer;
+        fixedStabilizer.enable_causal_cone_reduction = false;
+
+        SimulatorConfig mixedCandidates;
+        mixedCandidates.enable_causal_cone_reduction = false;
+        mixedCandidates.optimization_candidates = {{mixedCandidates.simulator_type, Simulators::SimulationType::kStatevector},
+                                                   {mixedCandidates.simulator_type, Simulators::SimulationType::kStabilizer}};
+        for (const auto &config : {fixedStabilizer, mixedCandidates})
+            for (const bool dual : {false, true})
+                for (const bool inverseCheck : {false, true})
+                    for (const bool inverseMixer : {false, true})
+                        CheckCliffordParityReduction(config, dual, inverseCheck, inverseMixer);
         CheckNearQuarterTurn();
         auto source = std::make_shared<Circuit>();
         for (size_t q = 0; q < 37; ++q)

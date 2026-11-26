@@ -408,7 +408,10 @@ void TestCliffordParityEstimation()
                 Near(Real(result.at("expectation_values").at(0)), -1.);
                 Check(result.at("auto_reduced").as_bool() == reduce && result.at("qubits_after").to_number<int>() == (reduce ? 1 : 2),
                       "Stabilizer parity estimate used the wrong register");
-                Check(result.at("execution_metadata").at("method") == "stabilizer", "Parity reduction changed the selected stabilizer backend");
+                const auto &metadata = result.at("execution_metadata").as_object();
+                const auto &method = metadata.at("method");
+                Check(metadata.at("backend") == "qcsim" && (method == "stabilizer" || (selection == "mixed" && method == "statevector")),
+                      "Clifford parity estimate used a simulator outside the requested selection");
             }
         }
 
