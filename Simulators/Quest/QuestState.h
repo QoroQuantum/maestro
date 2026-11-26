@@ -19,9 +19,13 @@
 
 #include "../../Utils/RandomStream.h"
 #include "../../Utils/Sampling/Alias.h"
+#include "../../Utils/SystemMemory.h"
 #include "QuestLibSim.h"
 
+#include <cmath>
+#include <iomanip>
 #include <random>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -61,6 +65,7 @@ class QuestState : public ISimulator
             questLib = SimulatorsFactory::GetQuestLibrary();
         if (nrQubits && questLib && questLib->IsValid())
         {
+            RequireRegisterFits(nrQubits);
             simHandle = questLib->CreateSimulator(static_cast<int>(nrQubits));
             sim = questLib->GetSimulator(simHandle);
             if (!sim)
@@ -769,6 +774,28 @@ class QuestState : public ISimulator
     {
         if (outcome > static_cast<Types::qubit_t>(std::numeric_limits<long long int>::max()))
             throw std::out_of_range("Basis state " + std::to_string(outcome) + " is past the signed 64-bit indices of QuEST");
+    }
+
+    // QuEST does not report a register that exceeds the machine's memory: its validation ends the process. So the
+    // size is refused here first, by QuEST's own rule: 16 bytes per amplitude against the physical memory, and at
+    // most 59 qubits, the limit of its size arithmetic (the only bound left where the memory is unknown).
+    static void RequireRegisterFits(size_t qubits)
+    {
+        constexpr size_t maxQubits = 59;
+        const double memory = Utils::PhysicalMemoryBytes();
+        if (qubits > maxQubits)
+            throw Utils::MemoryLimitError("QuEST holds a statevector of at most " + std::to_string(maxQubits) + " qubits, not " + std::to_string(qubits));
+        const double needed = std::ldexp(16., static_cast<int>(qubits));
+        if (memory > 0. && needed > memory)
+        {
+            const auto gib = [](double bytes) {
+                std::ostringstream text;
+                text << std::fixed << std::setprecision(1) << bytes / (1024. * 1024. * 1024.);
+                return text.str();
+            };
+            throw Utils::MemoryLimitError("A QuEST statevector of " + std::to_string(qubits) + " qubits needs " + gib(needed) + " GiB, more than the " +
+                                          gib(memory) + " GiB of physical memory");
+        }
     }
 
     std::shared_ptr<QuestLibSim> questLib; /**< The quest library. */

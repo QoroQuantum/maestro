@@ -301,6 +301,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   times the circuit runs, and with exact channels each run gives the same
   values.
 
+### Fixed
+
+- A QuEST statevector too large for the machine's memory is refused with an
+  error instead of ending the process. QuEST does not report such a register:
+  its validation prints a message and exits, which no caller could catch.
+  Maestro now checks the size first, by QuEST's own rule (16 bytes per
+  amplitude against the physical memory, 59 qubits at most), and raises
+  `MemoryError` in Python, `Utils::MemoryLimitError` (a `std::bad_alloc`) in
+  C++ and `insufficient_resources` in a native request, each with the sizes.
+  An automatic candidate list then moves on to its next candidate.
+
 ## [0.3.15] - 2026-11-15
 
 ### Added

@@ -1870,6 +1870,14 @@ void TestAutomaticMixedStateNoise()
     }
     if (!quest)
         Call(listed(1, "h q[0]; t q[0]; measure q -> c;", {{"quest", "statevector"}}), false);
+    else
+    {
+        // QuEST ends the process when a register exceeds the machine's memory;
+        // Maestro refuses the register before asking for it.
+        auto oversized = Request("execute", 40, wide);
+        oversized["simulator"].as_object()["backend"] = "quest";
+        Check(Call(oversized, false).at("error").at("code") == "insufficient_resources", "An oversized QuEST register was not refused");
+    }
 
     // noise.prefix applies deterministic exact noise to the checkpoint prefix once.
     for (const char *method : {"density_matrix", "matrix_product_operator"})

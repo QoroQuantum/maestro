@@ -161,25 +161,8 @@ inline size_t Columns(const std::vector<Readout> &readouts)
     return n;
 }
 
-/**
- * Thrown before a call would need more memory than the machine has. It is a
- * std::bad_alloc, so Python sees a MemoryError, but carries a message.
- */
-class MemoryLimitError : public std::bad_alloc
-{
-  public:
-    explicit MemoryLimitError(std::string message) : message(std::move(message))
-    {
-    }
-
-    const char *what() const noexcept override
-    {
-        return message.c_str();
-    }
-
-  private:
-    std::string message;
-};
+/** Thrown before a call would need more memory than the machine has. */
+using MemoryLimitError = Utils::MemoryLimitError;
 
 namespace Detail
 {

@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <fstream>
 #include <istream>
+#include <new>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -25,6 +27,26 @@
 
 namespace Utils
 {
+
+/**
+ * Thrown before a call would need more memory than the machine has. It is a
+ * std::bad_alloc, so Python sees a MemoryError, but carries a message.
+ */
+class MemoryLimitError : public std::bad_alloc
+{
+  public:
+    explicit MemoryLimitError(std::string message) : message(std::move(message))
+    {
+    }
+
+    const char *what() const noexcept override
+    {
+        return message.c_str();
+    }
+
+  private:
+    std::string message;
+};
 
 namespace SystemMemoryDetail
 {

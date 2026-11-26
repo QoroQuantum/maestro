@@ -2203,6 +2203,24 @@ class TestQuestSimulator:
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
+    @pytest.mark.skipif(
+        not maestro.is_quest_available(),
+        reason="QuEST library (libmaestroquest) not available"
+    )
+    def test_quest_refuses_oversized_register(self):
+        """A register past the machine's memory raises instead of ending the process."""
+        # Entangled, so that neither call can shrink the register it simulates.
+        gates = "h q[0]; t q[0]; " + "".join(f"cx q[{qubit}],q[{qubit + 1}]; " for qubit in range(39))
+        qasm = f'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[40]; creg c[40];\n{gates}\n'
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QuestSim,
+            simulation_type=maestro.SimulationType.Statevector
+        )
+        with pytest.raises(MemoryError, match="QuEST statevector of 40 qubits"):
+            maestro.simple_execute(qasm + "measure q -> c;", shots=10, config=config)
+        with pytest.raises(MemoryError, match="QuEST statevector of 40 qubits"):
+            maestro.simple_estimate(qasm, "Z" * 40, config=config)
+
 
 class TestCompositeSimulator:
     """Test Composite simulator validation and behavior.
