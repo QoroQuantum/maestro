@@ -311,6 +311,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MemoryError` in Python, `Utils::MemoryLimitError` (a `std::bad_alloc`) in
   C++ and `insufficient_resources` in a native request, each with the sizes.
   An automatic candidate list then moves on to its next candidate.
+- On Windows a process that had loaded the QuEST plugin sometimes ended with
+  an access violation (exit code 0xC0000005) after its work was done, in 3%
+  to 16% of the runs measured. At exit the plugin is detached first and destroys its
+  own instance; Maestro's library then called the plugin's `Finalize`, which
+  destroyed it again. Maestro no longer calls into a plugin, or frees it,
+  while the process is exiting.
+- On Windows, freeing the last module that uses the OpenMP runtime no longer
+  crashes the process. The runtime's worker threads outlive the parallel
+  regions that started them, and Windows unloaded the runtime under them when
+  a host freed `maestro.dll` (`FreeLibrary`, right after a multithreaded run)
+  or when a Maestro built without OpenMP freed a plugin that uses it. Maestro
+  now pins the runtime (`Utils::KeepOpenMPRuntimeLoaded`), so it stays loaded
+  until the process exits. A host that frees `maestro.dll` must first destroy
+  the simulators it created and must call `FreeLibrary` once per load: each
+  live simulator keeps a worker thread, which holds the library loaded.
 
 ## [0.3.15] - 2026-11-15
 

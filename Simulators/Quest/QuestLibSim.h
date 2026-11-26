@@ -37,7 +37,9 @@ class QuestLibSim : public Utils::Library
 
     virtual ~QuestLibSim()
     {
-        if (initialized && fFinalize)
+        // Not while the process exits: the library has destroyed its own
+        // instance by then, and Finalize() would destroy it a second time.
+        if (initialized && fFinalize && !ProcessIsExiting())
         {
             fFinalize();
             initialized = false;

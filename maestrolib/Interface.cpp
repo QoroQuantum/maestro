@@ -34,6 +34,8 @@ static std::unique_ptr<Maestro> maestroInstance;
 static void *InitializeMaestro(bool mute)
 {
     std::call_once(initFlag, [mute] {
+        // A host may free this library while OpenMP workers are still alive.
+        Utils::KeepOpenMPRuntimeLoaded();
         if (mute)
             Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
         else
