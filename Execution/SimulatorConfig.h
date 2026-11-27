@@ -1,4 +1,8 @@
-// Shared native configuration. This header has no Python dependency.
+/**
+ * @file SimulatorConfig.h
+ * @ingroup execution
+ * @brief Shared native simulator configuration with no Python dependency.
+ */
 #pragma once
 #include "../Network/Configuration.h"
 #include "../Simulators/Core/RandomSeed.h"
@@ -105,6 +109,7 @@ inline std::string PauliTuningError(const std::string &name, uint64_t value, boo
     return "";
 }
 
+/// @ingroup execution
 struct SimulatorConfig
 {
     // Python exposes these typed fields directly. Native requests also use typed

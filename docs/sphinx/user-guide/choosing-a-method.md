@@ -41,7 +41,7 @@ were built.
 | Any gates, up to about 30 qubits; shots or expectation values | `Statevector` | CPU; GPU¹ | Time and memory double with every qubit: 16 GiB at 30 qubits in double precision. {ref}`Measured <evidence-statevector>`. |
 | Many qubits with limited entanglement, such as shallow or 1D circuits; shots or expectation values | `MatrixProductState` | CPU; GPU¹ | Approximate once the bond dimension truncates. Check with mirror fidelity. {ref}`Measured <evidence-mps>`. |
 | Clifford gates only, any number of qubits; shots | `Stabilizer` | CPU | Raises an error on any non-Clifford gate. {ref}`Measured <evidence-stabilizer>`. |
-| Mostly Clifford with a few T gates; shots | `ExtendedStabilizer` | CPU | Approximate sampling. {ref}`Measured <evidence-extended-stabilizer>`. |
+| Mostly Clifford with a few T gates; shots | `ExtendedStabilizer` | CPU | Exact on QCSim by default (optional pruning via `extended_stabilizer_*`); approximate on Qiskit Aer. Cost grows with non-Clifford gates. {ref}`Measured <evidence-extended-stabilizer>`. |
 | Expectation values on circuits too wide for a statevector; no shots | `PauliPropagator` | CPU; GPU¹ | Truncation is set by the `pp_*` options. {ref}`Measured <evidence-pauli-propagation>`. |
 | The exact mixed state under noise, with no sampling error, for any channel (amplitude damping, Kraus channels); about 10 qubits or fewer | `DensityMatrix`, or `MatrixProductOperator` for more qubits | CPU; GPU¹ | Density-matrix cost grows steeply with qubit count. `Statevector` and `MatrixProductState` sample the same channels, one trajectory per shot (see {ref}`py_noise_sampled_channels`). {ref}`Measured <evidence-density-matrix>`. |
 | Error-correction circuits written in Stim, decoded with Sinter | `maestro.sinter` samplers | CPU | Clifford circuits with Pauli noise use native reference frames; other circuits and noise models run as trajectories. {ref}`Measured <evidence-qec>`. |
@@ -164,8 +164,11 @@ except RuntimeError as error:
 (evidence-extended-stabilizer)=
 ### Extended stabilizer
 
-H·T·H gives P(0) = cos²(π/8) ≈ 0.854. The extended stabilizer samples it
-approximately; the exact statevector is the reference:
+H·T·H gives P(0) = cos²(π/8) ≈ 0.854. QCSim's extended stabilizer is exact by
+default (optional pruning trades accuracy for speed via
+`extended_stabilizer_amplitude_tolerance` and
+`extended_stabilizer_max_components`; Qiskit Aer's is approximate). Here it
+matches the statevector reference:
 
 ```{code-cell} python
 ht = QuantumCircuit()
@@ -419,36 +422,42 @@ while its handle is alive.
 
 `Initialize`, `Reset`, `Configure`, `Clear` and `Flush` are shorter aliases for
 the methods ending in `Simulator`. Pass Python sequences for qubits or outcomes.
-`Amplitude` returns a complex number, `AllProbabilities`, `Probabilities` and
-`MarginalProbabilities` return lists, and `SampleCounts` returns a dictionary
-from integer outcomes to counts (`shots=1000` by default). `Probability`,
-`Amplitude` and `Probabilities` take basis-state indices, one value per index,
-and raise `IndexError` for an index of `2**num_qubits` or more on every backend
-where they are defined. `Amplitude` raises `RuntimeError` on methods without
-amplitudes (density matrix, MPO, stabilizer, Pauli propagator, and QCSim's
-extended stabilizer and tensor network; the GPU tensor network and the Aer
-extended stabilizer have them), whatever the index; an index that does not
-fit in 64 bits raises `TypeError` before it reaches Maestro; and a register
-without qubits raises `RuntimeError`, having no state to query.
-`MarginalProbabilities`, `Measure`, `ApplyReset` and `SampleCounts` take
-qubit indices; `MarginalProbabilities` returns the `2**k` probabilities of the
-listed qubits (for none, one value, the total probability of the state: 1
-when it is normalized, less after a generic gate with a non-unitary matrix,
-which nothing renormalizes, or where the path integral's threshold drops
-paths; the MPOs normalize their probabilities by the trace, so theirs is 1
-where they are defined; an MPS renormalizes after such a matrix, so that its
-reads and samples follow the state, and its total is 1, while a matrix that
-leaves nothing of the state, or a weight the chain cannot tell from none,
-raises `RuntimeError` and leaves the state as it was), and raises `ValueError`
-where the register is too
-wide to list its basis states, rather than returning zeros. On the Aer extended
-stabilizer, `Probability` and `Probabilities` are Aer's estimates (the exact
-amplitude of its decomposition over a sampled estimate of the norm, the same
-on every call for a given state), while `AllProbabilities` divides by the
-exact norm. Packed
-outcomes use the first listed qubit as the least significant bit; for
-`MeasureNoCollapse`, qubit 0 is the least significant bit. `ApplyU` and
-`ApplyCU` take `theta`, `phi`, `lambda_` and an optional `gamma=0.0`.
+
+- **Return types:** `Amplitude` returns a complex number; `AllProbabilities`,
+  `Probabilities` and `MarginalProbabilities` return lists; `SampleCounts`
+  returns a dictionary from integer outcomes to counts (`shots=1000` by
+  default).
+- **Basis-state queries (`Probability`, `Amplitude`, `Probabilities`):** take
+  basis-state indices, return one value per index, and raise `IndexError` for an
+  index of `2**num_qubits` or more on every backend where they are defined.
+  `Amplitude` raises `RuntimeError` on methods without amplitudes (density
+  matrix, MPO, stabilizer, Pauli propagator, and QCSim's extended stabilizer
+  and tensor network; the GPU tensor network and the Aer extended stabilizer
+  have them), whatever the index. An index that does not fit in 64 bits raises
+  `TypeError` before it reaches Maestro, and a register without qubits raises
+  `RuntimeError` because it has no state to query.
+- **Qubit queries and marginals (`MarginalProbabilities`, `Measure`,
+  `ApplyReset`, `SampleCounts`):** take qubit indices. `MarginalProbabilities`
+  returns the `2**k` probabilities of the listed qubits and raises `ValueError`
+  when the register is too wide to list its basis states (rather than returning
+  zeros). Passing an empty qubit list returns a single value, the total
+  probability of the state:
+  - `1` when normalized, or less after a non-unitary generic gate on dense
+    backends (which do not renormalize) or when a path-integral threshold drops
+    paths.
+  - `1` on MPOs (which normalize by the trace where defined) and on MPS
+    backends (which renormalize after a non-unitary generic gate so reads and
+    samples stay consistent; a matrix that leaves nothing of the state, or a
+    weight indistinguishable from zero, raises `RuntimeError` and leaves the
+    state unchanged).
+- **Aer extended stabilizer estimates:** `Probability` and `Probabilities`
+  return Aer's estimate (the exact amplitude of its decomposition divided by a
+  sampled estimate of the norm, consistent across calls for a given state),
+  while `AllProbabilities` divides by the exact norm.
+- **Bit order and `ApplyU` / `ApplyCU`:** Packed outcomes use the first listed
+  qubit as the least significant bit; for `MeasureNoCollapse`, qubit 0 is the
+  least significant bit. `ApplyU` and `ApplyCU` take `theta`, `phi`, `lambda_`
+  and an optional `gamma=0.0`.
 
 The destructive save/restore pair supports internal-state sampling on Aer:
 flush pending gates, save, call `MeasureNoCollapse`, then restore before

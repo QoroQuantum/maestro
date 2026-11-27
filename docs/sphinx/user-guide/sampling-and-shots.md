@@ -153,15 +153,18 @@ result = circuit.execute(config=config, shots=5000)
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames
 
-When the same noisy Clifford circuit is sampled batch after batch, as in a
-decoding loop, compile it once. `compile_reference_sampler` applies the
-incoherent channels of a noise model as independent per-shot channels and
-returns a `ReferenceFrameSampler`, or `None` when frames do not apply. The
-channels must be Pauli mixtures: Pauli and depolarizing noise, phase damping,
-dephasing with infinite T1 and readout errors qualify, while amplitude damping
-and finite-T1 relaxation do not. Non-Clifford gates, classical control,
-coherent, correlated or crosstalk noise, and a non-QCSim backend also return
-`None`:
+When the same noisy Clifford or near-Clifford circuit is sampled batch after
+batch, as in a decoding loop, compile it once. `compile_reference_sampler`
+applies the incoherent channels of a noise model as independent per-shot
+channels and returns a `ReferenceFrameSampler` (for Clifford circuits) or an
+`ExtendedFrameSampler` (for an `ExtendedStabilizer` config without pruning), or
+`None` when frames do not apply. The channels must be Pauli mixtures: Pauli and
+depolarizing noise, phase damping, dephasing with infinite T1 and readout
+errors qualify, while amplitude damping and finite-T1 relaxation do not.
+Non-Clifford gates without `ExtendedStabilizer`, pruned extended-stabilizer
+settings (`extended_stabilizer_amplitude_tolerance` or
+`extended_stabilizer_max_components`), classical control, coherent, correlated
+or crosstalk noise, and a non-QCSim backend also return `None`:
 
 ```{code-cell} python
 model = maestro.NoiseModel()
@@ -175,7 +178,8 @@ print(sampler.num_qubits, sampler.num_clbits, batch.shape, counts)
 Each call draws new shots from the compiled plan; equal seeds give equal rows,
 and `sample_counts` is the histogram of exactly the rows `sample` returns for the
 same seed. The native request API, C++ (`Execution/SampleRecords.h`) and the C ABI
-offer the same rows and compiled frames; see `docs/native-request-api.md`.
+offer the same rows and compiled frames; see
+[docs/native-request-api.md](https://github.com/QoroQuantum/maestro/blob/main/docs/native-request-api.md).
 
 (py_counts_policy)=
 ## How counts are sampled

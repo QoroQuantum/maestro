@@ -1,4 +1,8 @@
-// Additive discovery metadata for the native request contract.
+/**
+ * @file Capabilities.h
+ * @ingroup execution
+ * @brief Additive capability discovery metadata for the native request contract.
+ */
 #pragma once
 #include "Options.h"
 #include "Request.h"

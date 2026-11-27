@@ -291,12 +291,12 @@ void bind_config(nb::module_ &m)
                     "QCSim statevector, density-matrix, path-integral, stabilizer, extended-stabilizer, "
                     "MPS and MPO trajectories. Terminal sampling is unaffected.");
     BindConfigField<false>(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
-                           "Positive MiB estimate limiting concurrent QCSim work: dense trajectory "
-                           "shots (including stabilizer and bounded MPS/MPO "
-                           "shots), and parallel noise realizations (executions, estimates, fidelities) and "
-                           "checkpoint suffixes of statevector, density-matrix, stabilizer and bounded MPS/MPO runs. None "
-                           "uses 1024 MiB. This is a soft concurrency budget, not a process memory "
-                           "limit; at least one worker is allowed.");
+                           "Positive MiB soft budget for concurrent trajectory work on QCSim and the CPU "
+                           "Qiskit Aer statevector and MPS: dense, stabilizer and bounded MPS/MPO trajectory "
+                           "shots, parallel noise realizations (executions, estimates and fidelities) and "
+                           "checkpoint suffixes. None uses 1024 MiB, or half the machine's memory on the CPU "
+                           "Aer statevector and MPS. An Aer MPS without a bond limit uses one worker under an "
+                           "explicit budget and is unlimited without one. At least one worker always runs.");
     BindConfigField<false>(config_class, "max_simulators", &SimulatorConfig::max_simulators,
                            "Maximum concurrent simulators, from 1 to 1024. None keeps the network "
                            "default; CPU and trajectory memory budgets may reduce concurrency.");

@@ -1,5 +1,8 @@
-// Raw shot records and noisy shot execution for C++ callers, the native request
-// API and the Python bindings. This header has no Python dependency.
+/**
+ * @file SampleRecords.h
+ * @ingroup execution
+ * @brief Raw shot records and noisy shot execution helpers.
+ */
 #pragma once
 
 #include "../Noise/NoiseModel.h"
@@ -314,7 +317,8 @@ inline SimulatorConfig RuntimeNoiseExecutionConfig(const SimulatorConfig &config
     return execution_config;
 }
 
-// Shot records of one execution: a row matrix, or distinct records and counts.
+/// @ingroup execution
+/// Shot records of one execution: a row matrix, or distinct records and counts.
 struct ShotRecords
 {
     NoiseRealizationPolicy policy;
@@ -357,6 +361,7 @@ MAESTRO_TRANSFORM_API std::optional<ShotRecords> SampleNoisyTerminalChannels(con
 // shot-by-shot execution. Seeded matrices are reproducible.
 MAESTRO_TRANSFORM_API ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorConfig &config, size_t shots);
 
+/// @ingroup execution
 struct NoisyExecutionOptions
 {
     NoiseLayer layer = NoiseLayer::kPauli;

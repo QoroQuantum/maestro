@@ -1,11 +1,20 @@
+/**
+ * @file IncrementalEvolution.h
+ * @ingroup execution
+ * @brief Incremental step-by-step evolution on a persistent simulator.
+ */
 #pragma once
 
 #include "../Circuit/Circuit.h"
 
 namespace MaestroExecution
 {
-// An observation sees the end of the current fragment before its terminal readout.
-// Only the classical results used by the repeated step cross a boundary.
+/**
+ * @ingroup execution
+ * @brief Incremental evolution across repeated fragments; each observation sees
+ * the state before terminal readout, and only classical bits read by later steps
+ * cross a boundary.
+ */
 class IncrementalEvolution
 {
     using Circuit = Circuits::Circuit<>;

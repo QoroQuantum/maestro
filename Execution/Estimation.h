@@ -1,3 +1,8 @@
+/**
+ * @file Estimation.h
+ * @ingroup execution
+ * @brief Observable estimation plans, caches, and results.
+ */
 #pragma once
 
 #include "../Circuit/Circuit.h"
@@ -51,6 +56,7 @@ struct EstimationPlan
     double reduction_time = 0;
 };
 
+/// @ingroup execution
 struct EstimationResult
 {
     std::vector<double> values;

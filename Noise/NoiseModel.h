@@ -1,5 +1,6 @@
 /**
- * @file Noise.h
+ * @file NoiseModel.h
+ * @ingroup noise
  * @brief Pauli and coherent noise models for quantum circuit simulation.
  *
  * Defines a NoiseModel that maps per-qubit noise parameters and provides:
@@ -374,6 +375,7 @@ struct ThermalRelaxation
  *   nm.set_coherent_depolarizing(1, 0.01);     // Coherent: same infidelity
  *   nm.set_all_correlated_ou(4, 15.0, 0.5, 100e-9); // Correlated: OU noise
  *   double d = nm.compute_damping("ZZ");       // damping for ⟨ZZ⟩
+ * @ingroup noise
  */
 class NoiseModel
 {

@@ -133,11 +133,12 @@ print(maestro.noisy_execute(measured, noise, shots=1024, noise_realizations=64, 
 
 In the estimate functions, `noise_realizations` is the number of independent
 noise samples averaged. In the execute functions, it is the number of batches
-the shots are split into, so at most `shots` batches run. On QCSim,
-realizations run on several worker threads at once, within `max_simulators`
-and the `trajectory_max_memory_mb` budget; each realization keeps its own
-random streams, so seeded results do not depend on the worker count. The
-result reports how many workers ran the realizations as `realization_workers`.
+the shots are split into, so at most `shots` batches run. On QCSim and on CPU
+Qiskit Aer statevectors and matrix product states, realizations run on several
+worker threads at once, within `max_simulators` and the
+`trajectory_max_memory_mb` budget; each realization keeps its own random
+streams, so seeded results do not depend on the worker count. The result
+reports how many workers ran the realizations as `realization_workers`.
 
 The execute functions also accept `return_samples=True`, which returns each
 shot's record as a `(shots, clbits)` `uint8` array under `samples` (see
@@ -304,38 +305,36 @@ the QCSim path integral and the composite statevector, in the execute and estima
   identity: a Kraus operator that is zero is no branch. A circuit whose channels are all of that
   kind evolves once for all its shots, an estimate of it is one evolution, and
   the shots of a realization share it.
-- **Terminal noise on QCSim and Qiskit Aer statevectors.** In automatic estimation,
-  Maestro can apply the final channels' adjoints to a Pauli observable and
-  evaluate the resulting Pauli sum on the preceding state. For example, a
-  final T1 decay with probability `p` gives ⟨Z⟩ after decay as
-  `(1 - p) * ⟨Z⟩ + p`. This removes the sampling error from that layer.
-  If the preceding evolution is deterministic, Maestro computes the noisy
-  expectation once. An explicit `noise_realizations` count is still reported.
-  A channel on one qubit can qualify even if gates on other qubits follow it.
-  Earlier stochastic evolution still contributes trajectory variance. If an
-  observable's Pauli expansion becomes too expensive, Maestro samples that
-  observable and can still average the other observables in the same request.
-  On wide statevectors, a deeper deterministic prefix makes a larger exact
-  expansion worthwhile because each trajectory would repeat those gates.
-  When one request mixes averaged and sampled observables, QCSim can read both
-  from one trajectory even with gate fusion enabled. It can do this once the
-  prefix's random branches have been resolved and the pending gates needed for
-  each local expectation fit on at most three qubits. Other cases can require a
-  second evolution with the same seed.
-  For terminal computational-basis measurements after a deterministic prefix,
-  Maestro can sample joint populations once and apply eligible final channels
-  to the resulting counts. T1 changes these counts, while pure dephasing
-  leaves them unchanged. This preserves correlations with unmeasured channel
-  targets and other measured qubits. Counts and shot rows retain shot noise.
-  Composite statevectors evaluate the prefix on its entangled components.
-  Errors drawn when preparing a realization keep their shared draw across shots.
-  Python circuit methods and module functions accept
-  `config=maestro.SimulatorConfig(terminal_channel_policy="trajectories")`
-  to sample the branches explicitly. The default is `"auto"`. The same
-  setting is available as `SimulatorConfig::terminal_channel_policy` in C++,
-  through `network->Configure("terminal_channel_policy", "trajectories")`
-  on a native network, and as `simulator.options.terminal_channel_policy`
-  in JSON.
+- **Terminal noise on QCSim and Qiskit Aer statevectors.** Under the default
+  `terminal_channel_policy="auto"`, Maestro avoids unnecessary trajectory
+  sampling for eligible final channels:
+  - *Expectation values:* Maestro applies the final channels' adjoints to a
+    Pauli observable and evaluates the resulting Pauli sum on the preceding
+    state (for example, a final T1 decay with probability `p` maps ⟨Z⟩ to
+    `(1 - p) * ⟨Z⟩ + p`), removing sampling error from that layer. A channel on
+    one qubit qualifies even if gates on other qubits follow it. With a
+    deterministic prefix, Maestro computes the expectation once (still reporting
+    an explicit `noise_realizations` count); earlier stochastic evolution keeps
+    its trajectory variance. If an observable's Pauli expansion grows too
+    expensive (with deeper deterministic prefixes allowing larger expansions on
+    wide statevectors), Maestro samples that observable while still averaging
+    the others. When a request mixes averaged and sampled observables, QCSim can
+    read both from one trajectory even with gate fusion enabled once prefix
+    branches are resolved and the pending gates for each local expectation fit
+    on at most three qubits (other cases may run a second evolution with the
+    same seed).
+  - *Terminal counts and shot rows:* After a deterministic prefix, Maestro can
+    sample joint populations once and apply eligible final channels to the
+    counts (T1 changes counts while pure dephasing leaves them unchanged),
+    preserving correlations with unmeasured targets and retaining shot noise.
+    Composite statevectors evaluate the prefix on entangled components, and
+    per-realization noise draws stay shared across a realization's shots.
+  - *Forcing explicit trajectories:* Set
+    `config=maestro.SimulatorConfig(terminal_channel_policy="trajectories")`
+    (or `SimulatorConfig::terminal_channel_policy` in C++,
+    `network->Configure("terminal_channel_policy", "trajectories")` on a native
+    network, or `simulator.options.terminal_channel_policy` in JSON) to draw
+    terminal channel branches explicitly.
 - **QCSim path integral trajectories.** With a positive `path_integral_threshold`,
   ordinary gates and nonidentity Pauli or unitary branches can prune paths.
   A sampled identity preserves the amplitudes already retained. For a
@@ -467,11 +466,18 @@ automatically:
   correlated phase flips) is diagonal in the Pauli basis. Each channel only
   scales terms, so the default is one exact realization instead of 64 or 100
   sampled ones.
-- T1, thermal and idle relaxation that acts on the circuit keeps its sampled
-  realizations on the propagator. Relaxation also sends Z to the identity, and
-  without a truncation threshold those branches fill the operator space of the
-  observable's light cone (`4^width` terms), which costs far more than the
-  trajectories.
+- T1, thermal and idle relaxation towards unequal populations depends on
+  whether Pauli truncation is active:
+  - *Without a truncation threshold:* relaxation keeps its sampled realizations
+    on the propagator. Relaxation sends Z to the identity, and without pruning
+    those branches fill the operator space of the observable's light cone
+    (`4^width` terms), which costs far more than trajectories.
+  - *With a truncation threshold* (a positive `pp_coefficient_threshold`, or a
+    `pp_max_pauli_weight` below the circuit width): `auto` noise evaluation
+    applies relaxation as exact channels in one propagation, keeping the
+    propagated operator bounded while avoiding trajectory sampling error. Pass
+    `evaluation="trajectories"` in native requests to force sampled
+    realizations instead.
 - Relaxation counts by the channel it applies. A zero T1 probability, thermal
   or idle relaxation towards equal populations (`excited_population=0.5`), and
   relaxation on qubits the circuit never gates (or idle relaxation without a
@@ -523,30 +529,34 @@ recurse into nested circuits. Flatten composites before model injection, includi
 readout noise. Branch averaging preserves measurement and feedback behavior but
 does not expand that noise-injection support.
 
-`fixed_backend=True` pins the requested simulator and method. This is useful when
-comparing DM/MPO behavior: automatic selection may otherwise use a reference-frame
-sampler for eligible Clifford circuits. Sinter uses one realization for
-deterministic mixed-state noise and retains independent per-shot disturbances for
-its stochastic fallback paths. On DM/MPO its checkpoint also keeps in-circuit
-Pauli channels and resets before the first measurement, and a deterministic
-external noise model, so they evolve once per sampler. On pure-state backends the
-checkpoint ends at a reset of a qubit already used, which may collapse a branch.
-`PrefixCheckpointedSimulator(prefix, n, config, prefix_noise_model=model)` applies
-such deterministic noise to a prefix (it raises `ValueError` otherwise); crosstalk
-spectators outside the register stay in `|0>` and only contribute a phase, as for
-suffixes. The prefix's own channel instructions follow the same rule: the
-channel-sampling methods would draw one branch of them for every
-suffix shot to share, so a prefix that holds channel instructions with a branch
-to draw raises `ValueError` there; put those channels in the suffixes. A channel
-with one branch is a gate and may stay in the prefix. Only suffixes are sampled.
-With `measurement_order="auto"`, a prefix drops end measurements on wires whose
-quantum state and recorded bit it no longer uses. With `"written"`, the prefix
-drops only its trailing measurements, ignoring barriers and no-op placeholders. A measurement before a
-gate on another wire then collapses the saved state once for all suffix shots.
-Dynamic checkpoint suffixes evolve their deterministic head once per
-realization when all four retained states (the checkpoint's live state and saved
-prefix, the copy and its saved head) fit `trajectory_max_memory_mb`, then replay
-only their branches.
+- **Pinning the backend:** `fixed_backend=True` pins the requested simulator
+  and method. This is useful when comparing DM/MPO behavior, since automatic
+  selection may otherwise switch eligible Clifford circuits to a
+  reference-frame sampler.
+- **Sinter and checkpoints with mixed-state noise:** Sinter uses one
+  realization for deterministic mixed-state noise and keeps independent
+  per-shot disturbances on its stochastic fallback paths. On DM/MPO, its
+  checkpoint also retains in-circuit Pauli channels and resets before the first
+  measurement, plus any deterministic external noise model, so they evolve once
+  per sampler. On pure-state backends the checkpoint ends at a reset of a qubit
+  already used, which may collapse a branch.
+- **Prefix noise in `PrefixCheckpointedSimulator`:**
+  `PrefixCheckpointedSimulator(prefix, n, config, prefix_noise_model=model)`
+  applies deterministic noise to a prefix and raises `ValueError` otherwise;
+  crosstalk spectators outside the register stay in `|0>` and only contribute a
+  phase, as for suffixes. Channel instructions in the prefix follow the same
+  rule: on channel-sampling methods, a channel with more than one branch raises
+  `ValueError` in the prefix (put stochastic channels in the suffixes), whereas
+  a single-branch channel is a gate and may stay in the prefix.
+- **Prefix measurements and dynamic suffixes:** With `measurement_order="auto"`,
+  a prefix drops end measurements on wires whose quantum state and recorded bit
+  it no longer uses. With `"written"`, it drops only trailing measurements
+  (ignoring barriers and no-op placeholders), so a measurement before a gate on
+  another wire collapses the saved state once for all suffix shots. Dynamic
+  checkpoint suffixes evolve their deterministic head once per realization when
+  all four retained states (the checkpoint's live state and saved prefix, the
+  copy and its saved head) fit `trajectory_max_memory_mb`, then replay only
+  their branches.
 
 The C++ `noise::NoiseAdd` infers exact channels from the backend the network
 will run: a fixed simulator, or the candidate an automatically selecting network

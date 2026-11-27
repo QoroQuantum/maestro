@@ -1,5 +1,6 @@
 /**
  * @file AdjointDifferentiation.h
+ * @ingroup execution
  * @version 1.0
  *
  * @section DESCRIPTION
@@ -612,6 +613,7 @@ struct ConeProgram
  * P, Rx, Ry, Rz, CP, CRx, CRy and CRz gate; theta, phi, lambda for U
  * (its gamma stays fixed); theta, phi, lambda, gamma for CU. Delays are
  * ignored; any other non-gate operation is rejected.
+ * @ingroup execution
  */
 class Program
 {

@@ -1,3 +1,8 @@
+/**
+ * @file Options.h
+ * @ingroup execution
+ * @brief Backend, method, and option parsing helpers for native requests.
+ */
 #pragma once
 #include "SimulatorConfig.h"
 #include "Json/Json.h"

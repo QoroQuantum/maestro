@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-11-27
+
 ### Added
 
+- The QCSim `path_integral` simulator supports one- and two-qubit Kraus
+  channels, Pauli channels, unitary mixtures and composed factors by sampling
+  quantum trajectories from the current sparse state across execution,
+  estimation, incremental evolution and checkpoint suffixes. With pruning
+  enabled, prefix sharing preserves operation order around branching channels;
+  readout-only probability queries keep direct endpoint evaluation.
+- Bare OpenQASM 3 `gphase(angle)` preserves the complex phase through circuit
+  composition, statevectors, path-integral amplitudes, inner products and
+  QASM 3 export (controlled forms and QASM 2 export of phase-bearing circuits
+  raise explicit errors).
+- Legacy C instruction arrays honor `conditional_reg` on measurements, and both
+  legacy and schema-v2 instruction arrays accept symmetric or asymmetric
+  measurement `readout_error`.
 - `maestro.sinter` translates the rest of Stim's one- and two-qubit Clifford
   gates, which raised "Unsupported Stim instruction": `ISWAP`, `ISWAP_DAG`,
   `CXSWAP`, `CZSWAP`, `SWAPCX`, `SQRT_XX`, `SQRT_XX_DAG`, `SQRT_YY`,
@@ -295,7 +310,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache alone: an upper bound on what overlaps, so two realizations report
   1. A noisy fidelity still runs its
   realizations one after another and reports 1.
-- QCSim is pinned to QoroQuantum/QCSim 21cb0d2. On its density matrix, a
+- QCSim is pinned to QoroQuantum/QCSim 049bff4 (including the merged real-gate
+  kernels and channel/path-integral updates). On its density matrix, a
   one-qubit gate that is not diagonal is applied as its 4x4 superoperator in
   one pass over the matrix instead of two, from 11 qubits for dense gates
   (1.5-1.9x per gate) and from 5 for antidiagonal ones such as X and Y
@@ -349,9 +365,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sampled realizations; an explicit `noise_realizations` only sets how many
   times the circuit runs, and with exact channels each run gives the same
   values.
+- Terminal noise and local Kraus evolution on QCSim, Qiskit Aer and their
+  composite statevectors are optimized: eligible final channels evolve Pauli
+  observables through their adjoints (expanding deterministic prefixes up to
+  256 Pauli terms through 16 qubits and up to 512 on wider registers), eligible
+  mixed estimates share one live statevector under QCSim's default fusion,
+  phase-damping and numerically decomposed sparse Pauli channels are recognized
+  for frame samplers, and two-target channels that act trivially on one wire
+  keep disconnected composite components separate.
+- `PrefixCheckpointedSimulator` and `checkpoint_batch` honor MPS and MPO
+  routing settings (`disable_optimized_swapping` and `lookahead_depth`),
+  resolve suffix lookahead once per call instead of once per noise realization,
+  and reuse routing choices across identical routing problems. QCSim MPS and
+  MPO routing models measurements, resets and untouched product-state qubits,
+  requiring a predicted gain of 100 for searched checkpoint prefix layouts and
+  2 for MPS circuits with mid-circuit measurements or resets.
+- QCSim MPS and MPO drop singular values below `1e-15` when no
+  `singular_value_threshold` is set. They kept everything above Eigen's
+  numerical rank threshold before, and the tiny components that survived
+  could inflate bond dimensions. `GetConfiguration` reports the effective
+  threshold, and an explicit value, `0` included, replaces it. Automatic
+  backend selection passes on only an explicit threshold, so each backend
+  keeps its own default; reconfiguring a `ConfigureNetwork` handle without a
+  threshold restores the default unless `native_options` gives one. On the
+  MPO, a bond-dimension limit alone no longer turns off exact marginal
+  sampling of terminal counts: that waits until an operation could have
+  truncated the state.
 
 ### Fixed
 
+- Path-integral amplitude queries (`state_probability`, `QuantumCircuit.prob`,
+  `noisy_prob` and native `SetCircuit`), `inner_product`, `mirror_fidelity` and
+  C++ `RealizationFidelity` validate the full circuit before execution and
+  reject mid-circuit measurements, resets, classical control, explicit
+  channels, unsupported nested circuits and uninvertible gates instead of
+  silently ignoring them; a failed native `SetCircuit` preserves any previously
+  installed circuit.
+- `incremental_evolve` records each step before its terminal readout, preserves
+  mid-circuit measurements, resets and classical feedback across steps, and
+  reports `single_trajectory` metadata when sampling channels. Checkpoints
+  restore classical bits written in the prefix for every suffix and shot, and
+  MPS/MPO routing preserves classical read/write ordering.
+- Automatic parity reduction preserves named Clifford gates for stabilizer
+  backends and validates full Pauli observables before reduction. QASM export
+  preserves reset-to-one and sub-microsecond delays, reports unrepresentable
+  readout errors and rejects classically guarded delays. Sinter computes
+  detector and observable references from the full noiseless non-Clifford
+  circuit on first demand and supports vacuous decoders without a detector
+  error model. Legacy C expectation returns `nullptr` on execution error, and
+  single-GPU adapters propagate named-gate failures to the caller.
 - `maestro.sinter` accepts Stim's other gate names (`ZCX`, `ZCY`, `ZCZ`,
   `SWAPCZ`, `H_XZ`) in circuit text and instruction tuples, as it already did
   in a `stim.Circuit`, which reports the canonical name. In text they raised
@@ -1464,7 +1526,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.15...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.16...HEAD
+[0.3.16]: https://github.com/QoroQuantum/maestro/compare/v0.3.15...v0.3.16
 [0.3.15]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...v0.3.13

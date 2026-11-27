@@ -1,6 +1,8 @@
-// Monte Carlo noisy expectation values and fidelities over independent noise
-// realizations, run on realization workers. Shared by C++ callers and the
-// Python bindings. This header has no Python dependency.
+/**
+ * @file NoisyEstimation.h
+ * @ingroup execution
+ * @brief Monte Carlo noisy expectation values, fidelities, and probabilities.
+ */
 #pragma once
 
 #include "Estimation.h"
@@ -29,6 +31,7 @@ MAESTRO_TRANSFORM_API bool HasUnitaryIdeal(const RecordCircuitPtr &before_readou
 // (nothing) or |1> (an X), whose adjoint then undoes the preparation.
 MAESTRO_TRANSFORM_API RecordCircuitPtr PreparedUnitary(const RecordCircuitPtr &circuit);
 
+/// @ingroup execution
 struct NoisyEstimate
 {
     // Means over the realizations, and the noiseless baseline's values.
@@ -80,6 +83,7 @@ MAESTRO_TRANSFORM_API NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circui
 // An ideal with channels or intermediate measurement/control is rejected.
 MAESTRO_TRANSFORM_API double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config);
 
+/// @ingroup execution
 struct NoisyFidelityResult
 {
     double fidelity = 0;
@@ -91,14 +95,16 @@ struct NoisyFidelityResult
     double time_taken = 0;
 };
 
-// Mean fidelity of noise_realizations combined-noise realizations of the
-// circuit to its channel-free ideal, with the standard error of that mean.
-// Realizations run on workers; each keeps its seeds, so results do not depend
-// on the worker count.
+/// @ingroup execution
+/// Mean fidelity of noise_realizations combined-noise realizations of the
+/// circuit to its channel-free ideal, with the standard error of that mean.
+/// Realizations run on workers; each keeps its seeds, so results do not depend
+/// on the worker count.
 MAESTRO_TRANSFORM_API NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model,
                                                         std::optional<size_t> requested_realizations, const SimulatorConfig &config,
                                                         std::optional<uint64_t> noise_seed);
 
+/// @ingroup execution
 struct NoisyProbabilityResult
 {
     double probability = 0;
