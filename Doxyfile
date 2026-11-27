@@ -71,7 +71,9 @@ GENERATE_DEPRECATEDLIST= YES
 INPUT                  = Circuit \
                          Distribution \
                          Estimators \
+                         Execution \
                          Network \
+                         Noise \
                          Scheduler \
                          Simulators \
                          TensorNetworks \

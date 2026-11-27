@@ -18,12 +18,12 @@
  *
  * | Feature | Description |
  * |---------|-------------|
- * | **Unified Abstraction** | Write circuits once (OpenQASM 2.0 / Python builder) and execute across any backend |
- * | **Multi-Paradigm Simulation** | Statevector, Matrix Product State (MPS), Clifford Stabilizer, Tensor Network, and Pauli Propagation |
- * | **GPU Acceleration** | NVIDIA cuStateVec and custom CUDA acceleration for statevector and tensor networks |
+ * | **Unified Abstraction** | Write circuits once (OpenQASM / Python builder / JSON request) and execute across any backend |
+ * | **Multi-Paradigm Simulation** | Statevector, MPS, Density Matrix, MPO, Stabilizer, Extended Stabilizer, Tensor Network, Pauli Propagation, and Path Integral |
+ * | **GPU Acceleration** | NVIDIA cuStateVec and custom CUDA acceleration for statevector, MPS, MPO, density matrix, tensor network, and Pauli propagation |
  * | **Distributed & HPC** | Multi-GPU and MPI-distributed GPU statevectors, QuEST clusters, and partitioned CPU p-block composite execution |
  * | **Comprehensive Noise Suite** | Analytical, Monte Carlo, CPTP quantum channels, thermal T1/T2, crosstalk, and coherent errors |
- * | **Python & C++ APIs** | Nanobind-based Python API and C++ header interface |
+ * | **Python & C++ APIs** | Nanobind-based Python API, C++ headers, C ABI, and versioned JSON request API |
  *
  * ---
  *
@@ -37,14 +37,14 @@
  *     end
  *
  *     subgraph Frontend["Circuit Layer"]
- *         QASM["OpenQASM 2.0 Parser"]
+ *         QASM["OpenQASM Parser"]
  *         IR["Circuit IR & Factory"]
  *         PE["Prediction & Analysis Engine"]
  *     end
  *
  *     subgraph Backends["Simulation Engines"]
- *         CPU["CPU — SV · MPS · Stabilizer · TN · Pauli Prop"]
- *         GPU["GPU — cuStateVec · CUDA MPS · CUDA TN"]
+ *         CPU["CPU — SV · MPS · DM · MPO · Stabilizer · ExtStab · TN · Pauli Prop · Path Integral"]
+ *         GPU["GPU — SV · MPS · DM · MPO · TN · Pauli Prop"]
  *         DISTGPU["Dist GPU — Multi-GPU & MPI Statevectors"]
  *         QUEST["QuEST — Statevector Library"]
  *         COMP["Composite — CPU p-block Partitioned Simulation"]
@@ -85,6 +85,7 @@
  * | [Python documentation](https://qoroquantum.github.io/maestro/) | Python guide, examples and API reference |
  * | [Noise and error correction](https://qoroquantum.github.io/maestro/user-guide/noise-and-qec.html) | Hardware-realistic noise models, thermal relaxation, and CPTP channels |
  * | @ref md_markdown_2TUTORIAL "C++ Developer Tutorial" | Complete C++ workflow, memory management, and compilation |
+ * | [Native Request & JSON API](https://github.com/QoroQuantum/maestro/blob/main/docs/native-request-api.md) | Versioned JSON request schema, capabilities, and C ABI |
  * | [GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) | NVIDIA GPU (single, multi-GPU & MPI cluster) setup |
  * | @ref core "C++ API Reference" | C++ module groups, class hierarchies, and structs |
  *
@@ -107,7 +108,7 @@
  * #include <iostream>
  *
  * int main() {
- *     void* maestro = GetMaestroObject();
+ *     if (!GetMaestroObject()) return 1;
  *     unsigned long sim = CreateSimpleSimulator(2);
  *     const char* qasm = "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[2]; creg c[2]; h q[0]; cx q[0], q[1]; measure q -> c;";
  *     char* result = SimpleExecute(sim, qasm, "{\"shots\": 1024}");

@@ -51,16 +51,22 @@
  * |---------|---------------|----------------|-------------|
  * | QCSim Statevector | kQCSim | kStatevector | CPU |
  * | QCSim MPS | kQCSim | kMatrixProductState | CPU |
+ * | QCSim MPO | kQCSim | kMatrixProductOperator | CPU |
+ * | QCSim Density Matrix | kQCSim | kDensityMatrix | CPU |
  * | QCSim Stabilizer | kQCSim | kStabilizer | CPU |
+ * | QCSim Extended Stabilizer | kQCSim | kExtendedStabilizer | CPU |
  * | QCSim Tensor Network | kQCSim | kTensorNetwork | CPU |
  * | QCSim Pauli Propagator | kQCSim | kPauliPropagator | CPU |
- * | Qiskit Aer | kQiskitAer | SV, MPS, Stabilizer, TN, ExtStab | CPU |
+ * | QCSim Path Integral | kQCSim | kPathIntegral | CPU |
+ * | Qiskit Aer | kQiskitAer | SV, MPS, DM, Stabilizer, ExtStab, TN | CPU |
  * | GPU Statevector | kGpuSim | kStatevector | GPU |
  * | GPU MPS | kGpuSim | kMatrixProductState | GPU |
+ * | GPU MPO | kGpuSim | kMatrixProductOperator | GPU |
+ * | GPU Density Matrix | kGpuSim | kDensityMatrix | GPU |
  * | GPU Tensor Network | kGpuSim | kTensorNetwork | GPU |
  * | GPU Pauli Propagator | kGpuSim | kPauliPropagator | GPU |
  * | QuEST | kQuestSim | kStatevector | CPU |
- * | Composite (p-block) | kCompositeQCSim | kStatevector | CPU |
+ * | Composite (p-block) | kCompositeQCSim, kCompositeQiskitAer | kStatevector | CPU |
  * | Distributed GPU Statevector | kDistGpuSim | kStatevector | Multi-GPU (Local) |
  * | Distributed MPI GPU Statevector | kDistMpiGpuSim | kStatevector | MPI / Multi-Node GPU |
  *
@@ -112,6 +118,16 @@
 /**
  * @defgroup qasm OpenQASM Interop
  * @brief OpenQASM 2.0 parsing, AST, and circuit conversion.
+ */
+
+/**
+ * @defgroup execution Execution & Request API
+ * @brief Unified C++ execution helpers, simulator configuration, sampling records, checkpoints, adjoint differentiation, and the versioned JSON request API.
+ */
+
+/**
+ * @defgroup noise Noise & Quantum Channels
+ * @brief Device noise models, Pauli/Kraus quantum channels, thermal relaxation, crosstalk, and noisy circuit injection.
  */
 
 /**

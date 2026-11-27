@@ -99,11 +99,16 @@ g++ -std=c++17 -o maestro_example example.cpp \
 You can specify exact simulator backends and simulation methods:
 
 ```cpp
-#include "Simulators/Factory.h"
-#include "Simulators/State.h"
+#include "Simulators/Core/Factory.h"
+#include "Simulators/Interfaces/State.h"
 
-// Backend types: 0: Statevector, 1: MPS, 2: Stabilizer, 3: TensorNetwork
-unsigned long int simHandle = CreateSimulator(0, 0);
+// SimulationType values:
+// 0: Statevector, 1: MPS, 2: Stabilizer, 3: TensorNetwork, 4: PauliPropagator,
+// 5: ExtendedStabilizer, 6: PathIntegral, 7: DensityMatrix, 8: MatrixProductOperator
+unsigned long int simHandle = CreateSimulator(
+    static_cast<int>(Simulators::SimulatorType::kQCSim),
+    static_cast<int>(Simulators::SimulationType::kStatevector)
+);
 ```
 
 ### Expectation Values in C++
@@ -118,7 +123,7 @@ FreeResult(estimate);
 ### GPU and QuEST Backends (C++)
 
 ```cpp
-#include "Simulators/Factory.h"
+#include "Simulators/Core/Factory.h"
 
 // Load optional acceleration libraries
 bool questReady = Simulators::SimulatorsFactory::InitQuestLibrary();
@@ -300,7 +305,7 @@ scoped thread-local default; custom estimators creating simulators on additional
 threads must propagate configuration to those threads explicitly.
 
 For statevectors distributed across multiple GPUs on a single host or across
-MPI cluster nodes, see the Python HPC guide (`py_hpc`).
+MPI cluster nodes, see the [Scaling: multi-GPU and MPI guide](https://qoroquantum.github.io/maestro/user-guide/scaling.html).
 
 GPU loader regression tests need no GPU:
 
