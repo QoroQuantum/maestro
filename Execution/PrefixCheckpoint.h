@@ -1,6 +1,8 @@
-// A simulator checkpointed after a prefix circuit, from which suffixes are
-// sampled repeatedly. Shared by C++ callers and the Python bindings
-// (PrefixCheckpointedSimulator). This header has no Python dependency.
+/**
+ * @file PrefixCheckpoint.h
+ * @ingroup execution
+ * @brief Simulator checkpointed after a prefix circuit for repeated suffix sampling.
+ */
 #pragma once
 
 #include "SampleRecords.h"
@@ -10,6 +12,7 @@
 
 namespace MaestroExecution
 {
+/// @ingroup execution
 class PrefixCheckpoint
 {
   public:

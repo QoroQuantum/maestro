@@ -1,5 +1,6 @@
 /**
  * @file NoiseAdd.h
+ * @ingroup noise
  * @version 1.0
  *
  * @section DESCRIPTION
@@ -45,6 +46,7 @@
 namespace noise
 {
 
+/// @ingroup noise
 class NoiseAdd
 {
   public:

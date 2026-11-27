@@ -1,3 +1,8 @@
+/**
+ * @file ExtendedFrameSampler.h
+ * @ingroup execution
+ * @brief Noisy extended-stabilizer sampling with batched Pauli frames.
+ */
 #pragma once
 
 // Noisy extended-stabilizer sampling with batched Pauli frames.
@@ -48,6 +53,7 @@ class ExtendedFrameSampler;
 inline std::optional<ExtendedFrameSampler> CompileExtendedFrameSampler(const std::shared_ptr<Circuits::Circuit<double>> &circuit, size_t numQubits,
                                                                        size_t numClassicalBits);
 
+/// @ingroup execution
 class ExtendedFrameSampler
 {
   public:

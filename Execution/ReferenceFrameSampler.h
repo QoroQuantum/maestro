@@ -1,3 +1,8 @@
+/**
+ * @file ReferenceFrameSampler.h
+ * @ingroup execution
+ * @brief Compiled noisy-Clifford Pauli-frame sampler.
+ */
 #pragma once
 
 #include "Transforms/Export.h"
@@ -69,6 +74,7 @@ MAESTRO_TRANSFORM_API std::optional<ReferenceFrameSampler> CompileReferenceSampl
 // Shots run in batches of kBatchShots. Every random instruction draws from its
 // own stream per batch, and sparse errors are found by geometric skipping, so
 // noise costs scale with the error rate rather than with shots x channels.
+/// @ingroup execution
 class ReferenceFrameSampler
 {
   public:

@@ -1,3 +1,8 @@
+/**
+ * @file Sampling.h
+ * @ingroup execution
+ * @brief Shot sampling sessions and result structures.
+ */
 #pragma once
 
 #include "../Network/Network.h"
@@ -5,6 +10,7 @@
 
 namespace MaestroExecution
 {
+/// @ingroup execution
 struct SamplingResult
 {
     Network::INetwork<double>::ExecuteResults counts;
@@ -24,8 +30,10 @@ struct SamplingResult
     bool network_trajectory = false;
 };
 
-// A worker owns its session. Reusing the network avoids creating a public
-// handle for every noisy realization; each sample still maps its own circuit.
+/**
+ * @ingroup execution
+ * @brief Per-worker sampling session that reuses a network across realizations.
+ */
 class SamplingSession
 {
   public:
