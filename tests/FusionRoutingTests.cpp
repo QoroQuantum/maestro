@@ -180,6 +180,39 @@ static void BoundaryPlanning()
             }
 }
 
+// The shared prefix follows wire and classical dependencies at every chain
+// setting. Disjoint gates can run once even after a draw on an entangled wire.
+static void ChainPrefixDependencies()
+{
+    for (const auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
+    {
+        auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
+        sim->AllocateQubits(6);
+        for (const char *cutoff : {"1e-10", "0.4"})
+        {
+            const bool mpo = method == SimulationType::kMatrixProductOperator;
+            sim->Configure(mpo ? "matrix_product_operator_max_bond_dimension" : "matrix_product_state_max_bond_dimension", "2");
+            sim->Configure(mpo ? "matrix_product_operator_truncation_threshold" : "matrix_product_state_truncation_threshold", cutoff);
+            const auto policy = sim->GetShotPrefixPolicy();
+            const auto h = CF::CreateGate(Kind::kHadamardGateType, 0), bell = CF::CreateGate(Kind::kCXGateType, 0, 1);
+            const auto independent = CF::CreateGate(Kind::kCXGateType, 1, 2), reuse = CF::CreateGate(Kind::kXGateType, 0);
+            const auto read = CF::CreateMeasurement({{0, 0}});
+            const auto feedback = CF::CreateConditionalGate(CF::CreateGate(Kind::kXGateType, 3), CF::CreateEqualCondition({0}, {true}));
+            Circuits::OperationState state;
+            const auto measurement = CF::CreateCircuit({h, bell, read, independent, reuse, feedback});
+            // PlanNonMeasurements omits its leading shared operations. The
+            // returned mask begins with the first operation deferred to a shot.
+            Check(measurement->PlanNonMeasurements(state, policy) == std::vector<bool>({false, true, false, false}),
+                  "A chain prefix missed independent gates or crossed a measured wire or feedback bit");
+            const Op damping = std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, QuantumChannel::AmplitudeDamping(.5));
+            const auto channel = CF::CreateCircuit({h, bell, damping, independent, reuse});
+            Circuits::OperationState channelState;
+            const std::vector<bool> deferred = mpo ? std::vector<bool>{} : std::vector<bool>{false, true, false};
+            Check(channel->PlanNonMeasurements(channelState, policy) == deferred, "A chain prefix lost independent work or shared a trajectory branch");
+        }
+    }
+}
+
 static void MultishotNetwork()
 {
     for (bool fusion : {false, true})
@@ -2347,6 +2380,7 @@ int main(int argc, char **argv)
         DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(8, 5, "64", false, Circuits::ChainOrder::kSampledChannels);
         DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(4, 3, "64", false, Circuits::ChainOrder::kMixedState);
         AutomaticNetworkJobs();
+        ChainPrefixDependencies();
         MultishotNetwork();
         FlushScopeAndRoutingSettings();
         FusedBoundariesDoNotWait();

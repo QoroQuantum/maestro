@@ -1,3 +1,4 @@
+#include "Execution/SimulatorConfig.h"
 #include "NativeTestSuites.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Core/Factory.h"
@@ -89,6 +90,62 @@ void PathIntegralMeasurementPrefix()
     checkThreshold("1.0000000000000003e-15", false, false);
     checkThreshold("0.2", false, false);
     checkThreshold("0", true, true);
+}
+
+void PauliMeasurementPrefix()
+{
+    Circuit circuit;
+    circuit.AddOperation(CF::CreateMeasurement({{0, 0}}));
+    circuit.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    auto simulator = Make(Method::kPauliPropagator, 2);
+    MaestroExecution::SimulatorConfig config;
+    config.pp_max_pauli_weight = 1;
+    config.native_options["pauli_propagator_pauli_weight_threshold"] = "1";
+    simulator->Configure("pauli_propagator_pauli_weight_threshold", "1");
+
+    const auto check = [&](bool contiguous) {
+        const auto policy = MaestroExecution::ConfiguredShotPrefix(config, Backend::kQCSim, Method::kPauliPropagator);
+        Circuits::OperationState state(2);
+        const std::vector<bool> expected{false, !contiguous};
+        Check(circuit.PlanNonMeasurements(state, policy) == expected, "Pauli configuration planned the wrong shot prefix");
+        Check(circuit.ExecuteNonMeasurements(simulator, state) == expected, "Live Pauli simulator used the wrong shot prefix");
+    };
+    check(false);
+    config.native_options["pauli_propagator_coefficient_threshold"] = "0.01";
+    simulator->Configure("pauli_propagator_coefficient_threshold", "0.01");
+    check(false);
+    config.native_options["measurement_order"] = "written";
+    simulator->Configure("measurement_order", "written");
+    check(true);
+    // The native setting overrides a conflicting typed value in both directions.
+    config.measurement_order = "auto";
+    check(true);
+    config.measurement_order = "written";
+    config.native_options["measurement_order"] = "auto";
+    simulator->Configure("measurement_order", "auto");
+    check(false);
+    config.native_options.erase("measurement_order");
+    simulator->Configure("measurement_order", "written");
+    check(true);
+
+    for (const auto &[value, enabled] : {std::pair{"false", false}, std::pair{"0", false}, std::pair{"true", true}, std::pair{"1", true}})
+    {
+        config.optimize_circuit = !enabled;
+        config.native_options["optimize_circuit"] = value;
+        config.Validate();
+        Check(MaestroExecution::EffectiveOptimizeCircuit(config) == enabled, "Native circuit optimization did not override the typed default");
+    }
+    config.native_options["optimize_circuit"] = "unknown";
+    bool rejected = false;
+    try
+    {
+        config.Validate();
+    }
+    catch (const std::invalid_argument &e)
+    {
+        rejected = std::string_view(e.what()).find("optimize_circuit") != std::string_view::npos;
+    }
+    Check(rejected, "Invalid native circuit optimization was accepted");
 }
 
 void RealBatches()
@@ -580,6 +637,7 @@ void ChannelsOnAHandle()
     // Amplitude damping of 0.3, row-major and interleaved: diag(1, sqrt(0.7)), then sqrt(0.3)|0><1|.
     const double damping[16] = {1, 0, 0, 0, 0, 0, keep, 0, 0, 0, decay, 0, 0, 0, 0, 0};
     const unsigned long q = 0;
+    const unsigned char excited[] = {1, 0};
     {
         auto sim = Make(Method::kDensityMatrix, 2);
         sim->ApplyX(0);
@@ -587,6 +645,9 @@ void ChannelsOnAHandle()
         Check(MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 2), "C channel failed");
         Near(sim->Probability(1), 0.7);
         Near(sim->Probability(0), 0.3);
+        double probability = -1.;
+        Check(MaestroProbabilityBits(sim.get(), excited, 2, &probability), "C bit probability rejected an ensemble state");
+        Near(probability, 0.7);
         uint64_t unread = 1, reread = 1;
         Check(MaestroGetTrajectoryBlockStatistics(sim.get(), &unread, &reread) && unread == 0 && reread == 0, "Trajectory block statistics are not readable");
         // What is no channel fails without throwing.
@@ -606,6 +667,9 @@ void ChannelsOnAHandle()
             Check(!MaestroSupportsQuantumChannels(sim.get()) && MaestroSamplesQuantumChannels(sim.get()), "A pure state does not report sampled channels");
             Check(MaestroApplyKrausChannel(sim.get(), &q, 1, damping, 2), "C channel failed on a pure state");
             const double one = sim->Probability(1);
+            double probability = -1.;
+            Check(MaestroProbabilityBits(sim.get(), excited, 2, &probability), "C bit probability rejected a trajectory state");
+            Near(probability, one);
             Check(std::abs(one) < 1e-9 || std::abs(one - 1) < 1e-9, "A sampled channel left no single branch");
             kept += one > 0.5;
         }
@@ -688,7 +752,10 @@ int RunMaestroExpectationBatchTests()
         }
 #endif
         if (backend == Backend::kQCSim)
+        {
             PathIntegralMeasurementPrefix();
+            PauliMeasurementPrefix();
+        }
         RealBatches();
         ComplexAndC();
         ProbabilityQueriesInC();

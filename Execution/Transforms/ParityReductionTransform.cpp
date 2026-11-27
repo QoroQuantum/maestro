@@ -109,11 +109,28 @@ struct Rotation
     bool check;
 };
 
-bool EmitRotation(Circuit &circuit, Mask support, double angle, bool x, bool preserveClifford)
+double StabilizerPhaseAngle(double angle)
+{
+    switch (Simulators::ClassifyCliffordPhase(angle))
+    {
+    case Simulators::CliffordPhase::Identity:
+        return 0;
+    case Simulators::CliffordPhase::S:
+        return Pi / 2;
+    case Simulators::CliffordPhase::Z:
+        return Pi;
+    case Simulators::CliffordPhase::Sdg:
+        return -Pi / 2;
+    default:
+        return angle;
+    }
+}
+
+void EmitRotation(Circuit &circuit, Mask support, double angle, bool x, bool preserveClifford)
 {
     // Empty support contributes only a global phase, irrelevant to expectations.
     if (!support || angle == 0)
-        return true;
+        return;
     const auto target = FirstBit(support);
     const bool single = !(support & (support - 1));
     // The CX ladder always rotates about Z. A single logical X needs no ladder.
@@ -121,22 +138,27 @@ bool EmitRotation(Circuit &circuit, Mask support, double angle, bool x, bool pre
     auto type = rotateX ? Gate::kRxGateType : Gate::kRzGateType;
     if (preserveClifford)
     {
-        // These named gates differ from the Pauli rotations only by a global
-        // phase. An approximately Clifford input angle must never be rounded.
-        if (angle == Pi)
+        // Named quarter turns differ only by a global phase. Keep any other
+        // accepted phase parameter intact for a possible dense backend.
+        if (angle == Pi || angle == -Pi)
             type = rotateX ? Gate::kXGateType : Gate::kZGateType;
         else if (angle == Pi / 2)
             type = rotateX ? Gate::kSxGateType : Gate::kSGateType;
         else if (angle == -Pi / 2)
             type = rotateX ? Gate::kSxDagGateType : Gate::kSdgGateType;
         else
-            return false;
+            type = Gate::kPhaseGateType;
     }
     const auto center = Factory::CreateGate(type, target, 0, 0, angle);
     if (single)
     {
+        const bool conjugate = rotateX && type == Gate::kPhaseGateType;
+        if (conjugate)
+            circuit.AddOperation(Factory::CreateGate(Gate::kHadamardGateType, target));
         circuit.AddOperation(center);
-        return true;
+        if (conjugate)
+            circuit.AddOperation(Factory::CreateGate(Gate::kHadamardGateType, target));
+        return;
     }
     std::vector<size_t> qubits;
     for (auto bits = support; bits; bits &= bits - 1)
@@ -152,7 +174,6 @@ bool EmitRotation(Circuit &circuit, Mask support, double angle, bool x, bool pre
     if (x)
         for (auto q : qubits)
             circuit.AddOperation(Factory::CreateGate(Gate::kHadamardGateType, q));
-    return true;
 }
 } // namespace
 
@@ -186,6 +207,10 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
         frame[q] = x_frame[q] = Mask{1} << q;
     Basis basis;
     std::vector<Rotation> rotations;
+    const auto isStabilizer = [](const auto &candidate) { return candidate.second == Simulators::SimulationType::kStabilizer; };
+    const auto &candidates = ctx.config.optimization_candidates;
+    const bool stabilizerOnly = HasCandidateList(ctx.config) ? std::all_of(candidates.begin(), candidates.end(), isStabilizer)
+                                                             : ctx.config.simulation_type == Simulators::SimulationType::kStabilizer;
     for (const auto &operation : ctx.circuit->GetOperations())
     {
         if (!operation)
@@ -203,6 +228,18 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
         auto q = gate->GetQubit(0);
         if (q >= width)
             return;
+        double phaseAngle = 0;
+        if (type == Gate::kPhaseGateType)
+        {
+            const auto params = gate->GetParams();
+            if (params.size() != 1 || !std::isfinite(params[0]))
+                return;
+            // Match the source backend before inserting a parity generator.
+            // A mixed candidate list must preserve even a near-identity phase.
+            phaseAngle = stabilizerOnly ? StabilizerPhaseAngle(params[0]) : params[0];
+            if (phaseAngle == 0)
+                continue;
+        }
         if (!body && type == Gate::kHadamardGateType)
         {
             if (prepared & (Mask{1} << q))
@@ -283,9 +320,11 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
         case Gate::kTdgGateType:
             angle = -Pi / 4;
             break;
+        case Gate::kPhaseGateType:
+            angle = phaseAngle;
+            break;
         case Gate::kRxGateType:
-        case Gate::kRzGateType:
-        case Gate::kPhaseGateType: {
+        case Gate::kRzGateType: {
             const auto params = gate->GetParams();
             if (params.size() != 1 || !std::isfinite(params[0]))
                 return;
@@ -306,10 +345,7 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
 
     // Backend selection sees the projected circuit. Check the source first
     // so reduction preserves a stabilizer candidate's eligibility.
-    const bool mayRunStabilizer = HasCandidateList(ctx.config)
-                                      ? std::any_of(ctx.config.optimization_candidates.begin(), ctx.config.optimization_candidates.end(),
-                                                    [](const auto &candidate) { return candidate.second == Simulators::SimulationType::kStabilizer; })
-                                      : ctx.config.simulation_type == Simulators::SimulationType::kStabilizer;
+    const bool mayRunStabilizer = stabilizerOnly || (HasCandidateList(ctx.config) && std::any_of(candidates.begin(), candidates.end(), isStabilizer));
     const bool preserveClifford = mayRunStabilizer && ctx.circuit->IsClifford();
     auto reduced = std::make_shared<Circuit>();
     for (const auto &rotation : rotations)
@@ -319,8 +355,7 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             basis.Encode(rotation.support, support);
         else
             support = basis.Dual(rotation.support);
-        if (!EmitRotation(*reduced, support, rotation.angle, rotation.check, preserveClifford))
-            return;
+        EmitRotation(*reduced, support, rotation.angle, rotation.check, preserveClifford);
     }
 
     std::vector<std::string> observables;

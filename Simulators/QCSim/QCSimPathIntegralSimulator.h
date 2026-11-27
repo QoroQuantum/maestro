@@ -171,8 +171,9 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     ShotPrefixPolicy GetShotPrefixPolicy() const override
     {
-        return pathIntegralSimulator ? ShotPrefixPolicy::ForPathIntegral(pathIntegralSimulator->GetTrimValue())
-                                     : ShotPrefixPolicy::FromConfiguration(GetType(), GetSimulationType(), configuration.GetConfigMap());
+        const auto &options = configuration.GetConfigMap();
+        return pathIntegralSimulator ? ShotPrefixPolicy::ForPathIntegral(pathIntegralSimulator->GetTrimValue(), UsesWrittenMeasurementOrder(options))
+                                     : ShotPrefixPolicy::FromConfiguration(GetType(), GetSimulationType(), options);
     }
 
     bool SamplesQuantumChannels() const override

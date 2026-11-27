@@ -107,6 +107,49 @@ Dynamic raw sampling reuses deterministic prefixes while retaining the complete
 per-shot measurement history. Nested circuits are inlined first, so one that
 ends in measurements counts as terminal.
 
+MPS and MPO use quantum-wire and classical-bit dependencies to share gates
+across shots. An early measurement can be part of a joint terminal readout
+even if its qubit was entangled. Later gates must leave that qubit alone, and
+feedback that reads its result must wait for the measurement. A sampled
+channel or a reset on an entangled pure-state qubit draws a branch per shot.
+Independent gates on other wires can still share a preparation.
+
+A finite bond dimension or singular-value cutoff can make the approximation
+depend on the gate, channel and measurement order chosen by the planner.
+For example, moving a gate before a measurement on another qubit can
+temporarily increase the bond dimension needed to represent the state.
+If the cap discards terms there, the two schedules can yield different
+probabilities. Increasing the cap or decreasing the cutoff lets you check
+convergence. In exact arithmetic the two legal schedules give the same
+distribution. Their seeded shot sequences can still differ.
+
+Every backend accepts `SimulatorConfig(measurement_order="written")` for
+counts and shot records. A measurement before a later gate stays in place,
+even when the gate uses a different qubit. A circuit ending in measurements
+can still prepare its state once and sample the whole terminal block in
+bulk. Classical results follow the circuit's writes, including repeated reads
+of a qubit and overwrites of a destination. Work after a genuine mid-circuit
+measurement can depend on the sampled branch and may run per shot.
+
+The default, `"auto"`, uses the backend's usual scheduler. For example, the
+QCSim Pauli propagator can also move an early measurement into the terminal
+block when qubit and classical-bit dependencies allow it. Under tight
+pruning the two schedules can produce different correlations. Loosening the
+pruning limit lets you check convergence. Both modes can use the backend's
+joint distribution for a terminal block. On a truncated simulator this can
+differ from measuring and truncating the state again after each final read.
+
+Use `optimize_circuit=False` to keep gates that Maestro's circuit simplifier
+would cancel, such as two successive X gates on one wire. It defaults to
+`True`. To inspect the effects of individual gates on a backend with gate
+fusion, you can also set `gate_fusion=False`. Both controls are independent of
+`measurement_order`.
+
+```python
+config = maestro.SimulatorConfig(measurement_order="written", optimize_circuit=False)
+result = circuit.execute(config=config, shots=5000)
+```
+
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames
 

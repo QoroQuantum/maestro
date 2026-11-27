@@ -293,6 +293,8 @@ class Configuration
         }
         if (key == RoutingConfig::kStrategy)
             RoutingConfig::ParseStrategy(value);
+        else if (key == kMeasurementOrderOption)
+            IsWrittenMeasurementOrder(value);
         else if (key == RoutingConfig::kVirtualBonds || key == RoutingConfig::kLegacyCap)
             RoutingConfig::ParseFlag(value);
         else if (key == RoutingConfig::kTruncationWeight)

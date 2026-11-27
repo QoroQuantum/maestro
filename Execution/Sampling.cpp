@@ -184,7 +184,7 @@ Network::INetwork<double>::ExecuteResults CombineIndependentCounts(const Network
 
 std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const SimulatorConfig &config, size_t shots)
 {
-    if (!circuit || !config.enable_sampling_reduction || Simulators::IsDistributedGpuSimulator(config.simulator_type) || !shots)
+    if (!circuit || !shots || !AllowsDisjointSampling(config))
         return std::nullopt;
     config.Validate();
     const auto start = std::chrono::steady_clock::now();
@@ -293,6 +293,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
             network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto counts = network->RepeatedExecuteOnHost(reduced, 0, shots);
+        result.network_terminal |= network->UsedTerminalSampling();
+        result.network_trajectory |= !network->UsedTerminalSampling();
         if (network->GetLastSimulatorType() == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
             network->GetLastGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
@@ -355,6 +357,8 @@ SamplingResult SamplingSession::Sample(const std::shared_ptr<Circuits::Circuit<d
         network->Configure("seed", std::to_string(*seed).c_str());
     SamplingResult result;
     result.counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+    result.network_terminal = network->UsedTerminalSampling();
+    result.network_trajectory = !result.network_terminal;
     result.components = 1;
     result.largest_component = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
     result.simulator = network->GetLastSimulatorType();
@@ -443,6 +447,8 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
         throw Error("backend_unavailable", "Requested GPU device was not selected");
     SamplingResult result;
     result.counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+    result.network_terminal = network->UsedTerminalSampling();
+    result.network_trajectory = !result.network_terminal;
     result.components = 1;
     result.largest_component = width;
     result.simulator = network->GetLastSimulatorType();

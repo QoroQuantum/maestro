@@ -20,6 +20,36 @@
 
 namespace Simulators
 {
+enum class CliffordPhase
+{
+    Identity,
+    S,
+    Z,
+    Sdg,
+    Unsupported
+};
+
+// P(lambda) is Clifford at quarter turns. Outside the principal interval use
+// the phase of the gate matrix: reducing a large angle modulo a rounded 2*pi
+// can give a completely different phase.
+inline CliffordPhase ClassifyCliffordPhase(double lambda)
+{
+    if (!std::isfinite(lambda))
+        return CliffordPhase::Unsupported;
+    constexpr double halfPi = 1.57079632679489661923;
+    constexpr double tolerance = 1e-10;
+    if (std::abs(lambda) > 2 * halfPi)
+        lambda = std::atan2(std::sin(lambda), std::cos(lambda));
+    const double magnitude = std::abs(lambda);
+    if (magnitude <= tolerance)
+        return CliffordPhase::Identity;
+    if (std::abs(magnitude - halfPi) <= tolerance)
+        return lambda > 0 ? CliffordPhase::S : CliffordPhase::Sdg;
+    if (std::abs(magnitude - 2 * halfPi) <= tolerance)
+        return CliffordPhase::Z;
+    return CliffordPhase::Unsupported;
+}
+
 struct GateFusionStatistics
 {
     uint64_t submittedGates = 0;
@@ -493,6 +523,28 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator>
     std::shared_ptr<ISimulator> getptr()
     {
         return shared_from_this();
+    }
+
+  protected:
+    void ApplyCliffordPhase(Types::qubit_t qubit, double lambda)
+    {
+        switch (ClassifyCliffordPhase(lambda))
+        {
+        case CliffordPhase::Identity:
+            NotifyObservers({qubit});
+            return;
+        case CliffordPhase::S:
+            ApplyS(qubit);
+            return;
+        case CliffordPhase::Z:
+            ApplyZ(qubit);
+            return;
+        case CliffordPhase::Sdg:
+            ApplySDG(qubit);
+            return;
+        case CliffordPhase::Unsupported:
+            throw std::runtime_error("ApplyP: Invalid phase shift angle for a Clifford gate");
+        }
     }
 };
 } // namespace Simulators

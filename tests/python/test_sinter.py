@@ -390,7 +390,8 @@ def test_collect_extended_vacuous_without_prior():
                                     maestro.SimulationType.MatrixProductState])
 def test_extended_reference_uses_requested_exact_backend(method, monkeypatch):
     config = maestro.SimulatorConfig(simulation_type=method, max_bond_dimension=1,
-                                    singular_value_threshold=0.2, seed=71)
+                                    singular_value_threshold=0.2, seed=71,
+                                    measurement_order="written", optimize_circuit=False)
     original = maestro.SimulatorConfig
     used = []
 
@@ -406,6 +407,7 @@ def test_extended_reference_uses_requested_exact_backend(method, monkeypatch):
     assert not obs.any()
     reference, = used
     assert reference.simulation_type == method
+    assert reference.measurement_order == "written" and reference.optimize_circuit is False
     assert reference.max_bond_dimension is None and reference.singular_value_threshold == 0
     assert (config.max_bond_dimension, config.singular_value_threshold, config.seed) == (1, 0.2, 71)
 
@@ -1498,11 +1500,32 @@ def test_a_memory_checkpoint_keeps_the_bonds_of_index_order():
 
     routed, unrouted = compiled(False), compiled(True)
     assert routed.checkpoint_sim.max_bond_dim == unrouted.checkpoint_sim.max_bond_dim
-    result = routed.checkpoint_sim.execute_suffix(routed.suffix_qc, shots=2, noise_seed=17,
-                                                  num_measurements=routed.num_measurements, return_samples=True)
+    converter = circuit.compile_m2d_converter()
+    for sampler in (routed, unrouted):
+        result = sampler.checkpoint_sim.execute_suffix(sampler.suffix_qc, shots=12, noise_seed=17,
+                                                       num_measurements=sampler.num_measurements, return_samples=True)
+        measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
+        events = converter.convert(measurements=measurements, append_observables=True)
+        assert not events.any()  # a noiseless memory flips no detector and no observable
+
+
+@pytest.mark.parametrize("checkpoint", [True, False])
+def test_unrouted_memory_unitary_fusion_keeps_the_peak_bond(checkpoint):
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=2)
+    # Leave headroom to observe the rank this schedule actually needs. Flushing
+    # disjoint gates prematurely reached 128 and lost syndromes when capped at 64.
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState, fixed_backend=True,
+                                     max_bond_dimension=256, disable_optimized_swapping=True)
+    sampler = MaestroCompiledSampler(circuit, config=config, seed=5, enable_checkpoint=checkpoint)
+    if checkpoint:
+        result = sampler.checkpoint_sim.execute_suffix(sampler.suffix_qc, shots=2, noise_seed=17,
+                                                       num_measurements=sampler.num_measurements, return_samples=True)
+    else:
+        result = sampler.qc.execute(sampler.config, shots=2, return_samples=True)
+    assert result["max_bond_dim_reached"] <= 64
     measurements = np.asarray(result["samples"], dtype=np.bool_)[:, :circuit.num_measurements]
     events = circuit.compile_m2d_converter().convert(measurements=measurements, append_observables=True)
-    assert not events.any()  # a noiseless memory flips no detector and no observable
+    assert not events.any()
 
 
 def test_routing_crosses_untouched_qubits_as_product_states():

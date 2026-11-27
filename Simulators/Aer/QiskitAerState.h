@@ -20,6 +20,8 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include "controllers/state_controller.hpp"
+#include <Eigen/Dense>
+#include <numeric>
 
 namespace AER
 {
@@ -134,6 +136,54 @@ class QiskitAerState : public AER::AerState
             static_cast<AER::DataMap<AER::SingleData, AER::Vector<complex_t>>>(std::move(fakeState->last_result_.data)).value()["statevector"].value());
     }
 
+    // Aer's save_densmat preserves the register and packs the requested qubits
+    // in the order supplied. An empty subset returns the complex trace.
+    AER::cmatrix_t reduced_density_matrix(const reg_t &qubits)
+    {
+        if (!is_initialized() || !is_matrix())
+            throw std::runtime_error("Density-matrix diagnostics require an initialized Aer density matrix");
+        std::vector<bool> kept(num_of_qubits());
+        for (auto qubit : qubits)
+        {
+            if (qubit >= kept.size() || kept[qubit])
+                throw std::invalid_argument("Partial trace requires distinct qubits within the register");
+            kept[qubit] = true;
+        }
+        flush_ops();
+        AER::Operations::Op op;
+        op.type = AER::Operations::OpType::save_densmat;
+        op.name = "save_density_matrix";
+        op.qubits = qubits;
+        op.string_params = {"rho"};
+        op.save_type = AER::Operations::DataSubType::average;
+        AER::ExperimentResult result;
+        AER::RngEngine rng(0);
+        get_state()->apply_op(op, result, rng);
+        auto &matrices = static_cast<AER::DataMap<AER::AverageData, AER::cmatrix_t, 1> &>(result.data);
+        return std::move(matrices.value().at("rho").value());
+    }
+
+    template <class Read> auto read_density_matrix(Read read)
+    {
+        if (!is_initialized() || !is_matrix())
+            throw std::runtime_error("Density-matrix diagnostics require an initialized Aer density matrix");
+        flush_ops();
+        // CPU registers expose their column-major storage. Reduce it directly,
+        // accumulating in double precision even when the entries are floats.
+        using DoubleMatrix = Eigen::Matrix<complex_t, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
+        using FloatMatrix = Eigen::Matrix<std::complex<float>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
+        if (const auto *cpu = dynamic_cast<const AER::DensityMatrix::State<AER::QV::DensityMatrix<double>> *>(get_state().get()))
+            return read(Eigen::Map<const DoubleMatrix>(cpu->qreg().data(), cpu->qreg().num_rows(), cpu->qreg().num_rows()));
+        if (const auto *cpu = dynamic_cast<const AER::DensityMatrix::State<AER::QV::DensityMatrix<float>> *>(get_state().get()))
+            return read(Eigen::Map<const FloatMatrix>(cpu->qreg().data(), cpu->qreg().num_rows(), cpu->qreg().num_rows()).cast<complex_t>());
+        // Aer can also use on-device storage. Its native save operation
+        // transfers the matrix to host memory for the scalar reduction.
+        reg_t qubits(num_of_qubits());
+        std::iota(qubits.begin(), qubits.end(), 0);
+        const auto matrix = reduced_density_matrix(qubits);
+        return read(Eigen::Map<const DoubleMatrix>(matrix.data(), matrix.GetRows(), matrix.GetColumns()));
+    }
+
     // Hands the current settings to an existing extended stabilizer state,
     // which otherwise reads them only when it is created. Operations buffered
     // before the change run first, under the settings they were given with.
@@ -154,6 +204,12 @@ class QiskitAerState : public AER::AerState
         if (!extendedState)
             throw std::runtime_error("QiskitAerState: current state is not an extended stabilizer state");
         return std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
+    }
+
+    AER::MatrixProductState::MPS &matrix_product_register()
+    {
+        flush_ops();
+        return dynamic_cast<AER::MatrixProductState::State &>(*get_state()).qreg();
     }
 
     void restore_extended_stabilizer_state(const std::shared_ptr<AER::QuantumState::Base> &savedState)

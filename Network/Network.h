@@ -969,6 +969,11 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
         return false;
     }
 
+    virtual bool UsedTerminalSampling() const
+    {
+        return false;
+    }
+
     // Requested setting, independent of the selected backend capability.
     virtual bool GetGateFusion() const
     {

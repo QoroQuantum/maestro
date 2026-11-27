@@ -1187,6 +1187,22 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
         // first stage, take out duplicates of H, X, Y, Z
 
+        // All combinable rotations are periodic in 4*pi, including controlled
+        // rotations. A large angle can absorb a second rotation in floating point.
+        // Keep small sums and exact additions; otherwise combine equivalent,
+        // bounded angles. Reducing each half-angle via libm also works when a
+        // double-precision remainder against 4*pi would lose the phase.
+        const auto sumAngles = [](double a, double b) {
+            const double sum = a + b;
+            if (std::abs(sum) <= 4 * M_PI)
+                return sum;
+            const bool largerA = std::abs(a) >= std::abs(b);
+            if (largerA ? sum - a == b : sum - b == a)
+                return sum;
+            const auto reduced = [](double angle) { return std::abs(angle) <= 2 * M_PI ? angle : 2 * std::atan2(std::sin(angle / 2), std::cos(angle / 2)); };
+            return reduced(a) + reduced(b);
+        };
+
         bool changed;
 
         do
@@ -1195,6 +1211,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             std::vector<std::shared_ptr<IOperation<Time>>> newops;
             newops.reserve(operations.size());
+
+            // An angle sum can lie outside the Clifford tolerance even when both
+            // inputs are inside it. Keep the original gates in that case so the
+            // circuit stays executable on a stabilizer and retains its angles on
+            // a statevector. Named Clifford replacements (X, Z, S) already satisfy this.
+            const auto appendMerged = [&](const OperationPtr &first, const OperationPtr &second, OperationPtr merged) {
+                if (first->IsClifford() && second->IsClifford() && !merged->IsClifford())
+                    return false;
+                newops.push_back(std::move(merged));
+                return true;
+            };
 
             for (int i = 0; i < static_cast<int>(operations.size()); ++i)
             {
@@ -1309,17 +1336,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                         const auto params1 = gate->GetParams();
                                         const auto params2 = nextGate->GetParams();
 
-                                        const double param = params1[0] + params2[0];
+                                        const double param = sumAngles(params1[0], params2[0]);
                                         const auto delay = gate->GetDelay() + nextGate->GetDelay();
 
+                                        OperationPtr merged;
                                         if (gateType == QuantumGateType::kPhaseGateType)
-                                            newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<PhaseGate<Time>>(qubits[0], param, delay);
                                         else if (gateType == QuantumGateType::kRxGateType)
-                                            newops.push_back(std::make_shared<RxGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RxGate<Time>>(qubits[0], param, delay);
                                         else if (gateType == QuantumGateType::kRyGateType)
-                                            newops.push_back(std::make_shared<RyGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RyGate<Time>>(qubits[0], param, delay);
                                         else
-                                            newops.push_back(std::make_shared<RzGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RzGate<Time>>(qubits[0], param, delay);
+                                        if (!appendMerged(op, nextOp, std::move(merged)))
+                                            break;
                                     }
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
@@ -1389,8 +1419,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     else
                                         param2 = -0.25 * M_PI;
 
-                                    const auto param = gate->GetParams()[0] + param2;
-                                    newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                    const auto param = sumAngles(gate->GetParams()[0], param2);
+                                    if (!appendMerged(op, nextOp, std::make_shared<PhaseGate<Time>>(qubits[0], param, delay)))
+                                        break;
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
                                     found = true;
@@ -1411,8 +1442,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     else
                                         param1 = 0.25 * M_PI;
 
-                                    const auto param = nextGate->GetParams()[0] + param1;
-                                    newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                    const auto param = sumAngles(nextGate->GetParams()[0], param1);
+                                    if (!appendMerged(op, nextOp, std::make_shared<PhaseGate<Time>>(qubits[0], param, delay)))
+                                        break;
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
                                     found = true;
@@ -1524,17 +1556,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     {
                                         const auto params1 = gate->GetParams();
                                         const auto params2 = nextGate->GetParams();
-                                        const double param = params1[0] + params2[0];
+                                        const double param = sumAngles(params1[0], params2[0]);
                                         const auto delay = gate->GetDelay() + nextGate->GetDelay();
 
+                                        OperationPtr merged;
                                         if (gateType == QuantumGateType::kCPGateType)
-                                            newops.push_back(std::make_shared<CPGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CPGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else if (gateType == QuantumGateType::kCRxGateType)
-                                            newops.push_back(std::make_shared<CRxGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRxGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else if (gateType == QuantumGateType::kCRyGateType)
-                                            newops.push_back(std::make_shared<CRyGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRyGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else
-                                            newops.push_back(std::make_shared<CRzGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRzGate<Time>>(qubits[0], qubits[1], param, delay);
+                                        if (!appendMerged(op, nextOp, std::move(merged)))
+                                            break;
                                     }
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true; // continue merging gates, we found one
@@ -1643,6 +1678,39 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             operations.swap(newops);
         } while (changed);
+    }
+
+    // Keep the ordinary gate simplifications inside each consecutive gate
+    // sequence. A measurement, channel, classical operation or nested circuit
+    // can change the state on which subsequent gates act.
+    void OptimizeForSampling(bool writtenMeasurementOrder, bool optimizeRotationGates = true)
+    {
+        if (!writtenMeasurementOrder)
+        {
+            Optimize(optimizeRotationGates);
+            return;
+        }
+        OperationsVector result;
+        result.reserve(operations.size());
+        Circuit gateRun;
+        const auto flush = [&] {
+            if (gateRun.operations.size() > 1)
+                gateRun.Optimize(optimizeRotationGates);
+            result.insert(result.end(), gateRun.operations.begin(), gateRun.operations.end());
+            gateRun.operations.clear();
+        };
+        for (const auto &op : operations)
+        {
+            if (op->GetType() == OperationType::kGate)
+                gateRun.operations.push_back(op);
+            else
+            {
+                flush();
+                result.push_back(op);
+            }
+        }
+        flush();
+        operations.swap(result);
     }
 
     /**
@@ -2231,6 +2299,18 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, measuredWidth, policy.contiguous);
     }
 
+    // Written order requires a literal terminal readout: no gate or deferred
+    // branch may cross a measurement. The final measurements can be sampled
+    // together from the shared state in their original wire and write order.
+    bool CanBatchMeasurements(Simulators::ShotPrefixPolicy policy, size_t *measuredWidth = nullptr) const
+    {
+        size_t width;
+        const bool dynamic = HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, width, policy.contiguous);
+        if (measuredWidth)
+            *measuredWidth = width;
+        return !dynamic;
+    }
+
     // As HasOpsAfterMeasurements, and report the number of distinct measured
     // qubits when all measurements can be sampled together. Early exits for
     // dynamic circuits leave the width zero. A separate name keeps
@@ -2259,7 +2339,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         {
             // A terminal batch can skip collapse only when no later operation
             // must run on the collapsed (and renormalized) state.
-            if (contiguousPrefix && sawMeasurement && op->GetType() != OperationType::kMeasurement)
+            if (contiguousPrefix && sawMeasurement && op->GetType() != OperationType::kMeasurement && op->GetType() != OperationType::kNoOp)
                 return true;
             // Deterministic nested circuits execute as one prefix operation. Keep
             // composites with classical results opaque to terminal extraction.
@@ -2621,6 +2701,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // only at the end of the circuit
     std::shared_ptr<MeasurementOperation<Time>> GetLastMeasurements(const std::vector<bool> &executedOps, bool sort = true) const
     {
+        return GetTerminalReadout(executedOps, sort, false);
+    }
+
+    std::shared_ptr<MeasurementOperation<Time>> GetTerminalReadout(const std::vector<bool> &executedOps, bool sort, bool written) const
+    {
         const size_t dif = operations.size() - executedOps.size();
         std::vector<std::pair<Types::qubit_t, size_t>> measurements;
         std::vector<ReadoutRates> readout;
@@ -2639,7 +2724,8 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
                 for (size_t j = 0; j < qubits.size(); ++j)
                 {
-                    lastWrite[bits[j]] = measurements.size();
+                    if (!written)
+                        lastWrite[bits[j]] = measurements.size();
                     measurements.emplace_back(qubits[j], bits[j]);
                     readout.push_back(j < rates.size() ? rates[j] : ReadoutRates{});
                 }
@@ -2647,32 +2733,38 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 anyReadout = anyReadout || measOp->HasReadout();
             }
 
+        // Written readout keeps every record and its readout rates. The
+        // physical sampler deduplicates repeated qubits, then each occurrence
+        // writes its own result in source order.
         // Only the final write to each classical bit is observable in a terminal
         // measurement batch. Drop overwritten writes before sorting for a backend,
         // otherwise sorting can change which qubit (and readout rate) wins.
-        std::vector<size_t> order;
-        order.reserve(lastWrite.size());
-        for (size_t i = 0; i < measurements.size(); ++i)
-            if (lastWrite.at(measurements[i].second) == i)
-                order.push_back(i);
-
-        // Keep each surviving readout rate attached to its measurement pair.
-        if (sort)
-            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return measurements[a].first < measurements[b].first; });
-
-        if (sort || order.size() != measurements.size())
+        if (!written)
         {
-            std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
-            std::vector<ReadoutRates> sortedReadout;
-            sortedMeas.reserve(order.size());
-            sortedReadout.reserve(order.size());
-            for (const auto idx : order)
+            std::vector<size_t> order;
+            order.reserve(lastWrite.size());
+            for (size_t i = 0; i < measurements.size(); ++i)
+                if (lastWrite.at(measurements[i].second) == i)
+                    order.push_back(i);
+
+            // Keep each surviving readout rate attached to its measurement pair.
+            if (sort)
+                std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return measurements[a].first < measurements[b].first; });
+
+            if (sort || order.size() != measurements.size())
             {
-                sortedMeas.push_back(measurements[idx]);
-                sortedReadout.push_back(readout[idx]);
+                std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
+                std::vector<ReadoutRates> sortedReadout;
+                sortedMeas.reserve(order.size());
+                sortedReadout.reserve(order.size());
+                for (const auto idx : order)
+                {
+                    sortedMeas.push_back(measurements[idx]);
+                    sortedReadout.push_back(readout[idx]);
+                }
+                measurements.swap(sortedMeas);
+                readout.swap(sortedReadout);
             }
-            measurements.swap(sortedMeas);
-            readout.swap(sortedReadout);
         }
 
         auto merged = std::make_shared<MeasurementOperation<Time>>(measurements);

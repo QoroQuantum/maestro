@@ -447,7 +447,7 @@ void CheckMpoBatchDispatch()
     ProbeNetwork network(Types::qubits_vector{2}, std::vector<size_t>{2});
     network.CreateSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
     const auto fullBatch = [&](bool startsFromZero, const std::shared_ptr<Simulators::ISimulator> &prepared = nullptr) {
-        return network.UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 4096, 1, startsFromZero, prepared);
+        return network.UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 4096, 2, 1, startsFromZero, prepared);
     };
     Check(!fullBatch(true), "implicit positive cutoff was ignored when scheduling a pending circuit");
     network.Configure(kOperatorThreshold, "0");

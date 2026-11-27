@@ -117,8 +117,12 @@ inline json::object OptionCapability(const Option &option)
         result["enum"] = json::array{"block_v1", "shot_v1"};
         result["default"] = "shot_v1";
     }
-    if (name == "counts_policy" || name == "terminal_channel_policy")
+    if (name == "measurement_order")
+        result["enum"] = json::array{"auto", "written"};
+    if (name == "counts_policy" || name == "terminal_channel_policy" || name == "measurement_order")
         result["default"] = "auto";
+    if (name == "optimize_circuit")
+        result["default"] = true;
     if (type == "integer" || type == "nonnegative")
         result["minimum"] = 0;
     else if (type == "positive_integer")
@@ -288,7 +292,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"noise", noise},
             {"estimate", estimate},
             {"noisy_fidelity", noisyFidelity},
-            {"noisy_prob", json::object{{"supported_configurations", json::array{json::object{{"backend", "qcsim"}, {"method", "path_integral"}}}},
+            {"noisy_prob", json::object{{"supported_configurations", Configurations(SomeBackendHoldsQuantumChannels)},
                                         {"modes", json::array{"combined", "pauli", "coherent"}},
                                         {"evaluations", json::array{"deterministic", "trajectory_average"}},
                                         {"readout_approximation", "first_order_readout"},

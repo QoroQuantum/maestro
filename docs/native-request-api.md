@@ -72,13 +72,21 @@ ideal execute/estimate. Results identify the backend/method actually used, which
 is always one of the listed candidates: without a cost model the first listed
 candidate that can hold the register runs (a 40-qubit density matrix yields to a
 listed MPO), and Clifford circuits move to a stabilizer only as a listed
-backend/method pair. A listed stabilizer never runs a non-Clifford circuit. When
-no listed candidate can be created, the request fails instead of running an
-unlisted backend; this includes a one-entry list. When candidates can be created
-but none can run the circuit, the request fails with the first one's error: for
-a stabilizer asked to run a non-Clifford circuit that is `native_failure`, as
-when the stabilizer itself rejects the gate; for a register too large for a
-backend it is that backend's own error.
+backend/method pair. When no listed candidate can be created, the request
+fails, including for a one-entry list. A fixed stabilizer or an explicit list
+containing only stabilizers checks whole-circuit execution before sampling.
+In an ideal circuit, a non-Clifford gate that survives simplification returns
+`unsupported_capability`. For sampled gate noise, an error between two gates
+can prevent their simplification and cause that realization to fail at runtime.
+Disjoint sampling can exclude gates outside the measured cones when enabled
+in automatic measurement order.
+
+QCSim and Aer stabilizers support `p(angle)` at the four Clifford phases
+(identity, S, Z and S†), using a tolerance of `1e-10`. QCSim reference-frame
+sampling uses the same rule for `p`, its `u1` alias and the identity instruction.
+Noise attached to an identity instruction still applies. If two individually
+supported angles would sum to an unsupported angle, circuit simplification
+keeps both gates. A statevector still applies their full angles.
 
 Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
 execution job and sample repeatedly. Circuits with intermediate measurements,
@@ -129,12 +137,13 @@ there it returns the state of one branch, as Python's `get_statevector` and
 `execution_metadata.stochastic_execution` is then `true`, and the seed selects
 the branch. A `checkpoint_batch` prefix also runs once, before the state is
 saved, by the rules of the prefix of Python's `PrefixCheckpointedSimulator`.
-Only suffixes are sampled, so its end measurements are removed, as for
-`estimate`: a prefix that is a whole program, with its measurements at the end,
-does not collapse the saved state. A measurement that later operations of the
-prefix follow or read runs, and collapses once, as does a reset on a pure-state
-method (a mixed-state backend applies a reset exactly): every suffix shot then
-continues from that one outcome, which is not returned. Plain `execute` keeps
+Only suffixes are sampled. With `measurement_order: "auto"`, the prefix drops
+end measurements on wires whose quantum state and recorded bit it no longer uses.
+With `"written"`, it drops only the consecutive measurements at the very end.
+OpenQASM barriers and native no-op placeholders leave those measurements terminal.
+For example, measuring q0 before a gate on q1 collapses q0 once in written
+order. Every suffix shot then starts from that same branch. A pure-state
+reset can also collapse the prefix once. Plain `execute` keeps
 its measurements: they are what it samples. A prefix's channel instructions run
 where the backend takes them: a mixed-state
 backend and the `pauli_propagator` apply them exactly; channel-sampling methods
@@ -198,14 +207,14 @@ has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index select
 I, X, Y or Z on `qubits[k]`, so one qubit is `[pI, pX, pY, pZ]` and two are
 `II, XI, YI, ZI, IX, XX, ... ZZ`. Density-matrix and MPO methods apply it exactly,
 and so does the QCSim `pauli_propagator`, which scales the Pauli terms of the
-observable it propagates. `statevector` and `matrix_product_state` draw one
-Pauli each time the circuit runs. The other pure-state methods sample one Pauli
+observable it propagates. The channel-sampling statevector and MPS backends and
+QCSim `path_integral` draw one Pauli each time the circuit runs. The other pure-state methods sample one Pauli
 per noise realization: the request needs a `noise` block with trajectory
 evaluation, whose `channels` may then be omitted. Set `noise.realizations` to
 the shot count for independent draws per shot, as with Python's
-`noisy_execute(..., noise_realizations=shots)`. A general `kraus` instruction,
-or a `channel` factor that needs the state, cannot be drawn that way: it needs
-exact evaluation or one of the two methods that sample from their state.
+`noisy_execute(..., noise_realizations=shots)`. A general `kraus` instruction
+or a `channel` factor whose branch probabilities depend on the state requires
+an ensemble backend or a backend that can draw those branches during execution.
 Circuit channel instructions combine with a `noise` model: exact evaluation
 keeps them in place and adds the model's channels around them, and so does
 trajectory evaluation on a method that samples from its state.
@@ -235,7 +244,7 @@ they cannot override the simulator or specify their own launch profiles.
 | `statevector`, `amplitudes` | optional `basis_states` | Pure-state amplitudes; these two names have the same output shape |
 | `probabilities` | optional `basis_states` | Selected or full basis probabilities |
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
-| `noisy_prob` | `target_state`, optional `noise` | Mean probability of a q0-first bitstring on QCSim `path_integral` (the default for this operation), with standard error |
+| `noisy_prob` | `target_state`, optional `noise` | Ensemble probability of a q0-first bitstring on a fixed channel-capable backend, with standard error. Defaults to QCSim `path_integral`. |
 | `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
 | `density_matrix_overlap` | `other_circuit` | `Tr(rho sigma)` of two mixed-state preparations, as `overlap` |
@@ -279,8 +288,15 @@ When the evolution can draw a branch, `execution_metadata` reports
 `false`, `0`, and `"deterministic"`, respectively.
 The evolution takes explicit channel instructions and rejects a top-level noise model.
 
-`noisy_prob` averages the target probability across independent path integral trajectories.
-It accepts circuit channels and a noise model, with 100 realizations by default when sampling.
+`noisy_prob` accepts circuit channels and a noise model. QCSim and Aer statevector
+and MPS, their composite statevectors, and QCSim path integral average basis probabilities
+over independent trajectories (100 by default). Density matrices, MPOs, and the QCSim
+Pauli propagator apply ensemble channels directly. Coherent disorder still needs
+independent realizations. `noise.evaluation` selects automatic, exact, or trajectory
+evaluation using the same spellings as `estimate`.
+Measurements in a `noisy_prob` circuit must be terminal on their own wires.
+Place a modeled idle delay before the measurement to include its noise in
+the probability. A delay after a measurement is allowed on other wires.
 `noise.mode` selects the permitted external gate noise. The default `combined` accepts all families.
 `pauli` accepts per-qubit Pauli probabilities (also `depolarizing`, `dephasing` and `bit_flip`).
 `coherent` accepts coherent rotations and their `coherent_*` shorthands.
@@ -288,22 +304,35 @@ All three modes apply embedded circuit channels and external readout error.
 An incompatible external gate channel makes the request invalid. C++ enforces the same rule for explicit `NoiseLayer` values.
 `std_error` is the standard error of the mean, or `null` for a single stochastic realization.
 Readout error uses the first-order, single-bit-flip approximation of Python's `qc.noisy_prob`.
-With only readout noise or an ideal circuit, the query evaluates coherent endpoint probabilities directly.
+With only readout noise or an ideal circuit, one state suffices. QCSim path integral
+keeps its endpoint-specific calculation for these circuits.
 `noise_realizations` gives the scheduled count. `realizations_evaluated` gives the number of
 realizations actually evaluated, which is one for a direct calculation even when a larger count was requested.
 `execution_metadata.estimate_evaluation` is `deterministic` or `trajectory_average`.
 The same calculation is available in C++ as `MaestroExecution::NoisyStateProbability`
 from `Execution/NoisyEstimation.h`. On a live simulator, `ISimulator::ApplyQuantumChannel`
-and the C ABI's `MaestroApplyKrausChannel` draw one branch. Use `MaestroSamplesQuantumChannels`
-to discover this capability and `MaestroProbabilityBits` to read the resulting trajectory.
+and the C ABI's `MaestroApplyKrausChannel` use the backend's channel semantics.
+`MaestroSamplesQuantumChannels` identifies trajectory backends and
+`MaestroSupportsQuantumChannels` identifies ensemble backends.
 
 Each `checkpoint_batch` suffix shot starts with the saved quantum state and
 the classical bits written by measurements that ran in the prefix. An end
-measurement stripped from the prefix writes no bit. A suffix can overwrite
+measurement stripped from the prefix writes no bit. In written order, any
+prefix measurement before a later gate writes its bit to the checkpoint.
+A suffix can overwrite
 these bits without changing the checkpoint for any other suffix or shot.
 
-Other state queries remove terminal measurements and reject mid-circuit measurements. State queries
-with top-level noise require a single exact realization. No statevector or
+Other state queries remove terminal measurements and reject mid-circuit measurements.
+With a top-level noise model they default to a single exact realization.
+For `state_probability` and `probabilities`, automatic evaluation selects exact channels
+on ensemble backends, including relaxation on the QCSim Pauli propagator.
+On a fixed channel-sampling backend, set both `noise.evaluation: "trajectories"` and
+`noise.realizations: 1` to read one externally noisy state using `state_probability`,
+`probabilities`, `amplitudes`, `statevector`, or a supported `diagnostics` query.
+A stochastic result reports `execution_metadata.estimate_evaluation: "single_trajectory"`
+and `stochastic_execution: true`. The same seeds select the first realization of
+`noisy_prob`, which averages target probabilities and can also apply readout error.
+No statevector or
 pure-state overlap is advertised for density matrices/MPOs; their counterparts
 are the two mixed-state queries below. Individual methods may have narrower
 numerical-query support and return a native error.
@@ -379,13 +408,15 @@ without computing. A request whose state memory would exceed the machine's
 physical or cgroup memory fails with `insufficient_resources` and the reason.
 Results are deterministic and carry no `seed`.
 
-Diagnostics are `trace`, `purity` (defaults), `trace_of_square`,
-`hermiticity_residual`, `is_hermitian`, and `partial_trace`, for density
-matrices and MPOs. The latter requires unique `keep_qubits` and returns
-`{dimension,row_major}`. Maintenance accepts `restore_trace` and `hermitize`
-(density matrix and MPO) and `trim`/`recanonicalize` (MPS and MPO). An MPS
-reports no diagnostics by default; its `operator_expectation` query is described
-below.
+QCSim, Aer and GPU density matrices and QCSim/GPU MPOs provide `trace`,
+`purity` (both returned by default), `trace_of_square`, `hermiticity_residual`,
+`is_hermitian`, and `partial_trace`. A partial trace requires unique
+`keep_qubits` and returns `{dimension,row_major}` in the requested qubit order.
+QCSim and GPU MPOs support `restore_trace` and `hermitize`. Their MPS and MPO
+methods also support `trim` and `recanonicalize`. An MPS reports no diagnostics
+by default. With explicit sampled channels, the QCSim MPS
+`operator_expectation` reads one trajectory and reports
+`execution_metadata.stochastic_execution` when it draws a branch.
 
 ## Batched Pauli expectations
 
@@ -463,7 +494,8 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_routing_virtual_bonds` | same | boolean | QCSim/GPU MPS and MPO |
 | `mps_routing_truncation_weight` | same | nonnegative | QCSim/GPU MPS and MPO |
 | `mps_routing_legacy_cap` | same | boolean | QCSim/GPU MPS and MPO |
-| `optimize_circuit` | `` | boolean | all |
+| `optimize_circuit` | `optimize_circuit` (network) | boolean, default `true` | all |
+| `measurement_order` | `measurement_order` | `auto` (default) or `written` | all |
 | `gate_fusion` | `` | boolean | all |
 | `auto_reduce` | `` | boolean | all (default true) |
 | `enable_causal_cone_reduction` | `` | boolean | all (default true) |
@@ -500,6 +532,14 @@ are rejected. Small floating-point thresholds retain their precision.
 | `extended_stabilizer_metropolis_mixing_time` | `extended_stabilizer_metropolis_mixing_time` | positive_integer (default 5000) | aer_extended_stabilizer |
 | `extended_stabilizer_norm_estimation_samples` | `extended_stabilizer_norm_estimation_samples` | positive_integer (default 100) | aer_extended_stabilizer |
 | `extended_stabilizer_norm_estimation_repetitions` | `extended_stabilizer_norm_estimation_repetitions` | positive_integer (default 3) | aer_extended_stabilizer |
+
+With `measurement_order: "written"`, measurements stay in place relative to
+later operations. An uninterrupted final measurement block can use joint
+sampling from one prepared state, with results written to the classical
+bits in circuit order. The default `"auto"` uses the
+backend's usual shot planner. On the Pauli propagator, joint readout and
+successive collapses can yield different correlations under tight pruning.
+State queries continue to use the measurement conventions of their operation.
 
 The two extended stabilizers approximate in different ways, and each has its
 own options. The QCSim one (`cpu_extended_stabilizer`) runs exactly unless it
@@ -575,6 +615,11 @@ controls and seed, while most backend settings use validated `native_options` an
 to option names, conversion or semantics must account for both paths; the typed
 fields are not dead code. The native parser avoids populating duplicate
 representations of the same setting.
+
+For the C++ shot-planning controls `optimize_circuit` and `measurement_order`,
+an entry in `native_options` overrides the corresponding typed member.
+Omitting the entry uses the typed setting. Python and JSON each expose one
+setting for each control.
 
 ## Noise models
 
@@ -824,6 +869,13 @@ Legacy `SimpleEstimate` and `SimpleExecute` accept `terminal_channel_policy`
 in their `config` object. Their instruction arrays accept the same `kraus`,
 `pauli_channel` and structured `channel` instructions as a versioned request.
 
+The legacy configuration also accepts `measurement_order` and the Boolean
+`optimize_circuit`. Omitting them restores the defaults on a reused handle.
+The executable exposes `--measurement-order auto|written` and
+`--optimize-circuit true|false`. Setting the latter to false skips the
+circuit pass that cancels adjacent inverse gates. The `gate_fusion` option
+controls fusion separately.
+
 On pure-state backends a reset that precedes every other operation on its qubit
 leaves `|0>` and does not make an estimate stochastic; a later reset does.
 Analytical damping requires deterministic evolution.
@@ -911,7 +963,7 @@ four nested levels. Physical memory limits still depend on the method; the worke
 process is the resource/failure boundary.
 
 This API does not add distributed density matrices/MPOs, Kraus trajectories on
-pure-state methods other than `statevector` and `matrix_product_state`, Composer
+pure-state methods other than `statevector`, `matrix_product_state`, and QCSim `path_integral`, Composer
 network orchestration, decoder/Sinter execution,
 interactive handles across tasks, or an external artifact service.
 
@@ -1102,10 +1154,11 @@ older plugins cannot be used as MPO backends with this version. Rebuild C++ clie
 and both Python extensions when upgrading (the generic state interface has new
 virtual methods).
 
-`execute` counts support registers wider than 64 qubits. `state_probability` accepts
-a q0-first `target_state` bitstring for CPU and GPU MPO and for QCSim path integral
-(up to 1024 qubits). Integer basis
-queries retain their documented bounds; full state enumeration is exponential.
+`execute` counts support registers wider than 64 qubits. `state_probability` and
+`noisy_prob` accept wide q0-first target bitstrings for QCSim MPS, CPU and GPU MPO,
+and QCSim path integral (up to 1024 qubits for path integral). Aer MPS accepts
+target bitstrings and explicitly selected basis indices up to its 64-qubit index
+width. Full state enumeration is exponential and remains subject to the output bound.
 `max_bond_dimension: 0` removes the MPO bond cap. The two
 `mpo_*_after_truncation` options now apply to GPU as well as CPU MPO.
 

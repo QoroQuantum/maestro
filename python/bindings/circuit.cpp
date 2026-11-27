@@ -201,22 +201,23 @@ std::vector<bool> TargetBits(const std::string &target_state)
     return end_state;
 }
 
-constexpr char NoisyProbDoc[] = "Estimate the probability of a target bitstring (qubit zero first) using the path integral simulator.\n\n"
-                                "Gate noise and circuit channels are averaged over independent realizations. With only readout noise, the "
-                                "coherent probability is computed directly. Readout error includes the zero-flip and single-flip terms, "
+constexpr char NoisyProbDoc[] = "Estimate the ensemble probability of a target bitstring (qubit zero first).\n\n"
+                                "config selects a fixed backend that applies or samples quantum channels. The default is QCSim path integral. "
+                                "evaluation='auto' applies channels directly on ensemble methods and averages trajectories on sampled methods. "
+                                "Explicit 'exact' and 'trajectories' select the corresponding noise-injection policy. "
+                                "Readout error includes the zero-flip and single-flip terms, "
                                 "with asymmetric rates supported. Supply readout error in noise_model. Measurements must be unconditional "
                                 "and terminal on their wires. mode selects the external gate noise: 'combined' accepts every family, "
                                 "'pauli' accepts per-qubit Pauli noise, and 'coherent' accepts coherent rotations. All modes apply "
                                 "circuit channels and readout.\n\n"
-                                "noise_realizations defaults to 100 for quantum noise and one for coherent queries. noise_seed selects "
-                                "the random realizations and also seeds execution when config.seed is omitted. An optional QCSim "
-                                "PathIntegral config controls the simulation seed and path trimming. Returns probability, "
+                                "noise_realizations defaults to 100 for stochastic evolution and one for deterministic evolution. noise_seed selects "
+                                "the random realizations and also seeds execution when config.seed is omitted. Returns probability, "
                                 "std_error (None for one stochastic realization), "
-                                "noise_realizations (scheduled), realizations_evaluated (one for direct coherent queries), "
+                                "noise_realizations (scheduled), realizations_evaluated (one for deterministic evolution), "
                                 "estimate_evaluation ('deterministic' or 'trajectory_average'), target_state, time_taken and has_readout_error.";
 
 nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, const noise::NoiseModel &noise_model, std::optional<int> noise_realizations,
-                   std::optional<uint64_t> noise_seed, std::optional<SimulatorConfig> config, const std::string &mode)
+                   std::optional<uint64_t> noise_seed, std::optional<SimulatorConfig> config, const std::string &mode, const std::string &evaluation)
 {
     require_circuit(circuit);
     require_realizations(noise_realizations);
@@ -224,6 +225,13 @@ nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, c
     const auto layer = MaestroExecution::NoiseLayerForMode(mode);
     if (!layer)
         throw std::invalid_argument("noisy_prob mode must be combined, pauli or coherent.");
+    std::optional<bool> exact;
+    if (evaluation != "auto")
+    {
+        if (evaluation != "exact" && evaluation != "trajectories")
+            throw std::invalid_argument("noisy_prob evaluation must be auto, exact or trajectories.");
+        exact = evaluation == "exact";
+    }
     if (!config)
     {
         config.emplace();
@@ -233,7 +241,7 @@ nb::dict NoisyProb(const CircuitPtr &circuit, const std::string &target_state, c
     MaestroExecution::NoisyProbabilityResult probability;
     {
         nb::gil_scoped_release release;
-        probability = MaestroExecution::NoisyStateProbability(circuit, bits, noise_model, noise_realizations, *config, noise_seed, *layer);
+        probability = MaestroExecution::NoisyStateProbability(circuit, bits, noise_model, noise_realizations, *config, noise_seed, *layer, exact);
     }
     nb::dict result;
     result["probability"] = probability.probability;
@@ -498,7 +506,7 @@ void bind_circuit(nb::module_ &m)
             "    dict with 'probability', 'amplitude', 'target_state', "
             "'time_taken'.")
         .def("noisy_prob", &NoisyProb, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "config"_a = nb::none(),
-             "mode"_a = "combined", NoisyProbDoc)
+              "mode"_a = "combined", "evaluation"_a = "auto", NoisyProbDoc)
 
         // ---- Bound Methods for Noisy Execution ----
         .def("noisy_execute", &NoisyExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
@@ -564,7 +572,7 @@ void bind_circuit(nb::module_ &m)
             "'time_taken', 'noise_realizations'.\n\n"
             "Example: qc.noisy_fidelity(nm, noise_realizations=200)");
     m.def("noisy_prob", &NoisyProb, "circuit"_a, "target_state"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(),
-          "config"_a = nb::none(), "mode"_a = "combined", NoisyProbDoc);
+          "config"_a = nb::none(), "mode"_a = "combined", "evaluation"_a = "auto", NoisyProbDoc);
 }
 
 } // namespace maestro_bindings

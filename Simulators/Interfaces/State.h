@@ -25,11 +25,13 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -168,12 +170,33 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
 
 class IState;
 
+inline const std::string kMeasurementOrderOption = "measurement_order";
+
+inline bool IsWrittenMeasurementOrder(std::string_view value)
+{
+    if (value == "auto")
+        return false;
+    if (value == "written")
+        return true;
+    throw std::invalid_argument("measurement_order must be auto or written");
+}
+
+inline bool UsesWrittenMeasurementOrder(const std::unordered_map<std::string, std::string> &options, const std::optional<std::string> &order = {})
+{
+    const auto it = options.find(kMeasurementOrderOption);
+    if (it != options.end())
+        return IsWrittenMeasurementOrder(it->second);
+    return order && IsWrittenMeasurementOrder(*order);
+}
+
 // A shot planner can run before the selected simulator has allocated a register.
 struct ShotPrefixPolicy
 {
     bool exactChannels;
     bool contiguous;
     bool contiguousWithDrawnChannels = false;
+    // Preserve measurement boundaries and the authored order of terminal writes.
+    bool writtenMeasurements = false;
 
     // QCSim's native default. At this tolerance measurement-only circuits can
     // share independent gates across shots. Coarser pruning preserves the
@@ -181,20 +204,21 @@ struct ShotPrefixPolicy
     // whenever pruning is enabled.
     static constexpr double kDefaultPathIntegralThreshold = 1e-15;
 
-    static ShotPrefixPolicy ForPathIntegral(double threshold)
+    static ShotPrefixPolicy ForPathIntegral(double threshold, bool written = false)
     {
-        return {false, threshold > kDefaultPathIntegralThreshold, threshold > 0.};
+        return {false, written || threshold > kDefaultPathIntegralThreshold, threshold > 0., written};
     }
 
     static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                                              std::optional<double> pathIntegralThreshold = std::nullopt)
+                                              std::optional<double> pathIntegralThreshold = std::nullopt, const std::optional<std::string> &order = {})
     {
+        const bool written = UsesWrittenMeasurementOrder(options, order);
         if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
-            return {EvolvesExactQuantumChannels(type, method), false};
+            return {EvolvesExactQuantumChannels(type, method), written, false, written};
         if (pathIntegralThreshold)
-            return ForPathIntegral(*pathIntegralThreshold);
+            return ForPathIntegral(*pathIntegralThreshold, written);
         const auto value = options.find("path_integral_threshold");
-        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second));
+        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second), written);
     }
 };
 
@@ -704,7 +728,8 @@ class IState
     // conditional gate when the simulator prunes the whole state per operation.
     virtual ShotPrefixPolicy GetShotPrefixPolicy() const
     {
-        return {SupportsQuantumChannels(), false};
+        const bool written = UsesWrittenMeasurementOrder(GetExplicitConfigMap());
+        return {SupportsQuantumChannels(), written, false, written};
     }
 
     /**
@@ -788,10 +813,18 @@ class IState
         throw std::runtime_error("This simulator does not apply superoperators");
     }
 
-    /** Probability of a full q0-first bitstring, including registers wider than a machine word. */
-    virtual double ProbabilityBits(const std::vector<bool> &)
+    /** Probability of a full q0-first bitstring. Backends with wide labels override the indexed reader. */
+    virtual double ProbabilityBits(const std::vector<bool> &bits)
     {
-        throw std::runtime_error("This simulator does not support ProbabilityBits");
+        if (bits.size() != GetNumberOfQubits())
+            throw std::invalid_argument("The basis bitstring must match the register width");
+        if (bits.size() > std::numeric_limits<Types::qubit_t>::digits)
+            throw std::length_error("The basis bitstring exceeds the simulator's probability index width");
+        Types::qubit_t index = 0;
+        for (size_t q = 0; q < bits.size(); ++q)
+            if (bits[q])
+                index |= Types::qubit_t{1} << q;
+        return Probability(index);
     }
 
     /** MPO extensions: bit vectors are q0-first; matrices use logical basis

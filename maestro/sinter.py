@@ -839,6 +839,8 @@ class NonCliffordTaskCircuit:
             optimization_candidates=candidates if len(candidates) > 1 else [],
             gpu_device=config.gpu_device if candidates else None,
             distributed_options=config.distributed_options if candidates else {},
+            measurement_order=config.measurement_order if config is not None else "auto",
+            optimize_circuit=config.optimize_circuit if config is not None else True,
             precision="double",
             singular_value_threshold=0.0,
             seed=0,

@@ -627,10 +627,7 @@ template <typename Time = Types::time_type> class PhaseGate : public CloneableGa
      */
     bool IsClifford() const override
     {
-        if (std::abs(lambda - M_PI_2) > 1e-10)
-            return false;
-
-        return true;
+        return Simulators::ClassifyCliffordPhase(lambda) != Simulators::CliffordPhase::Unsupported;
     }
 
     /**

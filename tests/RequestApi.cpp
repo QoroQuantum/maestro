@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 namespace j = boost::json;
 extern "C" int maestro_request_c_header_test(void);
 static unsigned checks = 0;
@@ -841,13 +842,82 @@ void TestStabilizerNonClifford()
     rejected(Request("probabilities", 1, "h q[0]; t q[0];", "stabilizer"), "A stabilizer query accepted a T gate");
     // The network optimizes the circuit first: T;T becomes the Clifford S.
     auto merged = Request("execute", 1, "h q[0]; t q[0]; t q[0]; measure q -> c;", "stabilizer");
-    Check(Call(merged).at("shots").to_number<size_t>() == 80, "A fixed stabilizer rejected T;T, which runs as S");
-    merged["simulator"].as_object()["options"] = j::object{{"optimize_circuit", false}};
+    auto &mergedOptions = merged["simulator"].as_object()["options"].emplace_object();
+    mergedOptions["measurement_order"] = "written";
+    mergedOptions["enable_sampling_reduction"] = true;
+    Check(Call(merged, true, true).at("valid").as_bool() && Call(merged).at("shots").to_number<size_t>() == 80,
+          "A fixed stabilizer rejected T;T, which runs as S");
+    mergedOptions["optimize_circuit"] = false;
     rejected(merged, "An unoptimized fixed stabilizer accepted T;T");
+    // The four ideal gates H,S,S,H would simplify to H,Z,H. With a bit flip
+    // after every gate, the four-gate circuit measures one and H,Z,H measures zero.
+    auto phasePair = Request("execute", 1, "h q[0]; p(pi/2) q[0]; p(pi/2) q[0]; h q[0]; measure q -> c;", "stabilizer");
+    phasePair["simulator"].as_object()["options"] = j::object{{"measurement_order", "written"}, {"enable_sampling_reduction", true}};
+    phasePair["noise"] = j::object{{"evaluation", "trajectories"},
+                                   {"realizations", 1},
+                                   {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 1}}}}};
+    Check(Call(phasePair, true, true).at("valid").as_bool() && Call(phasePair).at("counts").at("1").to_number<size_t>() == 80,
+          "Stabilizer validation or simplification lost the bit flip between two Clifford phases");
+    // Each phase is within the stabilizer tolerance, but their sum is outside
+    // it. The optimizer must preserve the executable pair with any noise model.
+    auto nearPair = phasePair;
+    const j::object phase{{"name", "p"}, {"qubits", j::array{0}}, {"params", j::array{1.5707963268648966}}};
+    const j::object h{{"name", "h"}, {"qubits", j::array{0}}};
+    nearPair["circuit"] = j::object{{"format", "instructions"},
+                                    {"num_qubits", 2},
+                                    {"num_clbits", 1},
+                                    {"source", j::array{h, phase, j::object{{"name", "h"}, {"qubits", j::array{1}}}, phase, h,
+                                                        j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}}}}};
+    const auto checkNearPair = [&](const char *outcome) {
+        Check(Call(nearPair, true, true).at("valid").as_bool() && Call(nearPair).at("counts").at(outcome).to_number<size_t>() == 80,
+              "Optimizing individually Clifford phase gates changed the measured outcome");
+    };
+    nearPair.erase("noise");
+    checkNearPair("1");
+    nearPair["noise"] = phasePair.at("noise");
+    checkNearPair("1");
+    auto &error = nearPair.at("noise").as_object().at("channels").as_array().front().as_object();
+    error["targets"] = j::array{1};
+    checkNearPair("1");
+    error["targets"] = j::array{0};
+    nearPair.at("circuit").as_object().at("source").as_array()[1].as_object()["noiseless"] = true;
+    checkNearPair("0");
     // A gate outside the measured cone never reaches a disjoint sampler.
     auto disjoint = Request("execute", 2, "t q[1]; h q[0]; measure q[0] -> c[0];", "stabilizer", 1);
     disjoint["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
-    Check(Call(disjoint).at("shots").to_number<size_t>() == 80, "Disjoint sampling rejected a T gate outside the measured cone");
+    std::vector<const char *> backends{"qcsim"};
+#ifndef NO_QISKIT_AER
+    backends.push_back("aer");
+#endif
+    for (const auto *backend : backends)
+        for (bool rows : {false, true})
+        {
+            auto request = disjoint;
+            request["simulator"].as_object()["backend"] = backend;
+            request["execution"].as_object()["return_samples"] = rows;
+            Check(Call(request, true, true).at("valid").as_bool() && Call(request).at("shots").to_number<size_t>() == 80,
+                  "Disjoint sampling rejected a T gate outside the measured cone");
+            auto &options = request["simulator"].as_object().at("options").as_object();
+            options["measurement_order"] = "written";
+            rejected(request, "Written-order stabilizer execution accepted a T gate outside the measured cone");
+            options.erase("enable_sampling_reduction");
+            rejected(request, "The fixed stabilizer dropped an unmeasured T gate with sampling reduction omitted");
+        }
+    auto candidates = disjoint;
+    auto &selection = candidates["simulator"].as_object();
+    selection["selection"] = "automatic";
+    selection["method"] = "statevector";
+    j::array stabilizers;
+    for (const auto *backend : backends)
+        stabilizers.emplace_back(j::object{{"backend", backend}, {"method", "stabilizer"}});
+    selection["candidates"] = stabilizers;
+    Check(Call(candidates, true, true).at("valid").as_bool() && Call(candidates).at("shots").to_number<size_t>() == 80,
+          "A stabilizer candidate could not run a reduced Clifford cone");
+    selection.at("options").as_object()["measurement_order"] = "written";
+    rejected(candidates, "A stabilizer-only candidate list accepted an unmeasured T gate in written order");
+    selection["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, stabilizers.front()};
+    Check(Call(candidates, true, true).at("valid").as_bool() && Call(candidates).at("execution_metadata").at("method") == "statevector",
+          "A mixed candidate list could not run a non-Clifford circuit on its statevector candidate");
     // Inside the cone the simulator rejects the gate on shot workers: an error
     // result, not a terminated process.
     disjoint["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[1];\nh q[0]; t q[0]; measure q[0] -> c[0];";

@@ -18,6 +18,15 @@
 namespace Network
 {
 
+inline bool ParseOptimizeCircuit(std::string_view value)
+{
+    if (value == "true" || value == "1")
+        return true;
+    if (value == "false" || value == "0")
+        return false;
+    throw std::invalid_argument("optimize_circuit must be true, false, 1 or 0");
+}
+
 template <typename Time = Types::time_type> class Configuration
 {
   public:

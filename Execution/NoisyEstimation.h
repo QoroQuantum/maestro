@@ -114,15 +114,23 @@ struct NoisyProbabilityResult
     }
 };
 
-// Validate a single target (qubit zero first) and the circuit before terminal readout.
-MAESTRO_TRANSFORM_API void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target);
+// Widths accepted by a scalar basis probability request on the selected method.
+MAESTRO_TRANSFORM_API const char *StateProbabilityWidthError(const SimulatorConfig &config, size_t width);
 
-// Path integral probability averaged over noise realizations. Readout includes zero and single-bit flips.
+// Validate the circuit before terminal readout and a q0-first target. The two-argument form uses the path integral.
+MAESTRO_TRANSFORM_API void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target);
+MAESTRO_TRANSFORM_API void ValidateNoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target, const SimulatorConfig &config);
+
+// Ensemble probability on a fixed backend with exact or sampled channels. Readout includes zero and single-bit flips.
 // The error is the standard error across realizations, absent for a single stochastic sample.
 // The layer constrains the external gate noise. Readout and circuit channels apply in all three modes.
-// realizations is the logical schedule. realizations_evaluated counts one for a direct coherent endpoint evaluation.
+// realizations is the logical schedule. Deterministic ensembles need only one actual evaluation.
 MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target,
                                                                    const noise::NoiseModel &model, std::optional<size_t> requested_realizations,
                                                                    const SimulatorConfig &config, std::optional<uint64_t> noise_seed,
                                                                    NoiseLayer layer = NoiseLayer::kCombined);
+MAESTRO_TRANSFORM_API NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, const std::vector<bool> &target,
+                                                                   const noise::NoiseModel &model, std::optional<size_t> requested_realizations,
+                                                                   const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
+                                                                   std::optional<bool> exact_channels, SamplingResult *execution = nullptr);
 } // namespace MaestroExecution

@@ -156,6 +156,7 @@ nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circu
     // truncation error by changing which operations the backend executes.
     SimulatorConfig mirror_config = config;
     mirror_config.optimize_circuit = false;
+    mirror_config.native_options.erase("optimize_circuit");
     mirror_config.auto_reduce = false;
     mirror_config.enable_causal_cone_reduction = false;
     MaestroExecution::EstimationResult result;

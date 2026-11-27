@@ -64,8 +64,9 @@ static int BackendId(int option)
 }
 
 // An absent gateFusion leaves the backend default in place.
-static std::string GetConfigJson(int num_shots, int maxBondDim, std::optional<bool> gateFusion)
+static std::string GetConfigJson(int num_shots, int maxBondDim, std::optional<bool> gateFusion, bool optimizeCircuit, const std::string &measurementOrder)
 {
+    Simulators::IsWrittenMeasurementOrder(measurementOrder);
     std::string config = "{\"shots\": ";
 
     config += std::to_string(num_shots);
@@ -75,6 +76,8 @@ static std::string GetConfigJson(int num_shots, int maxBondDim, std::optional<bo
 
     if (gateFusion)
         config += *gateFusion ? ", \"gate_fusion\": true" : ", \"gate_fusion\": false";
+    config += optimizeCircuit ? ", \"optimize_circuit\": true" : ", \"optimize_circuit\": false";
+    config += ", \"measurement_order\": \"" + measurementOrder + "\"";
 
     return config + "}";
 }
@@ -93,7 +96,9 @@ int main(int argc, char **argv)
             "gate-fusion", boost::program_options::value<bool>(),
             "Force Maestro gate fusion on or off on supported simulators "
             "(default: on, except for small CPU statevectors and density "
-            "matrices)")("mbd,m", boost::program_options::value<int>(), "Specify the max bond dimension for the MPS simulator")(
+            "matrices)")("optimize-circuit", boost::program_options::value<bool>()->default_value(true), "Simplify the circuit before execution")(
+            "measurement-order", boost::program_options::value<std::string>()->default_value("auto"),
+            "Shot measurement order (auto or written)")("mbd,m", boost::program_options::value<int>(), "Specify the max bond dimension for the MPS simulator")(
             "simulator,r", boost::program_options::value<std::string>(),
             "Simulator type, either aer, qcsim, composite_aer, composite_qcsim, "
             "gpu "
@@ -346,7 +351,8 @@ int main(int argc, char **argv)
         }
 
         static std::string configStr =
-            GetConfigJson(nrShots, maxBondDim, vars.count("gate-fusion") ? std::optional<bool>(vars["gate-fusion"].as<bool>()) : std::nullopt);
+            GetConfigJson(nrShots, maxBondDim, vars.count("gate-fusion") ? std::optional<bool>(vars["gate-fusion"].as<bool>()) : std::nullopt,
+                          vars["optimize-circuit"].as<bool>(), vars["measurement-order"].as<std::string>());
 
         std::string result;
         if (!qasmStr.empty())

@@ -238,13 +238,7 @@ class QCSimStabilizerSimulator : public ImmediateQCSimSimulator
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
-        {
-            if (std::abs(lambda - M_PI_2) > 1e-10)
-                throw std::runtime_error("QCSimSimulator::ApplyP: Invalid phase shift "
-                                         "angle for a Clifford gate.");
-            cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
-        }
-        NotifyObservers({qubit});
+        ApplyCliffordPhase(qubit, lambda);
     }
 
     void ApplyX(Types::qubit_t qubit) override

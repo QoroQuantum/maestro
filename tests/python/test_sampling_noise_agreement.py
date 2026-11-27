@@ -1395,19 +1395,22 @@ def _native_request(request):
     return result
 
 
+@pytest.mark.parametrize("method,name", [(S.PathIntegral, "path_integral"), (S.Statevector, "statevector"),
+                                         (S.MatrixProductState, "matrix_product_state"), (S.DensityMatrix, "density_matrix")])
 @pytest.mark.parametrize("seed, noise_seed", [(None, 0), (0, None), (0, 19), ((1 << 46) + 7, 0)])
-def test_noisy_probability_replays_the_same_kraus_trajectories_in_python_and_json(seed, noise_seed):
+def test_noisy_probability_agrees_in_python_and_json(method, name, seed, noise_seed):
     circuit = QuantumCircuit()
     circuit.x(0)
     operators = [[[1, 0], [0, 0.8]], [[0, 0.6], [0, 0]]]
     model = maestro.NoiseModel()
     model.set_kraus_channel([0], operators)
     model.set_readout_error(0, 0.1, 0.3)
-    config = maestro.SimulatorConfig(simulation_type=S.PathIntegral, fixed_backend=True, seed=seed)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, seed=seed)
     bound = circuit.noisy_prob("1", model, 71, noise_seed, config)
     module = maestro.noisy_prob(circuit, "1", model, 71, noise_seed, config)
     request = {
         "schema_version": 2, "operation": "noisy_prob", "target_state": "1",
+        "simulator": {"backend": "qcsim", "method": name},
         "circuit": {"format": "instructions", "num_qubits": 1, "source": [{"name": "x", "qubits": [0]}]},
         "noise": {"realizations": 71, "channels": [
             {"kind": "kraus", "targets": [0], "operators": [[1, 0, 0, 0.8], [0, 0.6, 0, 0]]},
@@ -1418,11 +1421,29 @@ def test_noisy_probability_replays_the_same_kraus_trajectories_in_python_and_jso
         request["execution"] = {"seed": seed}
     native = _native_request(request)
     assert native["ok"], native
-    assert 0.1 < bound["probability"] < 0.7 and bound["std_error"] > 0
+    if method == S.DensityMatrix:
+        assert bound["probability"] == pytest.approx(.484) and bound["std_error"] == 0
+        assert bound["realizations_evaluated"] == 1
+    else:
+        assert 0.1 < bound["probability"] < 0.7 and bound["std_error"] > 0
+        assert bound["realizations_evaluated"] == 71
     for result in (module, native):
         assert bound["noise_realizations"] == result["noise_realizations"] == 71
         for key in ("probability", "std_error"):
             assert bound[key] == pytest.approx(result[key], abs=1e-14, rel=0)
+
+
+def test_noisy_probability_rejects_delay_after_measurement():
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.measure([(0, 0)])
+    circuit.delay(0, 1.0)
+    model = maestro.NoiseModel()
+    model.set_idle_noise(0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="mid-circuit measurement on qubit 0"):
+        circuit.noisy_prob("1", model)
+    with pytest.raises(ValueError, match="mid-circuit measurement on qubit 0"):
+        maestro.noisy_prob(circuit, "1", model)
 
 
 _SURFACE_FACTORS = [
@@ -1939,12 +1960,13 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
                 assert abs(read / shots - ones) < 0.04, f"{case} on {name}: {label} read 1 in {read} of {shots} shots, expected {ones}"
 
 
-_BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\n'
+_BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\nbarrier q;\n'
 
 
 @pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
                                           (S.DensityMatrix, "density_matrix")])
-def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_request(method, name):
+@pytest.mark.parametrize("order", ["auto", "written"])
+def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_request(method, name, order):
     """Only suffixes are sampled. A prefix that ends with its measurements, as a circuit parsed from
     OpenQASM does, runs without them, so the saved state is not collapsed. A measurement that a later
     operation of the prefix follows runs, and collapses once for every suffix shot. A plain execution
@@ -1952,7 +1974,8 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     shots = 500
     suffix = QuantumCircuit()
     suffix.measure([(0, 0), (1, 1)])  # measure_all() would read only the qubits the suffix itself uses
-    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method,
+                                     seed=3, fixed_backend=True, measurement_order=order)
     measured = {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
                 "source": [{"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]}
 
@@ -1960,7 +1983,8 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
         """The counts of the suffix after this prefix: from Python, and from a request with the same prefix."""
         counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
         native = _native_request({"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit, "suffixes": [measured],
-                                  "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"},
+                                  "simulator": {"backend": "qcsim", "method": name, "selection": "fixed",
+                                                "options": {"measurement_order": order}},
                                   "execution": {"shots": shots, "seed": 3}})
         assert native["ok"], native
         return (("Python", dict(counts)), ("request", native["results"][0]["counts"]))
@@ -1978,7 +2002,7 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     def whole(read):
         return set(read) == {"00", "11"} and sum(read.values()) == shots and abs(read["11"] / shots - 0.5) < 0.1
 
-    # A whole program as the prefix: the pair parsed from OpenQASM, with `measure q -> c;` at its end.
+    # The trailing OpenQASM barrier leaves the Bell measurements terminal.
     parsed = maestro.QasmToCirc().parse_and_translate(_BELL_QASM)
     for label, read in both(parsed, {"format": "openqasm", "num_qubits": 2, "num_clbits": 2, "source": _BELL_QASM}):
         assert whole(read), f"{label} on {name}, a prefix parsed from OpenQASM: {read}"
@@ -1997,6 +2021,17 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     prefix.z(0)
     for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]}, {"name": "z", "qubits": [0]})):
         assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+
+    # The measured wire is idle for the rest of this prefix. Automatic scheduling can strip
+    # its measurement. Written order must collapse once before the Z on the other wire.
+    prefix = bell()
+    prefix.measure([(0, 0)])
+    prefix.z(1)
+    for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]}, {"name": "z", "qubits": [1]})):
+        if order == "written":
+            assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+        else:
+            assert whole(read), f"{label} on {name}: {read}"
 
     # A reset of that qubit: a pure state collapses once with it, so the other qubit reads the same in
     # every shot; a density matrix applies the reset exactly and keeps both branches.
@@ -2325,6 +2360,40 @@ def test_a_checkpoint_suffix_without_noise_reports_the_channels_it_draws(name, s
 
 
 # ---- One circuit for every shot runs once ----
+
+@pytest.mark.parametrize("options", [{"max_bond_dimension": 4}, {"singular_value_threshold": 1e-10}])
+def test_chain_ordered_model_trajectories_match_the_density_matrix(options):
+    # Each physical bond sees at most two CNOTs. Cap four covers all of their
+    # ranks, including branches chosen by the interleaved non-unital T1 noise.
+    width = 6
+    gates = []
+    for layer in range(3):
+        gates.extend({"name": "ry", "qubits": [q], "params": [0.37 + 0.13 * (layer + q)]} for q in range(width))
+        gates.extend({"name": "cx", "qubits": [q, q + 1]} for q in range(layer % 2, width - 1, 2))
+    wires = list(range(width))
+    noise = {"channels": [{"kind": "depolarizing", "targets": wires, "probability": 0.07},
+                          {"kind": "t1", "targets": wires, "gamma": 0.15}], "seed": 9}
+    request = {"schema_version": 2, "operation": "probabilities",
+               "circuit": {"num_qubits": width, "format": "instructions", "source": gates},
+               "simulator": {"backend": "qcsim", "method": "density_matrix"},
+               "noise": dict(noise, evaluation="exact")}
+    exact = _native_request(request)
+    assert exact["ok"], exact
+    probabilities = np.asarray(exact["probabilities"])
+
+    shots = 6000
+    request.update(operation="execute", simulator={"backend": "qcsim", "method": "matrix_product_state",
+                   "options": options}, noise=noise, execution={"shots": shots, "seed": 17})
+    request["circuit"].update(num_clbits=width, source=gates + [{"name": "measure", "qubits": wires, "clbits": wires}])
+    sampled = _native_request(request)
+    assert sampled["ok"], sampled
+    observed = np.zeros(1 << width)
+    for bits, count in sampled["counts"].items():
+        observed[int(bits[::-1], 2)] = count / shots
+    # Compare every outcome with the independently evolved ensemble.
+    sigma = np.sqrt(probabilities * (1 - probabilities) / shots)
+    assert np.all(np.abs(observed - probabilities) < 6 * sigma + 3 / shots)
+
 
 @pytest.mark.parametrize("bond", [None, 16])
 def test_noise_drawn_while_the_circuit_runs_on_a_matrix_product_state(bond):

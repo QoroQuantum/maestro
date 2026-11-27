@@ -60,15 +60,18 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
     // entangled arbitrary checkpoint on pure-state methods.
     if (!policy.exactChannels && !known_zero_initial_state && HasResetOperation(circuit))
         return false;
-    if (circuit.HasOpsAfterMeasurementsOn(policy))
+    if (!circuit.CanBatchMeasurements(policy))
         return false;
     Circuits::OperationState dry(width);
     const auto executed = circuit.PlanNonMeasurements(dry, policy);
     const auto &operations = circuit.GetOperations();
     const size_t first = operations.size() - executed.size();
     for (size_t i = first; i < operations.size(); ++i)
-        if (!executed[i - first] && operations[i]->GetType() != Circuits::OperationType::kMeasurement)
+    {
+        const auto type = operations[i]->GetType();
+        if (!executed[i - first] && type != Circuits::OperationType::kMeasurement && type != Circuits::OperationType::kNoOp)
             return false;
+    }
     return true;
 }
 
@@ -109,7 +112,8 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
     simulator->SetGatesCounter(0);
     simulator->SetUpcomingGates(circuit.GetOperations());
     const auto executed = circuit.ExecuteNonMeasurements(simulator, state, maxBondDimension);
-    const auto measurements = circuit.GetLastMeasurements(executed, false);
+    const bool written = simulator->GetShotPrefixPolicy().writtenMeasurements;
+    const auto measurements = circuit.GetTerminalReadout(executed, false, written);
     const auto &qubits = measurements->GetQubits();
     if (qubits.empty())
     {
@@ -123,7 +127,8 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
     const Circuits::OperationState initial(state);
     const bool aggregate = writeCounts && !measurements->HasReadout();
     const auto order = writeCounts ? std::vector<size_t>{} : SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
-    const auto histogram = sample ? sample(qubits) : simulator->SampleCountsMany(qubits, shots);
+    const auto histogram =
+        measurements->SampleTerminalCounts([&](const auto &targets) { return sample ? sample(targets) : simulator->SampleCountsMany(targets, shots); });
     if (aggregate)
     {
         size_t remaining = shots;

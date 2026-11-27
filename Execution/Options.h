@@ -102,7 +102,7 @@ inline const std::vector<Option> &Options()
         {"mps_routing_virtual_bonds", "mps_routing_virtual_bonds", "boolean", "native_routing"},
         {"mps_routing_truncation_weight", "mps_routing_truncation_weight", "nonnegative", "native_routing"},
         {"mps_routing_legacy_cap", "mps_routing_legacy_cap", "boolean", "native_routing"},
-        {"optimize_circuit", "", "boolean", "all"},
+        {"optimize_circuit", "optimize_circuit", "boolean", "all"},
         {"gate_fusion", "", "boolean", "all"},
         {"auto_reduce", "", "boolean", "all"},
         {"enable_causal_cone_reduction", "", "boolean", "all"},
@@ -115,6 +115,7 @@ inline const std::vector<Option> &Options()
         {"max_simulators", "max_simulators", "positive_integer", "all"},
         {"trajectory_policy", "trajectory_policy", "string", "cpu_trajectory"},
         {"counts_policy", "", "string", "all"},
+        {"measurement_order", "measurement_order", "string", "all"},
         {"terminal_channel_policy", "", "string", "all"},
         {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_realization"},
         {"mpo_kraus_completeness_check", "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
@@ -335,6 +336,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator, const char *de
             config.enable_sampling_reduction = Boolean(value);
         else if (name == "counts_policy")
             config.counts_policy = choice(value, CountsPolicies(), key);
+        else if (name == "measurement_order")
+            config.measurement_order = choice(value, {"auto", "written"}, key);
         else if (name == "terminal_channel_policy")
             config.terminal_channel_policy = choice(value, TerminalChannelPolicies(), key);
         else if (name == "observable_error_tolerance")

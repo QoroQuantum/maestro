@@ -6400,6 +6400,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "fixed_backend": True,
     "optimization_candidates": [(maestro.SimulatorType.QCSim, maestro.SimulationType.DensityMatrix)],
     "terminal_channel_policy": "trajectories",
+    "measurement_order": "written",
+    "optimize_circuit": False,
 }
 
 
@@ -6423,6 +6425,7 @@ class TestSimulatorConfigFields:
         ("mps_routing_strategy", "current"),
         ("extended_stabilizer_sampling_method", "gibbs"),
         ("terminal_channel_policy", "sometimes"),
+        ("measurement_order", "sometimes"),
     ]
 
     def test_constructor_is_keyword_only(self):
@@ -6431,6 +6434,47 @@ class TestSimulatorConfigFields:
         with pytest.raises(TypeError):
             maestro.SimulatorConfig(maestro.SimulatorType.QCSim,
                                     maestro.SimulationType.Statevector)
+
+    @pytest.mark.parametrize("gate_fusion", [False, True])
+    def test_circuit_optimization_is_independent_of_gate_fusion(self, gate_fusion):
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.h(0)
+        circuit.t(0)
+        circuit.t(0)
+        circuit.measure([(0, 0)])
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer,
+                                         fixed_backend=True, gate_fusion=gate_fusion, seed=7)
+        # T followed by T simplifies to the Clifford S before execution.
+        assert config.optimize_circuit is True
+        assert sum(circuit.execute(config=config, shots=32)["counts"].values()) == 32
+        config.optimize_circuit = False
+        assert pickle.loads(pickle.dumps(config)).optimize_circuit is False
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            circuit.execute(config=config, shots=32)
+
+    def test_written_measurement_limits_gate_simplification(self):
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.h(1)
+        circuit.t(1)
+        circuit.measure([(0, 0)])
+        circuit.t(1)
+        circuit.measure([(1, 1)])
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer,
+                                         fixed_backend=True, seed=7)
+        # With automatic scheduling T;T on q1 can still simplify to S.
+        assert sum(circuit.execute(config=config, shots=32)["counts"].values()) == 32
+        config.measurement_order = "written"
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            circuit.execute(config=config, shots=32)
+
+    @pytest.mark.parametrize("value", [0, 1, "false", None])
+    def test_circuit_optimization_requires_a_boolean(self, value):
+        with pytest.raises(TypeError):
+            maestro.SimulatorConfig(optimize_circuit=value)
+        config = maestro.SimulatorConfig(optimize_circuit=False)
+        with pytest.raises(TypeError):
+            config.optimize_circuit = value
+        assert config.optimize_circuit is False
 
     def test_constructor_accepts_every_field(self):
         config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
@@ -6764,15 +6808,33 @@ class TestNoisyProbReadout:
         for mode in ("analytical", "unknown"):
             with pytest.raises(ValueError, match="noisy_prob mode must"):
                 maestro.noisy_prob(circuit, "00", model, mode=mode)
-        wrong_backend = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
-        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+        wrong_backend = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer)
+        with pytest.raises(ValueError, match="noisy_prob"):
             circuit.noisy_prob("00", model, config=wrong_backend)
         # The direct API accepts Python's legacy default selection when the path integral is the sole method.
         config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PathIntegral, fixed_backend=False)
         assert circuit.noisy_prob("00", model, config=config)["probability"] == pytest.approx(circuit.prob("00")["probability"])
         config.optimization_candidates = [(maestro.SimulatorType.QCSim, maestro.SimulationType.PathIntegral)]
-        with pytest.raises(ValueError, match="noisy_prob requires .*QCSim path_integral"):
+        with pytest.raises(ValueError, match="noisy_prob"):
             circuit.noisy_prob("00", model, config=config)
+
+    def test_backend_evaluation_of_gate_noise(self):
+        from maestro.circuits import QuantumCircuit
+
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        model = maestro.NoiseModel()
+        model.set_bit_flip(0, .25)
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix)
+        exact = circuit.noisy_prob("1", model, 200, seed=12, config=config, evaluation="exact")
+        assert exact["probability"] == pytest.approx(.75)
+        assert exact["std_error"] == 0 and exact["realizations_evaluated"] == 1
+        sampled = circuit.noisy_prob("1", model, 200, seed=12, config=config, evaluation="trajectories")
+        assert sampled["realizations_evaluated"] == 200
+        assert sampled["probability"] == pytest.approx(.75, abs=5 * sampled["std_error"])
+        config.simulation_type = maestro.SimulationType.Statevector
+        with pytest.raises(ValueError, match="[Ee]xact"):
+            circuit.noisy_prob("1", model, config=config, evaluation="exact")
 
     def test_symmetric_readout(self):
         qc = self._circuit()

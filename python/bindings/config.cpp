@@ -96,6 +96,8 @@ const char *const kConfigFields[] = {
     "fixed_backend",
     "optimization_candidates",
     "terminal_channel_policy",
+    "measurement_order",
+    "optimize_circuit",
 };
 
 void bind_config(nb::module_ &m)
@@ -152,7 +154,7 @@ void bind_config(nb::module_ &m)
            std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy, std::optional<size_t> min_cluster_qubits,
            std::optional<double> observable_error_tolerance, bool enable_sampling_reduction, bool allow_reset_marginalization, std::string counts_policy,
            bool fixed_backend, std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates,
-           std::string terminal_channel_policy) {
+           std::string terminal_channel_policy, std::string measurement_order, bool optimize_circuit) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -204,6 +206,8 @@ void bind_config(nb::module_ &m)
             config.max_simulators = max_simulators;
             config.counts_policy = std::move(counts_policy);
             config.terminal_channel_policy = std::move(terminal_channel_policy);
+            config.measurement_order = std::move(measurement_order);
+            config.optimize_circuit = optimize_circuit;
             config.mps_routing_virtual_bonds = mps_routing_virtual_bonds;
             config.mps_routing_truncation_weight = mps_routing_truncation_weight;
             config.mps_routing_strategy = std::move(mps_routing_strategy);
@@ -231,7 +235,8 @@ void bind_config(nb::module_ &m)
         "observable_error_tolerance"_a = nb::none(), "enable_sampling_reduction"_a = defaults.enable_sampling_reduction,
         "allow_reset_marginalization"_a = defaults.allow_reset_marginalization, "counts_policy"_a = defaults.counts_policy,
         "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates,
-        "terminal_channel_policy"_a = defaults.terminal_channel_policy);
+        "terminal_channel_policy"_a = defaults.terminal_channel_policy, "measurement_order"_a = "auto",
+        "optimize_circuit"_a.noconvert() = defaults.optimize_circuit);
 
     BindConfigField(config_class, "optimization_candidates", &SimulatorConfig::optimization_candidates,
                     "With fixed_backend=False, the (SimulatorType, SimulationType) pairs automatic selection may choose from, "
@@ -255,6 +260,17 @@ void bind_config(nb::module_ &m)
     BindConfigField(config_class, "terminal_channel_policy", &SimulatorConfig::terminal_channel_policy,
                     "'auto' averages eligible final statevector channels for estimates and samples eligible final populations for counts and shot rows. "
                     "'trajectories' samples the channel branches during circuit execution.");
+    config_class.def_prop_rw(
+        "measurement_order", [](const SimulatorConfig &config) { return MaestroExecution::UsesWrittenMeasurementOrder(config) ? "written" : "auto"; },
+        [](SimulatorConfig &config, const std::string &order) {
+            Simulators::IsWrittenMeasurementOrder(order);
+            config.measurement_order = order;
+        },
+        "Shot scheduling on every backend. 'auto' uses the backend's usual scheduler. 'written' keeps measurements before later operations "
+        "and allows bulk sampling of terminal measurements.");
+    BindConfigField<false>(
+        config_class, "optimize_circuit", &SimulatorConfig::optimize_circuit,
+        "Simplify gates before execution, including cancelling adjacent inverse gates. Defaults to True. Gate fusion is controlled separately.");
     BindConfigField(config_class, "enable_sampling_reduction", &SimulatorConfig::enable_sampling_reduction,
                     "Opt into exact independent sampling of disjoint measurement cones; repeated seeded requests remain reproducible.");
     BindConfigField(config_class, "observable_error_tolerance", &SimulatorConfig::observable_error_tolerance,

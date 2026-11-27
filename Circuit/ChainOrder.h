@@ -70,10 +70,10 @@ enum class ChainOrder
  * and nested circuits keep their place: everything before one of them stays
  * before it.
  *
- * The result shares the operations of the circuit and describes the same map.
- * On a matrix product state the channels draw their branches in the new order,
- * so a seeded trajectory differs from the one of the original order; the
- * distribution of the trajectories is the same.
+ * The result shares the operations of the circuit and describes the same map
+ * in exact arithmetic. Finite bond limits and singular-value truncation may
+ * yield different approximations after reordering. A seeded trajectory draws
+ * its channel branches in the chosen order.
  *
  * @param circuit The circuit.
  * @param chain The kind of chain that runs it.
@@ -247,7 +247,7 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
             ordered.push_back(operations[end]);
         begin = end + 1;
     }
-    return std::make_shared<Circuit<Time>>(ordered);
+    return std::make_shared<Circuit<Time>>(ordered, circuit->GetGlobalPhase());
 }
 
 /**
