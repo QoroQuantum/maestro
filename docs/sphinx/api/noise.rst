@@ -6,6 +6,8 @@ Noise
 .. autoclass:: NoiseModel
    :inherited-members:
 
+.. autoclass:: QuantumChannel
+
 .. autofunction:: noisy_estimate
 .. autofunction:: noisy_estimate_montecarlo
 .. autofunction:: noisy_execute
