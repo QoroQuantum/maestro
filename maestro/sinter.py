@@ -182,6 +182,8 @@ TWO_QUBIT_DECOMPOSITIONS = {
     "YCZ": (("cy", 1, 0),),
 }
 DECOMPOSED_GATES = {**ONE_QUBIT_DECOMPOSITIONS, **TWO_QUBIT_DECOMPOSITIONS}
+FIXED_CLIFFORD_GATES = {"I", "II", "X", "Y", "Z", "H", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG",
+                        "CX", "CY", "CZ", "SWAP", *DECOMPOSED_GATES}
 # Instructions that act on pairs of targets.
 PAIR_INSTRUCTIONS = {"CX", "CNOT", "CY", "CZ", "SWAP", "II", "DEPOLARIZE2", "PAULI_CHANNEL_2",
                      *TWO_QUBIT_DECOMPOSITIONS}
@@ -398,6 +400,8 @@ def translate_stim_to_maestro(
             active_qubits.add(q)
 
     for name, args, targets in instructions:
+        if len(args) and name in FIXED_CLIFFORD_GATES:
+            raise ValueError(f"{name} takes 0 arguments, got {len(args)}")
         if name in PAIR_INSTRUCTIONS and len(targets) % 2:
             raise ValueError(f"{name} requires pairs of qubit targets")
         if name in PAIR_INSTRUCTIONS and any(targets[i] == targets[i + 1] for i in range(0, len(targets), 2)):
@@ -738,7 +742,7 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
             if not name:
                 continue
             if name in TWO_QUBIT_GATES:
-                num_2q += max(1, len(targets) // 2)
+                num_2q += len(targets) // 2
             elif name in ("RX", "RY") and not args:
                 # RX and RY resets initialize to |+> and |i>, non-trivial basis prep
                 num_1q += len(targets)
@@ -752,10 +756,10 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
     else:
         for inst in circuit.flattened():
             name = inst.name
-            targets = [t.qubit_value for t in inst.targets_copy() if t.is_qubit_target]
+            targets = inst.targets_copy()
             args = inst.gate_args_copy()
             if name in TWO_QUBIT_GATES:
-                num_2q += max(1, len(targets) // 2)
+                num_2q += len(targets) // 2
             elif name in ("RX", "RY") and not args:
                 num_1q += len(targets)
             elif name == "RZ" and not args:

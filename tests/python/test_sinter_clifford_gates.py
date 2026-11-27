@@ -19,8 +19,8 @@ from maestro.sinter import MaestroCompiledSampler, count_nontrivial_prefix_gates
 SWAP_FAMILY = ["ISWAP", "ISWAP_DAG", "CXSWAP", "CZSWAP", "SWAPCX"]
 NEW_TWO_QUBIT = SWAP_FAMILY + ["SQRT_XX", "SQRT_XX_DAG", "SQRT_YY", "SQRT_YY_DAG", "SQRT_ZZ", "SQRT_ZZ_DAG",
                                "XCX", "XCY", "XCZ", "YCX", "YCY", "YCZ"]
-NEW_ONE_QUBIT = ["C_XYZ", "C_ZYX", "C_NXYZ", "C_XNYZ", "C_XYNZ", "C_NZYX", "C_ZNYX", "C_ZYNX",
-                 "H_XY", "H_YZ", "H_NXY", "H_NXZ", "H_NYZ"]
+SIGNED_ONE_QUBIT = ["C_NXYZ", "C_XNYZ", "C_XYNZ", "C_NZYX", "C_ZNYX", "C_ZYNX", "H_NXY", "H_NXZ", "H_NYZ"]
+NEW_ONE_QUBIT = ["C_XYZ", "C_ZYX", "H_XY", "H_YZ", *SIGNED_ONE_QUBIT]
 NATIVE = ["I", "X", "Y", "Z", "H", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG", "SQRT_Y", "SQRT_Y_DAG",
           "CX", "CY", "CZ", "SWAP", "II"]
 # Shapes other than the swap family: local gates before the noisy one
@@ -39,6 +39,13 @@ def _config(method):
 
 
 EXACT = _config("DensityMatrix")
+requires_stim_1_15 = pytest.mark.skipif("II" not in stim.gate_data(), reason="Stim 1.15 added II and the signed Clifford gates")
+
+
+def _with_stim_reference(gates):
+    """Only tests using Stim to construct these gates depend on its gate vocabulary."""
+    return [pytest.param(gate, marks=requires_stim_1_15) if gate == "II" or gate in SIGNED_ONE_QUBIT else gate
+            for gate in gates]
 
 
 def _arity(gate):
@@ -65,7 +72,7 @@ def _unitary(text, width):
 # =============================================================================
 
 
-@pytest.mark.parametrize("gate", NATIVE + NEW_ONE_QUBIT + NEW_TWO_QUBIT)
+@pytest.mark.parametrize("gate", _with_stim_reference(NATIVE + NEW_ONE_QUBIT + NEW_TWO_QUBIT))
 def test_translation_matches_stim_tableau(gate):
     unitary = _unitary(f"{gate} {_targets(gate)}", _arity(gate))
     assert stim.Tableau.from_unitary_matrix(unitary, endian="little") == stim.Tableau.from_named_gate(gate)
@@ -92,6 +99,15 @@ def test_stim_gate_aliases_translate_from_text_and_tuples(alias):
     assert state == pytest.approx(maestro.get_statevector(from_stim, _config("Statevector")))
 
 
+@pytest.mark.parametrize("gate,targets", [("I", [0]), ("II", [0, 1]), ("H_XZ", [0]), ("CNOT", [0, 1]),
+                                          ("C_XYZ", [0]), ("SQRT_ZZ", [0, 1])])
+def test_fixed_clifford_gates_reject_arguments(gate, targets):
+    with pytest.raises(ValueError, match="takes 0 arguments"):
+        translate_stim_to_maestro(f"{gate}(0) {' '.join(map(str, targets))}")
+    with pytest.raises(ValueError, match="takes 0 arguments"):
+        translate_stim_to_maestro([(gate, [0.0], targets)])
+
+
 @pytest.mark.parametrize("text", ["ISWAP 0 1 2", "II 0", "SQRT_XX 3", "ISWAP 0 0", "XCZ 1 2 2 2", "CX 1 1"])
 def test_two_qubit_gates_need_pairs_of_different_qubits(text):
     with pytest.raises(ValueError, match="pairs|two different qubits"):
@@ -99,10 +115,18 @@ def test_two_qubit_gates_need_pairs_of_different_qubits(text):
 
 
 def test_new_gates_count_as_nontrivial_prefix_gates():
-    assert count_nontrivial_prefix_gates("ISWAP 0 1 2 3\nXCZ 0 1\nC_XYZ 0 1\nH_YZ 2") == (3, 3)
-    assert count_nontrivial_prefix_gates(stim.Circuit("SQRT_XX 0 1\nH_NXY 0")) == (1, 1)
+    assert count_nontrivial_prefix_gates("ISWAP 0 1 2 3\nXCZ 0 1\nC_XYZ 0 1\nH_NXY 2") == (3, 3)
+    assert count_nontrivial_prefix_gates(stim.Circuit("SQRT_XX 0 1\nH_XY 0")) == (1, 1)
     # II is a zero-duration idle, like I.
     assert count_nontrivial_prefix_gates("II 0 1\nI 0") == (0, 0)
+
+
+def test_targetless_two_qubit_gate_keeps_prefix_trivial():
+    prefix = "R 0\nISWAP"
+    assert count_nontrivial_prefix_gates(prefix) == (0, 0)
+    assert count_nontrivial_prefix_gates(stim.Circuit(prefix)) == (0, 0)
+    sampler = MaestroCompiledSampler(stim.Circuit(prefix + "\nM 0"), config=EXACT)
+    assert sampler.checkpoint_sim is None
 
 
 # =============================================================================
@@ -128,6 +152,7 @@ def test_noiseless_two_qubit_gate_gets_no_noise_model_noise(method):
     assert records[False] == {"00": 50}
 
 
+@requires_stim_1_15
 def test_identity_pair_is_a_noiseless_idle():
     model = maestro.NoiseModel()
     model.set_2q_depolarizing(0, 1, 1.0)
@@ -260,7 +285,7 @@ def test_t1_fires_once_after_the_gate(gate, method):
 
 
 @pytest.mark.parametrize("method", ["ExtendedStabilizer", "MatrixProductState", "DensityMatrix"])
-@pytest.mark.parametrize("gate", SWAP_FAMILY + OTHER_TWO_QUBIT_SHAPES + ONE_QUBIT_SHAPES)
+@pytest.mark.parametrize("gate", _with_stim_reference(SWAP_FAMILY + OTHER_TWO_QUBIT_SHAPES + ONE_QUBIT_SHAPES))
 @pytest.mark.parametrize("rotation", ["depolarizing", "bit_flip"])
 def test_coherent_noise_fires_once_after_the_gate(rotation, gate, method):
     """Coherent rotations land once, after the gate, whatever their random signs.
@@ -308,7 +333,7 @@ def test_noise_model_two_qubit_depolarizing_matches_stim(gate, method):
 
 
 @pytest.mark.parametrize("method", ["Stabilizer", "ExtendedStabilizer", "MatrixProductState", "DensityMatrix"])
-@pytest.mark.parametrize("gate", ONE_QUBIT_SHAPES + ["H_YZ"])
+@pytest.mark.parametrize("gate", _with_stim_reference(ONE_QUBIT_SHAPES + ["H_YZ"]))
 def test_noise_model_one_qubit_depolarizing_matches_stim(gate, method):
     p = 0.3
     model = maestro.NoiseModel()
@@ -326,7 +351,7 @@ def test_noise_model_one_qubit_depolarizing_matches_stim(gate, method):
 # =============================================================================
 
 
-@pytest.mark.parametrize("gate", NEW_ONE_QUBIT + NEW_TWO_QUBIT)
+@pytest.mark.parametrize("gate", _with_stim_reference(NEW_ONE_QUBIT + NEW_TWO_QUBIT))
 def test_stim_pauli_noise_through_each_gate_matches_stim(gate):
     """Noise before, between and after a gate and its inverse, measured where the ideal record is fixed."""
     targets = _targets(gate)

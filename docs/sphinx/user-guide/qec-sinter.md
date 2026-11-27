@@ -188,6 +188,13 @@ becomes a `Z` error after it, and coherent over-rotations and T1 differ too.
 two Maestro entangling gates, because the noisy last gate must be one of
 Maestro's two-qubit gates, which all have a Z on one side.
 
+Stim 1.15 introduced `II` and the signed axis gates (`C_NXYZ`, `C_XNYZ`,
+`C_XYNZ`, `C_NZYX`, `C_ZNYX`, `C_ZYNX`, `H_NXY`, `H_NXZ` and `H_NYZ`).
+Using these names in a `stim.Circuit` or a string passed to
+`MaestroCompiledSampler` requires Stim 1.15 or later. On Stim 1.14,
+`translate_stim_to_maestro` accepts the same names directly in text and
+instruction tuples.
+
 Counts must contain exactly the requested positive number of shots.
 Unexpected record widths and nonzero padding raise `ValueError`. A caller's
 `SimulatorConfig` is copied before sampling. Direct compiled samplers accept a

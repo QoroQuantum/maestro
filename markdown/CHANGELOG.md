@@ -356,8 +356,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SWAPCZ`, `H_XZ`) in circuit text and instruction tuples, as it already did
   in a `stim.Circuit`, which reports the canonical name. In text they raised
   "Unsupported Stim instruction".
-- A two-qubit instruction whose pair repeats a qubit, such as `CX 1 1` in
-  circuit text, raises `ValueError`, as Stim does, instead of being translated.
+- Stim circuit text and instruction tuples raise `ValueError` for arguments
+  on fixed Clifford gates, such as `SQRT_ZZ(0) 0 1`, and for a pair that
+  repeats a qubit, such as `CX 1 1`.
+- A two-qubit gate with no targets counts as zero gates when the Sinter
+  sampler decides whether to checkpoint a prefix.
 - Fixed stabilizer validation in written measurement order when sampling
   reduction is enabled. QCSim and Aer stabilizers recognize and execute
   Clifford phase shifts consistently, including a phase produced by gate
