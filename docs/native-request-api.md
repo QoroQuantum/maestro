@@ -521,9 +521,10 @@ are rejected. Small floating-point thresholds retain their precision.
 | `extended_stabilizer_norm_estimation_samples` | `extended_stabilizer_norm_estimation_samples` | positive_integer (default 100) | aer_extended_stabilizer |
 | `extended_stabilizer_norm_estimation_repetitions` | `extended_stabilizer_norm_estimation_repetitions` | positive_integer (default 3) | aer_extended_stabilizer |
 
-With `measurement_order: "written"`, each measurement instruction executes
-at its position in the shot circuit, including repeated terminal reads and
-writes to the same classical destination. The default `"auto"` uses the
+With `measurement_order: "written"`, measurements stay in place relative to
+later operations. An uninterrupted final measurement block can use joint
+sampling from one prepared state, with results written to the classical
+bits in circuit order. The default `"auto"` uses the
 backend's usual shot planner. On the Pauli propagator, joint readout and
 successive collapses can yield different correlations under tight pruning.
 State queries continue to use the measurement conventions of their operation.

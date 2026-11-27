@@ -302,7 +302,8 @@ def test_isolated_mps_readout_before_routed_gates(backend, width, cap):
 @pytest.mark.parametrize("algorithm,readout", [
     ("apply_measure", "full"), ("probabilities", "subset"), ("probabilities", "overwritten"),
 ])
-def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, readout):
+@pytest.mark.parametrize("order", ["auto", "written"])
+def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, readout, order):
     aer = getattr(maestro.SimulatorType, "QiskitAer", None)
     if aer is None:
         pytest.skip("Aer is not compiled in")
@@ -319,7 +320,7 @@ def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, read
     else:
         if readout == "overwritten":
             # All six sites are measured and all six bits are written. Q3
-            # overwrites q0's only destination, so just five sites survive.
+            # overwrites q0's only destination.
             circuit.measure([(0, 1), (2, 2)])
         else:
             circuit.measure([(0, 2)])
@@ -327,7 +328,7 @@ def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, read
         excited = "101111"
     circuit.measure(destinations)
     cfg = maestro.SimulatorConfig(simulator_type=aer, simulation_type=maestro.SimulationType.MatrixProductState,
-                                  fixed_backend=True, seed=73, max_simulators=1, mps_sampling=algorithm)
+                                  fixed_backend=True, seed=73, max_simulators=1, mps_sampling=algorithm, measurement_order=order)
     shots = 1025  # Four complete logical batches and a one-shot tail.
     raw = circuit.execute(config=cfg, shots=shots, return_samples=True)
     assert raw["sampling_strategy"] == "terminal_v1"
@@ -620,6 +621,11 @@ def test_raw_readout_flip_precedes_classical_control(method, measurement_order):
         model, config=config, shots=71, noise_realizations=71,
         noise_seed=3, return_samples=True), 71, 4)
     np.testing.assert_array_equal(rows, np.tile([1, 0, 0, 0], (71, 1)))
+    checkpoint = maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 2, config)
+    suffix = dict(shots=71, noise_model=model, noise_realizations=71, noise_seed=3, num_measurements=4)
+    saved = checkpoint.execute_suffix(circuit, return_samples=True, **suffix)
+    np.testing.assert_array_equal(_records(saved, 71, 4), rows)
+    assert checkpoint.execute_suffix(circuit, **suffix)["counts"] == {"1000": 71}
     clean = circuit.execute(config=config, shots=7, return_samples=True)["samples"]
     np.testing.assert_array_equal(clean, np.tile([0, 0, 0, 1], (7, 1)))
 

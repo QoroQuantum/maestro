@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the standard error of a trajectory average.
 - Aer density matrices support trace, purity, trace of the square,
   Hermiticity checks and partial trace in diagnostics requests.
-- All simulators accept `measurement_order="written"` to execute shot
-  measurements in circuit order. The default `"auto"` uses the backend's
+- All simulators accept `measurement_order="written"` to preserve the order
+  of measurements relative to later operations. A trailing measurement block
+  can still use bulk sampling. The default `"auto"` uses the backend's
   usual scheduler. Tight pruning can make the two distributions differ.
 - Python, legacy execution and estimation, and the command line now expose
   `optimize_circuit`, the existing C++ and JSON circuit simplification
@@ -71,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Seeded partial-register readout and `apply_measure` can distribute shots
   over workers and reproduce the same results across worker counts with the
   default sampling policy.
+- Terminal sampling reads a repeated qubit once and maps its physical result
+  to each requested classical destination. This also fixes QCSim Pauli
+  propagator requests that failed when two destinations recorded the same
+  qubit.
 - `Probabilities(outcomes)` takes basis-state indices and returns one
   probability per index on every backend, as documented. On the Qiskit Aer
   statevector, MPS and stabilizer it returned Aer's marginal distribution of

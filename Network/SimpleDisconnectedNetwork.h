@@ -3353,6 +3353,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (measuredWidth != qubits || configuration.GetConfiguration("sampling_policy") == "legacy" ||
                 (configuration.IsSet("mps_sample_measure_algorithm") && configuration.GetConfiguration("mps_sample_measure_algorithm") != "mps_probabilities"))
                 return false;
+            // Written readout samples every distinct measured wire, including
+            // a wire whose classical destination a later write overwrites.
+            if (prepared ? prepared->GetShotPrefixPolicy().writtenMeasurements : Simulators::UsesWrittenMeasurementOrder(configuration.GetConfigMap()))
+                return true;
             // Width above includes every measured wire. The terminal sampler only
             // sees surviving classical writes, and deduplicates repeated qubits.
             const auto readout = distCirc->GetLastMeasurements(std::vector<bool>(distCirc->size(), false));
@@ -3487,14 +3491,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const auto &state = selected ? selected : simulator;
             if (shots < 2 || !recreateIfNeeded || method != Simulators::SimulationType::kStatevector || !Simulators::SamplesQuantumChannels(type, method) ||
                 !state || state->GetType() != type || state->GetSimulationType() != method ||
-                Simulators::UsesWrittenMeasurementOrder(configuration.GetConfigMap()) ||
                 configuration.GetConfiguration("terminal_channel_policy") == "trajectories" ||
                 !Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.GetConfiguration("sampling_policy")))
                 return false;
             const auto prepare = [&] { InitializeTerminalRegister(state, qubits, type, method, true); };
             const std::optional<uint64_t> seed =
                 configuration.IsSet("seed") ? std::optional<uint64_t>(std::stoull(configuration.GetConfiguration("seed"))) : std::nullopt;
-            if (MaestroExecution::SampleNetworkTerminalChannels(circuit, state, shots, classicalWidth, resultWidth, seed, prepare, counts))
+            if (MaestroExecution::SampleNetworkTerminalChannels(circuit, state, shots, classicalWidth, resultWidth, seed, prepare, counts,
+                                                                Simulators::UsesWrittenMeasurementOrder(configuration.GetConfigMap())))
             {
                 usedTerminalSampling = true;
                 lastFusionWidth.store(state->GetGateFusionMaxQubits());

@@ -31,8 +31,8 @@ inline bool AllowsTerminalPopulationSampling(const SimulatorConfig &config)
 {
     const auto &policy = EffectiveCountsPolicy(config);
     const auto sampling = config.native_options.find("sampling_policy");
-    return config.terminal_channel_policy == "auto" && !UsesWrittenMeasurementOrder(config) && UsesChannelSamplingStatevector(config) &&
-           !HasCandidateList(config) && !config.enable_sampling_reduction && (policy == "auto" || policy == "multinomial_v1") &&
+    return config.terminal_channel_policy == "auto" && UsesChannelSamplingStatevector(config) && !HasCandidateList(config) &&
+           !config.enable_sampling_reduction && (policy == "auto" || policy == "multinomial_v1") &&
            (sampling == config.native_options.end() || sampling->second != "legacy");
 }
 
@@ -100,7 +100,7 @@ inline bool PreservesTerminalTrace(const Simulators::QuantumChannel &channel)
 // prefix and extracted channels stay in their original relative order. Keep classical destinations,
 // repeated writes and readout errors in the trailing measurements. Dynamic and opaque circuits keep
 // their ordinary executor.
-inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
+inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Circuit<double>> &circuit, bool writtenOrder = false)
 {
     using Type = Circuits::OperationType;
     if (!circuit)
@@ -109,7 +109,21 @@ inline TerminalChannels SplitTerminalChannels(const std::shared_ptr<Circuits::Ci
     auto end = ops.end();
     while (end != ops.begin() && ((*(end - 1))->GetType() == Type::kMeasurement || (*(end - 1))->GetType() == Type::kNoOp))
         --end;
-    const auto first = std::find_if(ops.begin(), end, [](const auto &op) { return op->GetType() == Type::kQuantumChannel; });
+    auto first = end;
+    if (writtenOrder)
+    {
+        // Only a contiguous final channel block can be folded without moving a
+        // channel past a later operation. Earlier drawn channels keep their trajectories.
+        while (first != ops.begin())
+        {
+            const auto type = (*(first - 1))->GetType();
+            if (type != Type::kQuantumChannel && type != Type::kNoOp)
+                break;
+            --first;
+        }
+    }
+    else
+        first = std::find_if(ops.begin(), end, [](const auto &op) { return op->GetType() == Type::kQuantumChannel; });
     if (first == end)
         return {};
 

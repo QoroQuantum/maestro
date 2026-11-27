@@ -247,22 +247,22 @@ void RecordFusion(ShotRecords &records, const SamplingResult &result)
         records.gpu_device = result.gpu_device;
 }
 
-TerminalChannels FindTerminalPopulationLayer(const RecordCircuitPtr &circuit, bool fresh_register = true)
+TerminalChannels FindTerminalPopulationLayer(const RecordCircuitPtr &circuit, bool written, bool fresh_register = true)
 {
-    auto layer = SplitTerminalChannels(circuit);
+    auto layer = SplitTerminalChannels(circuit, written);
     size_t measured = 0;
-    if (!layer.prefix || layer.prefix->HasOpsAfterMeasurementsWithWidth(false, measured) || !measured ||
+    if (!layer.prefix || layer.prefix->HasOpsAfterMeasurementsWithWidth(false, measured, written) || !measured ||
         HasStochasticEvolution(layer.prefix, false, fresh_register) ||
         std::all_of(layer.channels.begin(), layer.channels.end(), [](const auto &op) { return op->IsDeterministic(); }))
         return {};
     return layer;
 }
 
-bool CompileTerminalPopulations(const TerminalChannels &layer, TerminalPopulations &populations)
+bool CompileTerminalPopulations(const TerminalChannels &layer, bool written, TerminalPopulations &populations)
 {
     Circuits::OperationState dry;
     const auto mask = layer.prefix->ExecuteNonMeasurements(nullptr, dry);
-    const auto measurements = layer.prefix->GetLastMeasurements(mask, false);
+    const auto measurements = layer.prefix->GetTerminalReadout(mask, false, written);
     return populations.Compile(layer, measurements->GetQubits());
 }
 
@@ -282,9 +282,10 @@ TerminalSampler TerminalPopulationSampler(const TerminalPopulations &populations
 
 bool HasCheckpointTerminalPopulations(const RecordCircuitPtr &circuit, const Simulators::ISimulator &simulator, size_t classical_width)
 {
-    auto layer = FindTerminalPopulationLayer(circuit, false);
+    const bool written = simulator.GetShotPrefixPolicy().writtenMeasurements;
+    auto layer = FindTerminalPopulationLayer(circuit, written, false);
     TerminalPopulations populations;
-    return layer.prefix && CanSampleTerminal(*layer.prefix, simulator, classical_width, false) && CompileTerminalPopulations(layer, populations);
+    return layer.prefix && CanSampleTerminal(*layer.prefix, simulator, classical_width, false) && CompileTerminalPopulations(layer, written, populations);
 }
 
 bool SampleCheckpointTerminal(const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, const SimulatorConfig &config,
@@ -297,9 +298,10 @@ bool SampleCheckpointTerminal(const RecordCircuitPtr &circuit, const std::shared
         return true;
     if (!AllowsTerminalPopulationSampling(config))
         return false;
-    auto layer = FindTerminalPopulationLayer(circuit, false);
+    const bool written = UsesWrittenMeasurementOrder(config);
+    auto layer = FindTerminalPopulationLayer(circuit, written, false);
     TerminalPopulations populations;
-    if (!layer.prefix || !CompileTerminalPopulations(layer, populations))
+    if (!layer.prefix || !CompileTerminalPopulations(layer, written, populations))
         return false;
     const uint64_t stream = seed ? *seed : Utils::RandomStream::FreshSeed();
     return SamplePreparedTerminal(*layer.prefix, simulator, shots, state, seed, write, maxBondDimension, false, writeCounts,
@@ -310,11 +312,17 @@ bool SampleNetworkTerminalChannels(const RecordCircuitPtr &circuit, const std::s
                                    size_t classical_width, size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
                                    Circuits::Circuit<double>::ExecuteResults &counts)
 {
-    if (simulator->GetShotPrefixPolicy().writtenMeasurements)
-        return false;
-    auto layer = FindTerminalPopulationLayer(circuit);
+    return SampleNetworkTerminalChannels(circuit, simulator, shots, classical_width, result_width, seed, prepare, counts,
+                                         simulator->GetShotPrefixPolicy().writtenMeasurements);
+}
+
+bool SampleNetworkTerminalChannels(const RecordCircuitPtr &circuit, const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots,
+                                   size_t classical_width, size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
+                                   Circuits::Circuit<double>::ExecuteResults &counts, bool writtenOrder)
+{
+    auto layer = FindTerminalPopulationLayer(circuit, writtenOrder);
     TerminalPopulations populations;
-    if (!layer.prefix || !CanSampleTerminal(*layer.prefix, *simulator, classical_width, true) || !CompileTerminalPopulations(layer, populations))
+    if (!layer.prefix || !CanSampleTerminal(*layer.prefix, *simulator, classical_width, true) || !CompileTerminalPopulations(layer, writtenOrder, populations))
         return false;
     prepare();
     const uint64_t stream = seed ? *seed : Utils::RandomStream::FreshSeed();
@@ -336,20 +344,21 @@ std::optional<ShotRecords> SampleTerminalChannels(const RecordCircuitPtr &circui
     if (shots < 2 || !AllowsTerminalPopulationSampling(config))
         return std::nullopt;
     const auto start = std::chrono::steady_clock::now();
-    auto layer = FindTerminalPopulationLayer(circuit);
+    const bool written = UsesWrittenMeasurementOrder(config);
+    auto layer = FindTerminalPopulationLayer(circuit, written);
     if (!layer.prefix)
         return std::nullopt;
 
     // A terminal channel can involve an unmeasured wire. Keep the register and its target ordering together.
     const QubitCompaction compaction(*circuit);
     if (compaction.Sparse())
-        layer = SplitTerminalChannels(compaction.Apply(circuit));
+        layer = SplitTerminalChannels(compaction.Apply(circuit), written);
     // The network optimizes the circuit before executing a fixed Aer or composite register. In a composite,
     // eliminating cancelling entanglers can also avoid joining otherwise independent components.
     if (EffectiveOptimizeCircuit(config) && config.simulator_type != Simulators::SimulatorType::kQCSim)
-        layer.prefix->Optimize();
+        layer.prefix->OptimizeForSampling(written);
     TerminalPopulations populations;
-    if (!CompileTerminalPopulations(layer, populations) || (identity_only && !populations.IsIdentity()))
+    if (!CompileTerminalPopulations(layer, written, populations) || (identity_only && !populations.IsIdentity()))
         return std::nullopt;
 
     ShotRecords result;
@@ -611,10 +620,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
     // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
     const auto prefix = ConfiguredShotPrefix(config, config.simulator_type, config.simulation_type);
-    size_t measured_width;
-    const bool prepared_batches = !circuit->HasOpsAfterMeasurementsDrawing(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
-                                                                           UsesExactQuantumChannels(config), measured_width, prefix.contiguous) &&
-                                  !(prefix.writtenMeasurements && measured_width) &&
+    const bool prepared_batches = !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
+                                                                        UsesExactQuantumChannels(config), prefix.contiguous) &&
                                   (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
                                    config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     // Network trajectories retain their prepared source and checkpoint plus

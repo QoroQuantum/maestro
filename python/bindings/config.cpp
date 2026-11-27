@@ -266,7 +266,8 @@ void bind_config(nb::module_ &m)
             Simulators::IsWrittenMeasurementOrder(order);
             config.measurement_order = order;
         },
-        "Shot scheduling on every backend. 'auto' uses the backend's usual scheduler. 'written' executes measurement instructions in circuit order.");
+        "Shot scheduling on every backend. 'auto' uses the backend's usual scheduler. 'written' keeps measurements before later operations "
+        "and allows bulk sampling of terminal measurements.");
     BindConfigField<false>(
         config_class, "optimize_circuit", &SimulatorConfig::optimize_circuit,
         "Simplify gates before execution, including cancelling adjacent inverse gates. Defaults to True. Gate fusion is controlled separately.");

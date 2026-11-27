@@ -136,7 +136,8 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = HasTerminalMeasurements();
+        const auto prefixPolicy = ShotPrefix();
+        const bool hasMeasurementsOnlyAtEnd = dcirc->CanBatchMeasurements(prefixPolicy);
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -211,7 +212,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 isQiskitAer = true;
             }
 #endif
-            measurementsOp = dcirc->GetLastMeasurements(executed, isQiskitAer);
+            measurementsOp = dcirc->GetTerminalReadout(executed, isQiskitAer, prefixPolicy.writtenMeasurements);
             const auto &qbits = measurementsOp->GetQubits();
             if (qbits.empty())
             {
@@ -232,9 +233,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
         if (optimiseMultipleShots && (specialOptimizationForStatevector || hasMeasurementsOnlyAtEnd))
         {
-            const auto &qbits = measurementsOp->GetQubits();
-
-            const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
+            const auto sampleres = measurementsOp->SampleTerminalCounts([&](const auto &qubits) { return optSim->SampleCountsMany(qubits, curCnt); });
 
             AccumulateSamples(*measurementsOp, sampleres, state, localRes);
 
@@ -319,7 +318,8 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = HasTerminalMeasurements();
+        const auto prefixPolicy = ShotPrefix();
+        const bool hasMeasurementsOnlyAtEnd = dcirc->CanBatchMeasurements(prefixPolicy);
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -453,7 +453,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 isQiskitAer = true;
             }
 #endif
-            measurementsOp = dcirc->GetLastMeasurements(executed, isQiskitAer);
+            measurementsOp = dcirc->GetTerminalReadout(executed, isQiskitAer, prefixPolicy.writtenMeasurements);
             const auto &qbits = measurementsOp->GetQubits();
             if (qbits.empty())
             {
@@ -468,9 +468,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
         if (optimiseMultipleShots && (specialOptimizationForStatevector || hasMeasurementsOnlyAtEnd))
         {
-            const auto &qbits = measurementsOp->GetQubits();
-
-            const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
+            const auto sampleres = measurementsOp->SampleTerminalCounts([&](const auto &qubits) { return optSim->SampleCountsMany(qubits, curCnt); });
 
             AccumulateSamples(*measurementsOp, sampleres, state, res);
 
@@ -550,10 +548,9 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
-    bool HasTerminalMeasurements() const
+    Simulators::ShotPrefixPolicy ShotPrefix() const
     {
-        const auto policy = optSim ? optSim->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap());
-        return dcirc->CanBatchMeasurements(policy);
+        return optSim ? optSim->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap());
     }
 
     // Whether the job's simulator samples reproducibly. Only the dense methods

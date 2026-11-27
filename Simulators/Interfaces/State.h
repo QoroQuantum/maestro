@@ -195,7 +195,7 @@ struct ShotPrefixPolicy
     bool exactChannels;
     bool contiguous;
     bool contiguousWithDrawnChannels = false;
-    // Physical measurement instructions must run in their authored order.
+    // Preserve measurement boundaries and the authored order of terminal writes.
     bool writtenMeasurements = false;
 
     // QCSim's native default. At this tolerance measurement-only circuits can

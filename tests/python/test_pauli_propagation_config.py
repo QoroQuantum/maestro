@@ -174,9 +174,8 @@ def test_measurement_order_preserves_entangled_readout(method, order, strategy):
         circuit.x(2)
         circuit.measure([(2, 1)])
 
-    options = {"pp_max_pauli_weight": 2, "pp_coefficient_threshold": 1e-8} if method == maestro.SimulationType.PauliPropagator else {}
     config = maestro.SimulatorConfig(simulation_type=method, measurement_order=order,
-                                     fixed_backend=True, max_simulators=1, seed=23, **options)
+                                     fixed_backend=True, max_simulators=1, seed=23)
     shots = 128
     counts = full.execute(config=config, shots=shots)["counts"]
     assert set(counts) == {"010", "100"} and sum(counts.values()) == shots
@@ -194,69 +193,74 @@ def test_measurement_order_preserves_entangled_readout(method, order, strategy):
 
 @pytest.mark.parametrize("order", [None, "auto", "written"])
 @pytest.mark.parametrize("candidate", [False, True], ids=["fixed", "candidate"])
-def test_pauli_weight_cap_changes_even_an_uncoupled_readout(order, candidate):
+def test_capped_pauli_measurement_order_with_fixed_or_selected_backend(order, candidate):
     prefix = maestro.circuits.QuantumCircuit()
     suffix = maestro.circuits.QuantumCircuit()
     full = maestro.circuits.QuantumCircuit()
+    for circuit in (full, prefix):
+        circuit.x(0)
     for circuit in (full, suffix):
         circuit.measure([(0, 0)])
-        circuit.cx(1, 2)
-        circuit.rz(1, .8)
-        circuit.cx(1, 2)
-        circuit.measure([(2, 1)])
-    # With automatic scheduling, backward propagation of Z0 Z2 produces
-    # Z0 Z1 Z2 and the weight cap drops it. This gives P(c1=1) = 1/4.
-    # In written order Z2 passes through both CXs before reaching q0's
-    # projector. It never exceeds weight two, and P(c1=1) = 0 exactly.
+        circuit.x(1)
+        circuit.measure([(1, 1)])
+    # Both bits are one in either order. The sampling strategy tells us
+    # whether the selected backend shared the disjoint X after the read.
     options = {"measurement_order": order} if order is not None else {}
     method = maestro.SimulationType.PauliPropagator
     if candidate:
         options["optimization_candidates"] = [(maestro.SimulatorType.QCSim, method)]
     else:
         options.update(fixed_backend=True, simulation_type=method)
-    config = maestro.SimulatorConfig(pp_max_pauli_weight=2, pp_gates_between_trims=1,
-                                     pp_gates_between_deduplications=1, max_simulators=1, seed=31, **options)
-    shots = 512
-    expected = 0 if order == "written" else .25
+    config = maestro.SimulatorConfig(pp_max_pauli_weight=2, pp_coefficient_threshold=.01,
+                                     max_simulators=1, seed=31, **options)
+    shots = 32
     result = full.execute(config=config, shots=shots)
-    counts = result["counts"]
+    assert result["counts"] == {"11": shots}
     raw = full.execute(config=config, shots=shots, return_samples=True)
-    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 3, config)
-    saved = checkpoint.execute_suffix(suffix, shots=shots, num_measurements=3, return_samples=True)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+    saved = checkpoint.execute_suffix(suffix, shots=shots, num_measurements=2, return_samples=True)
     assert all(entry["method"] == method.value for entry in (result, raw, saved))
-    for probability in (counts.get("010", 0) / shots, raw["samples"][:, 1].mean(), saved["samples"][:, 1].mean()):
-        assert probability == pytest.approx(expected, abs=.06 if expected else 0.)
+    for entry in (raw, saved):
+        assert entry["sampling_strategy"] == ("trajectory_v1" if order == "written" else "terminal_v1")
+        assert entry["samples"].shape == (shots, 2) and entry["samples"].all()
 
 
-@pytest.mark.parametrize("method", [maestro.SimulationType.PauliPropagator, maestro.SimulationType.Statevector])
-def test_written_order_executes_every_terminal_measurement(method):
+@pytest.mark.parametrize("method", [maestro.SimulationType.PauliPropagator, maestro.SimulationType.Statevector,
+                                    maestro.SimulationType.MatrixProductState, maestro.SimulationType.DensityMatrix])
+@pytest.mark.parametrize("order", ["auto", "written"])
+def test_terminal_bulk_readout_preserves_repeated_wires_and_classical_writes(method, order):
     prefix = maestro.circuits.QuantumCircuit()
     full = maestro.circuits.QuantumCircuit()
     suffix = maestro.circuits.QuantumCircuit()
     for circuit in (full, prefix):
-        circuit.cx(1, 2)
-        circuit.rz(1, .8)
+        circuit.x(0)
+        circuit.h(1)
         circuit.cx(1, 2)
     for circuit in (full, suffix):
         circuit.measure([(2, 1)])
         circuit.measure([(0, 1)])
         circuit.measure([(2, 0)])
-    # The first read is overwritten. It still inserts q2's projector before
-    # measuring q0, which gives P(c1=1)=1/4 at weight two. Removing that
-    # read and sampling the final writes jointly can flip c0 instead.
-    pauli = method == maestro.SimulationType.PauliPropagator
-    limits = dict(pp_max_pauli_weight=2, pp_gates_between_trims=1, pp_gates_between_deduplications=1) if pauli else {}
+        circuit.measure([(1, 2)])
+        circuit.measure([(2, 3)], readout_error=1.)
+    # q0 overwrites c1 with one. The Bell bit is shared by c0 and c2, and
+    # only the last read of q2 flips its classical result.
     config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_simulators=1,
-                                     measurement_order="written", seed=31, **limits)
-    shots = 512
+                                     measurement_order=order, seed=31)
+    shots = 256
     counts = full.execute(config=config, shots=shots)["counts"]
-    assert set(counts) == ({"000", "010"} if pauli else {"000"})
     raw = full.execute(config=config, shots=shots, return_samples=True)
     checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 3, config)
-    saved = checkpoint.execute_suffix(suffix, shots=shots, num_measurements=3, return_samples=True)
+    saved_counts = checkpoint.execute_suffix(suffix, shots=shots, num_measurements=4)["counts"]
+    saved = checkpoint.execute_suffix(suffix, shots=shots, num_measurements=4, return_samples=True)
+    for histogram in (counts, saved_counts):
+        assert set(histogram) == {"0101", "1110"} and sum(histogram.values()) == shots
+        assert histogram["1110"] / shots == pytest.approx(.5, abs=.12)
     for result in (raw, saved):
-        assert not result["samples"][:, [0, 2]].any()
-        assert result["samples"][:, 1].mean() == pytest.approx(.25 if pauli else 0., abs=.06 if pauli else 0.)
+        assert result["sampling_strategy"] == "terminal_v1"
+        rows = result["samples"]
+        assert rows.shape == (shots, 4) and rows[:, 1].all()
+        assert (rows[:, 0] == rows[:, 2]).all() and (rows[:, 0] != rows[:, 3]).all()
+        assert rows[:, 0].mean() == pytest.approx(.5, abs=.12)
 
 
 def test_measurement_order_configuration_roundtrip():

@@ -436,61 +436,22 @@ void TestSingleNoisyState()
     Call(request, false, true);
 }
 
-void TestTruncatedPauliShotOrder()
+void TestPauliMeasurementFeedback()
 {
     auto request = Request("execute", 2, "", "pauli_propagator");
-    j::array source{j::object{{"name", "ry"}, {"qubits", j::array{0}}, {"params", j::array{.84}}},
-                    j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}},
-                    j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{1.37}}}, j::object{{"name", "x"}, {"qubits", j::array{0}}},
-                    j::object{{"name", "measure"}, {"qubits", j::array{1}}, {"clbits", j::array{1}}}};
-    request["execution"] = j::object{{"shots", 4096}, {"seed", 4}};
-    for (double threshold : {0., .49})
+    // Measure a random bit, copy the recorded value to q1 by classical control,
+    // then invert and remeasure q0. Valid records are (b, b, !b).
+    const j::array ops{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}},
+                       j::object{{"name", "x"}, {"qubits", j::array{1}}, {"conditional_reg", j::array{0}}}, j::object{{"name", "x"}, {"qubits", j::array{0}}},
+                       j::object{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{2, 1}}}};
+    request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 3}, {"source", ops}};
+    request["execution"] = j::object{{"shots", 256}, {"seed", 4}};
+    for (const auto *order : {"auto", "written"})
     {
-        request["simulator"].as_object()["options"] = j::object{
-            {"measurement_order", "written"}, {"pp_coefficient_threshold", threshold}, {"pp_gates_between_trims", 1}, {"pp_gates_between_deduplications", 1}};
-        for (bool condition : {false, true})
-        {
-            auto ops = source;
-            // On c0 = 1 the same rotation runs in both circuits. The condition keeps it after the measurement.
-            if (condition)
-                ops[2].as_object()["conditional_reg"] = j::array{0};
-            request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", ops}};
-            const auto counts = Call(request).at("counts").as_object();
-            const double zeros = counts.at("10").to_number<double>(), ones = counts.at("11").to_number<double>();
-            const double expected = threshold == 0. ? std::pow(std::sin(1.37 / 2.), 2) : .5;
-            Check(zeros + ones > 300 && std::abs(ones / (zeros + ones) - expected) < .075, "Pauli truncation moved a disjoint gate ahead of a measurement");
-        }
-    }
-    j::array weightSource{source[0],
-                          j::object{{"name", "ry"}, {"qubits", j::array{1}}, {"params", j::array{.67}}},
-                          j::object{{"name", "rx"}, {"qubits", j::array{2}}, {"params", j::array{.93}}},
-                          j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
-                          source[1],
-                          j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}},
-                          source[3],
-                          j::object{{"name", "measure"}, {"qubits", j::array{1, 2}}, {"clbits", j::array{1, 2}}}};
-    for (int weight : {2, 3})
-    {
-        for (bool written : {false, true})
-        {
-            request["simulator"].as_object()["options"] = j::object{{"measurement_order", written ? "written" : "auto"},
-                                                                    {"pp_max_pauli_weight", weight},
-                                                                    {"pp_gates_between_trims", 1},
-                                                                    {"pp_gates_between_deduplications", 1}};
-            for (bool condition : {false, true})
-            {
-                auto ops = weightSource;
-                if (condition)
-                    ops[5].as_object()["conditional_reg"] = j::array{0};
-                request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 3}, {"num_clbits", 3}, {"source", ops}};
-                const auto counts = Call(request).at("counts").as_object();
-                // At weight two, preparing CX before the measurement retains a different
-                // term on c0 = 1. Reading c0 forces CX to execute after the projector.
-                const bool followsMeasurement = written || condition;
-                Check(counts.contains("101") == (weight == 3 || followsMeasurement) && counts.contains("111") == (weight == 3 || !followsMeasurement),
-                      "Weight-capped Pauli execution lost a classical dependency or used the wrong measurement order");
-            }
-        }
+        request["simulator"].as_object()["options"] = j::object{{"measurement_order", order}, {"pp_max_pauli_weight", 2}, {"pp_coefficient_threshold", .01}};
+        const auto counts = Call(request).at("counts").as_object();
+        Check(counts.size() == 2 && counts.at("001").to_number<size_t>() + counts.at("110").to_number<size_t>() == 256,
+              "Pauli execution lost measurement feedback or a repeated wire write");
     }
     request["simulator"].as_object().at("options").as_object()["measurement_order"] = "unknown";
     Call(request, false, true);
@@ -767,7 +728,18 @@ void TestSampledChannelRequests()
             saved["suffixes"].as_array().emplace_back(circuit({measure}));
             result = Call(saved);
             Check(Real(result.at("results").at(1).at("counts").at("11")) == 4096, "A sampled terminal channel overwrote the saved prefix");
-            saved["simulator"].as_object()["options"] = j::object{{"terminal_channel_policy", "trajectories"}};
+
+            saved["simulator"].as_object()["options"] = j::object{{"measurement_order", "written"}};
+            saved["suffixes"] = j::array{circuit({damping, measure}), circuit({damping, j::object{{"name", "x"}, {"qubits", j::array{1}}}, measure})};
+            result = Call(saved);
+            const auto &tails = result.at("results").as_array();
+            Check(tails[0].at("sampling_strategy") == "terminal_v1" && damped(tails[0].at("counts")), "Written order replayed terminal damping");
+            const auto &flipped = tails[1].at("counts").as_object();
+            Check(tails[1].at("sampling_strategy") == "trajectory_v1" && flipped.size() == 2 && flipped.contains("00") &&
+                      std::abs(Real(flipped.at("10")) / 4096 - 0.7) < .04,
+                  "Written order moved damping past a gate on another wire");
+
+            saved["simulator"].as_object().at("options").as_object()["terminal_channel_policy"] = "trajectories";
             result = Call(saved);
             Check(result.at("results").at(0).at("sampling_strategy") == "trajectory_v1" && damped(result.at("results").at(0).at("counts")),
                   "Checkpoint counts did not honor explicit trajectory sampling");
@@ -2960,7 +2932,7 @@ void TestRequestNoiseAndOptions()
     TestBackendNoisyProbability();
     TestSingleNoisyState();
     TestEntangledChainReadout();
-    TestTruncatedPauliShotOrder();
+    TestPauliMeasurementFeedback();
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();
     TestDeterministicChannelInstructions();

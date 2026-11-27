@@ -17,4 +17,8 @@ MAESTRO_TRANSFORM_API bool SampleNetworkTerminalChannels(const std::shared_ptr<C
                                                          const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots, size_t classical_width,
                                                          size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
                                                          Circuits::Circuit<double>::ExecuteResults &counts);
+MAESTRO_TRANSFORM_API bool SampleNetworkTerminalChannels(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
+                                                         const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots, size_t classical_width,
+                                                         size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
+                                                         Circuits::Circuit<double>::ExecuteResults &counts, bool writtenOrder);
 } // namespace MaestroExecution

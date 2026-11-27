@@ -299,22 +299,42 @@ void PathIntegralChannelComposition()
     }
 }
 
-void PreparedStateContract(Method method)
+void PreparedStateContract(Method method, const char *measurementOrder = "auto")
 {
     auto simulator = Simulator(method);
+    simulator->Configure("measurement_order", measurementOrder);
+    const auto policy = simulator->GetShotPrefixPolicy();
     simulator->SaveState();
     auto calls = std::make_shared<std::atomic<size_t>>(0);
     auto terminal = CF::CreateCircuit();
     auto nested = CF::CreateCircuit();
     nested->AddOperation(std::make_shared<CountedX>(0, calls));
     terminal->AddOperation(nested);
+    terminal->AddOperation(CF::CreateMeasurement({{1, 3}})); // overwritten by the next instruction
+    if (policy.writtenMeasurements)
+        terminal->AddOperation(CF::CreateNoOp());
     auto readout = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 3}, {1, 0}});
     readout->SetReadout({{0.0, 1.0}, {0.0, 0.0}});
     terminal->AddOperation(readout);
     terminal->AddOperation(CF::CreateMeasurement({{0, 2}}));
+    if (policy.writtenMeasurements)
+        terminal->AddOperation(CF::CreateNoOp());
     Circuits::OperationState state(5);
     state.SetBit(1);
     state.SetBit(4);
+    if (policy.writtenMeasurements)
+    {
+        const auto mask = terminal->PlanNonMeasurements(state, policy);
+        const auto writes = terminal->GetTerminalReadout(mask, /*sort=*/true, policy.writtenMeasurements);
+        Check(writes->GetQubits() == Types::qubits_vector{1, 0, 1, 0} && writes->GetBitsIndices() == std::vector<size_t>{3, 3, 0, 2},
+              "Written terminal readout lost or reordered a recorded write");
+        Check(writes->GetReadout().at(1).p_meas0_prep1 == 1., "Terminal readout lost a measurement's readout rate");
+        const auto counts = writes->SampleTerminalCounts([](const Types::qubits_vector &targets) {
+            Check(targets == Types::qubits_vector{1, 0}, "Physical wires must be sampled once in first-measurement order");
+            return MaestroExecution::TerminalHistogram{{{true, false}, 17}};
+        });
+        Check(counts.size() == 1 && counts.at({true, false, true, false}) == 17, "Terminal readout did not expand repeated wire outcomes");
+    }
     std::vector<bool> seen(67, false);
     const std::vector<bool> expected{true, true, true, false, true};
     const bool sampled =
@@ -1218,6 +1238,8 @@ void TestMixedStateExecution()
         CheckpointEvolutionCounts(method);
         RawEvolutionCounts(method);
     }
+    for (const auto method : {Method::kStatevector, Method::kPauliPropagator, Method::kMatrixProductState, Method::kDensityMatrix})
+        PreparedStateContract(method, "written");
     ArbitraryPureCheckpointReset();
     for (const auto method : {Method::kStatevector, Method::kStabilizer, Method::kMatrixProductState})
         PureCheckpointTerminalSampling(method);

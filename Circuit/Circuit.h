@@ -2264,15 +2264,16 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, measuredWidth, policy.contiguous);
     }
 
-    // Joint readout omits the individual projectors, even if all measurements
-    // are terminal. In written order a worker replays those instructions.
+    // Written order requires a literal terminal readout: no gate or deferred
+    // branch may cross a measurement. The final measurements can be sampled
+    // together from the shared state in their original wire and write order.
     bool CanBatchMeasurements(Simulators::ShotPrefixPolicy policy, size_t *measuredWidth = nullptr) const
     {
         size_t width;
         const bool dynamic = HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, width, policy.contiguous);
         if (measuredWidth)
             *measuredWidth = width;
-        return !dynamic && !(policy.writtenMeasurements && width);
+        return !dynamic;
     }
 
     // As HasOpsAfterMeasurements, and report the number of distinct measured
@@ -2303,7 +2304,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         {
             // A terminal batch can skip collapse only when no later operation
             // must run on the collapsed (and renormalized) state.
-            if (contiguousPrefix && sawMeasurement && op->GetType() != OperationType::kMeasurement)
+            if (contiguousPrefix && sawMeasurement && op->GetType() != OperationType::kMeasurement && op->GetType() != OperationType::kNoOp)
                 return true;
             // Deterministic nested circuits execute as one prefix operation. Keep
             // composites with classical results opaque to terminal extraction.
@@ -2665,6 +2666,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     // only at the end of the circuit
     std::shared_ptr<MeasurementOperation<Time>> GetLastMeasurements(const std::vector<bool> &executedOps, bool sort = true) const
     {
+        return GetTerminalReadout(executedOps, sort, false);
+    }
+
+    std::shared_ptr<MeasurementOperation<Time>> GetTerminalReadout(const std::vector<bool> &executedOps, bool sort, bool written) const
+    {
         const size_t dif = operations.size() - executedOps.size();
         std::vector<std::pair<Types::qubit_t, size_t>> measurements;
         std::vector<ReadoutRates> readout;
@@ -2683,7 +2689,8 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
                 for (size_t j = 0; j < qubits.size(); ++j)
                 {
-                    lastWrite[bits[j]] = measurements.size();
+                    if (!written)
+                        lastWrite[bits[j]] = measurements.size();
                     measurements.emplace_back(qubits[j], bits[j]);
                     readout.push_back(j < rates.size() ? rates[j] : ReadoutRates{});
                 }
@@ -2691,32 +2698,38 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 anyReadout = anyReadout || measOp->HasReadout();
             }
 
+        // Written readout keeps every record and its readout rates. The
+        // physical sampler deduplicates repeated qubits, then each occurrence
+        // writes its own result in source order.
         // Only the final write to each classical bit is observable in a terminal
         // measurement batch. Drop overwritten writes before sorting for a backend,
         // otherwise sorting can change which qubit (and readout rate) wins.
-        std::vector<size_t> order;
-        order.reserve(lastWrite.size());
-        for (size_t i = 0; i < measurements.size(); ++i)
-            if (lastWrite.at(measurements[i].second) == i)
-                order.push_back(i);
-
-        // Keep each surviving readout rate attached to its measurement pair.
-        if (sort)
-            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return measurements[a].first < measurements[b].first; });
-
-        if (sort || order.size() != measurements.size())
+        if (!written)
         {
-            std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
-            std::vector<ReadoutRates> sortedReadout;
-            sortedMeas.reserve(order.size());
-            sortedReadout.reserve(order.size());
-            for (const auto idx : order)
+            std::vector<size_t> order;
+            order.reserve(lastWrite.size());
+            for (size_t i = 0; i < measurements.size(); ++i)
+                if (lastWrite.at(measurements[i].second) == i)
+                    order.push_back(i);
+
+            // Keep each surviving readout rate attached to its measurement pair.
+            if (sort)
+                std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return measurements[a].first < measurements[b].first; });
+
+            if (sort || order.size() != measurements.size())
             {
-                sortedMeas.push_back(measurements[idx]);
-                sortedReadout.push_back(readout[idx]);
+                std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
+                std::vector<ReadoutRates> sortedReadout;
+                sortedMeas.reserve(order.size());
+                sortedReadout.reserve(order.size());
+                for (const auto idx : order)
+                {
+                    sortedMeas.push_back(measurements[idx]);
+                    sortedReadout.push_back(readout[idx]);
+                }
+                measurements.swap(sortedMeas);
+                readout.swap(sortedReadout);
             }
-            measurements.swap(sortedMeas);
-            readout.swap(sortedReadout);
         }
 
         auto merged = std::make_shared<MeasurementOperation<Time>>(measurements);
