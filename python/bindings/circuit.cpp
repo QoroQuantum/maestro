@@ -11,6 +11,14 @@ namespace
 using Channel = Simulators::QuantumChannel;
 using NestedMatrix = std::vector<std::vector<std::complex<double>>>;
 
+// Append a two-qubit gate; noise models add no gate noise after a noiseless one.
+template <class Gate> void AddTwoQubitGate(Circuits::Circuit<double> &circuit, Types::qubit_t first, Types::qubit_t second, bool noiseless)
+{
+    auto gate = std::make_shared<Gate>(first, second);
+    gate->SetNoiseless(noiseless);
+    circuit.AddOperation(gate);
+}
+
 // Nested row-major lists (or 2-D arrays) as matrices; the channel constructors validate the values.
 Channel::KrausOperators MatricesFromNested(const std::vector<NestedMatrix> &operators, const char *what)
 {
@@ -338,13 +346,24 @@ void bind_circuit(nb::module_ &m)
             "Append a delay idle operation on a qubit for a given duration in seconds.")
 
         // Two Qubit Gates
-        .def("cx", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CXGate<>>(c, t)); })
-        .def("cy", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CYGate<>>(c, t)); })
-        .def("cz", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CZGate<>>(c, t)); })
+        // cx, cy, cz and swap take noiseless=True for the leading gates of a
+        // decomposition whose last gate carries the noise, as the Stim
+        // translator builds gates such as ISWAP.
+        .def("cx", &AddTwoQubitGate<Circuits::CXGate<>>, "control_qubit"_a, "target_qubit"_a, "noiseless"_a = false,
+             "Apply a CNOT gate. With noiseless=True, noise models add no gate "
+             "noise after it (for the leading gates of a decomposed gate).")
+        .def("cy", &AddTwoQubitGate<Circuits::CYGate<>>, "control_qubit"_a, "target_qubit"_a, "noiseless"_a = false,
+             "Apply a controlled-Y gate. With noiseless=True, noise models add "
+             "no gate noise after it (for the leading gates of a decomposed gate).")
+        .def("cz", &AddTwoQubitGate<Circuits::CZGate<>>, "control_qubit"_a, "target_qubit"_a, "noiseless"_a = false,
+             "Apply a controlled-Z gate. With noiseless=True, noise models add "
+             "no gate noise after it (for the leading gates of a decomposed gate).")
         .def("ch", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CHGate<>>(c, t)); })
         .def("csx", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CSxGate<>>(c, t)); })
         .def("csxdg", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) { s.AddOperation(std::make_shared<Circuits::CSxDagGate<>>(c, t)); })
-        .def("swap", [](Circuits::Circuit<double> &s, Types::qubit_t a, Types::qubit_t b) { s.AddOperation(std::make_shared<Circuits::SwapGate<>>(a, b)); })
+        .def("swap", &AddTwoQubitGate<Circuits::SwapGate<>>, "qubit1"_a, "qubit2"_a, "noiseless"_a = false,
+             "Apply a SWAP gate. With noiseless=True, noise models add no gate "
+             "noise after it (for the leading gates of a decomposed gate).")
 
         // Controlled Parametric Gates
         .def("cp", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t,

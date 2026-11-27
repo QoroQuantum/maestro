@@ -116,6 +116,78 @@ LOCAL_NOISE = {'DEPOLARIZE1', 'DEPOLARIZE2', 'X_ERROR', 'Y_ERROR', 'Z_ERROR',
                'PAULI_CHANNEL_1', 'PAULI_CHANNEL_2'}
 MEASUREMENTS = {'M', 'MZ', 'MX', 'MY', 'MR', 'MRZ', 'MRX', 'MRY'}
 
+# Stim's other names for its unitary gates (ZCX for CX, SWAPCZ for CZSWAP,
+# H_XZ for H, ...). A stim.Circuit reports canonical names already; text and
+# instruction tuples may use either. Measurement and reset aliases stay as
+# written, because RZ with an argument is Maestro's rotation.
+STIM_GATE_ALIASES = {alias: gate.name for gate in stim.gate_data().values() if gate.is_unitary
+                     for alias in gate.aliases if alias != gate.name}
+
+# Stim gates that Maestro builds from its own gates: every step but the last
+# is noiseless, and the last is one ordinary gate on the same qubits. A
+# NoiseModel adds gate noise after noisy gates only, so the Stim gate gets it
+# once, after the whole gate, as a native gate would: the two-qubit layers on
+# its pair and the per-qubit layers on each of its qubits. Noise before
+# trailing local gates would be equivalent only for noise those gates leave
+# unchanged, such as depolarizing noise: an X error before an H becomes a Z
+# error after it, and coherent rotations and T1 change as well. Each step is
+# a QuantumCircuit method and the positions of its qubits among the Stim
+# gate's targets.
+#
+# The entries come from a search for the fewest noiseless entangling gates,
+# then the fewest gates; the swap family keeps its short forms (ISWAP is S on
+# each qubit, CZ, then SWAP).
+# Maestro's two-qubit gates have Z on at least one side, so a gate whose last
+# interaction is XX, YY, XY or YX takes a noiseless entangling gate as well
+# as the noisy one. The NoiseModel looks up its pair layers by qubit set
+# (two-qubit depolarizing and correlated phase flips are stored both ways;
+# Kraus channels apply in their configured order), so a last gate may take
+# its pair in reverse: XCZ a b is exactly CX b a. Tests check every entry
+# against stim.Tableau.from_named_gate.
+ONE_QUBIT_DECOMPOSITIONS = {
+    # Ry(±π/2) would be exact, but the stabilizer simulator rejects Ry.
+    "SQRT_Y": (("h", 0), ("x", 0)),
+    "SQRT_Y_DAG": (("h", 0), ("z", 0)),
+    "C_XYZ": (("sdg", 0), ("h", 0)),
+    "C_ZYX": (("h", 0), ("s", 0)),
+    "C_NXYZ": (("s", 0), ("h", 0), ("y", 0)),
+    "C_XNYZ": (("s", 0), ("h", 0)),
+    "C_XYNZ": (("sdg", 0), ("h", 0), ("y", 0)),
+    "C_NZYX": (("sdg", 0), ("sx", 0)),
+    "C_ZNYX": (("h", 0), ("sdg", 0)),
+    "C_ZYNX": (("s", 0), ("sxdg", 0)),
+    "H_XY": (("sdg", 0), ("x", 0)),
+    "H_YZ": (("sdg", 0), ("h", 0), ("s", 0)),
+    "H_NXY": (("s", 0), ("x", 0)),
+    "H_NXZ": (("h", 0), ("y", 0)),
+    "H_NYZ": (("s", 0), ("h", 0), ("sdg", 0)),
+}
+TWO_QUBIT_DECOMPOSITIONS = {
+    "ISWAP": (("s", 0), ("s", 1), ("cz", 0, 1), ("swap", 0, 1)),
+    "ISWAP_DAG": (("sdg", 0), ("sdg", 1), ("cz", 0, 1), ("swap", 0, 1)),
+    "CXSWAP": (("cx", 0, 1), ("swap", 0, 1)),
+    "CZSWAP": (("cz", 0, 1), ("swap", 0, 1)),
+    "SWAPCX": (("swap", 0, 1), ("cx", 0, 1)),
+    "SQRT_ZZ": (("s", 0), ("s", 1), ("cz", 0, 1)),
+    "SQRT_ZZ_DAG": (("sdg", 0), ("sdg", 1), ("cz", 0, 1)),
+    "SQRT_XX": (("sdg", 0), ("cx", 0, 1), ("h", 0), ("sdg", 0), ("cx", 0, 1)),
+    "SQRT_XX_DAG": (("s", 0), ("cx", 0, 1), ("h", 0), ("s", 0), ("cx", 0, 1)),
+    "SQRT_YY": (("s", 1), ("cx", 0, 1), ("h", 0), ("sdg", 1), ("cy", 0, 1)),
+    "SQRT_YY_DAG": (("sdg", 1), ("cx", 0, 1), ("h", 0), ("s", 0), ("s", 0), ("s", 1), ("cy", 0, 1)),
+    "XCX": (("h", 1), ("s", 0), ("sdg", 1), ("cx", 1, 0), ("h", 1), ("sdg", 0), ("cx", 0, 1)),
+    "XCY": (("h", 0), ("sdg", 0), ("cx", 0, 1), ("h", 0), ("cx", 1, 0)),
+    "XCZ": (("cx", 1, 0),),
+    "YCX": (("h", 1), ("sdg", 1), ("cx", 1, 0), ("h", 1), ("cx", 0, 1)),
+    "YCY": (("h", 0), ("h", 1), ("s", 1), ("cx", 0, 1), ("h", 0), ("s", 1), ("cy", 0, 1)),
+    "YCZ": (("cy", 1, 0),),
+}
+DECOMPOSED_GATES = {**ONE_QUBIT_DECOMPOSITIONS, **TWO_QUBIT_DECOMPOSITIONS}
+FIXED_CLIFFORD_GATES = {"I", "II", "X", "Y", "Z", "H", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG",
+                        "CX", "CY", "CZ", "SWAP", *DECOMPOSED_GATES}
+# Instructions that act on pairs of targets.
+PAIR_INSTRUCTIONS = {"CX", "CNOT", "CY", "CZ", "SWAP", "II", "DEPOLARIZE2", "PAULI_CHANNEL_2",
+                     *TWO_QUBIT_DECOMPOSITIONS}
+
 if TYPE_CHECKING:
     import sinter
 
@@ -174,6 +246,7 @@ def _parse_instruction_line(line: str) -> tuple[str, list[float], list[int]]:
         raise ValueError(f"Malformed instruction: {line!r}")
 
     name = m.group(1).upper()
+    name = STIM_GATE_ALIASES.get(name, name)
     arg_str = m.group(2)
     targets_str = m.group(3)
 
@@ -196,7 +269,7 @@ def _parse_instruction_line(line: str) -> tuple[str, list[float], list[int]]:
 def _stim_instructions(circuit: stim.Circuit | str | Any) -> list[tuple[str, list[float], list[int]]]:
     """(name, arguments, qubit targets) for each instruction of a Stim-like circuit."""
     if isinstance(circuit, list):
-        return circuit
+        return [(STIM_GATE_ALIASES.get(name, name), args, targets) for name, args, targets in circuit]
     if isinstance(circuit, str) or hasattr(circuit, "circuit_str"):
         text = circuit if isinstance(circuit, str) else circuit.circuit_str
         instructions = []
@@ -289,6 +362,10 @@ def translate_stim_to_maestro(
     such as M(p) become readout errors, so the circuit carries Stim's noise
     exactly. The basis changes inserted for RX, RY, MX, MY, MRX and MRY are
     marked noiseless, so a NoiseModel adds gate noise only where Stim has gates.
+    Stim's other one- and two-qubit Clifford gates (ISWAP, CXSWAP, SQRT_XX,
+    XCY, C_XYZ, H_YZ, ...) are built from Maestro gates whose leading steps are
+    noiseless, so a NoiseModel adds a gate's noise once, after the whole gate,
+    as it does for a native gate.
 
     Args:
         circuit: A stim.Circuit, extended gate string, or list of
@@ -323,13 +400,16 @@ def translate_stim_to_maestro(
             active_qubits.add(q)
 
     for name, args, targets in instructions:
-        if name in {"CX", "CNOT", "CY", "CZ", "SWAP", "ISWAP", "ISWAP_DAG",
-                    "DEPOLARIZE2", "PAULI_CHANNEL_2"} and len(targets) % 2:
+        if len(args) and name in FIXED_CLIFFORD_GATES:
+            raise ValueError(f"{name} takes 0 arguments, got {len(args)}")
+        if name in PAIR_INSTRUCTIONS and len(targets) % 2:
             raise ValueError(f"{name} requires pairs of qubit targets")
+        if name in PAIR_INSTRUCTIONS and any(targets[i] == targets[i + 1] for i in range(0, len(targets), 2)):
+            raise ValueError(f"{name} requires two different qubits in each pair")
         # Stim's M(p) flips the recorded result, which is what readout error does.
         flip = _measurement_flip(name, args) if name in MEASUREMENTS else 0.0
         # --- Single-qubit Clifford gates ---
-        if name == "I":
+        if name in ("I", "II"):
             for q in targets:
                 # A zero-duration idle is Clifford-safe and preserves allocation.
                 qc.delay(q, 0.0)
@@ -366,19 +446,18 @@ def translate_stim_to_maestro(
             for q in targets:
                 qc.sxdg(q)
                 active_qubits.add(q)
-        # Ry(±π/2) would be exact but the stabilizer simulator rejects Ry, so
-        # these are H then X (or Z), equal up to global phase. The H is
-        # noiseless, so a NoiseModel adds gate noise once, after the gate.
-        elif name == "SQRT_Y":
-            for q in targets:
-                qc.h(q, noiseless=True)
-                qc.x(q)
-                active_qubits.add(q)
-        elif name == "SQRT_Y_DAG":
-            for q in targets:
-                qc.h(q, noiseless=True)
-                qc.z(q)
-                active_qubits.add(q)
+        # Other Clifford gates, equal up to global phase. Only the last step
+        # is noisy, so a NoiseModel adds gate noise once, after the gate.
+        elif name in DECOMPOSED_GATES:
+            *leading, last = DECOMPOSED_GATES[name]
+            width = 2 if name in TWO_QUBIT_DECOMPOSITIONS else 1
+            for i in range(0, len(targets), width):
+                group = targets[i:i + width]
+                for method, *positions in leading:
+                    getattr(qc, method)(*(group[p] for p in positions), noiseless=True)
+                method, *positions = last
+                getattr(qc, method)(*(group[p] for p in positions))
+                active_qubits.update(group)
 
         # --- Parameterized single-qubit rotations & non-Clifford gates ---
         elif name == "T":
@@ -650,10 +729,10 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
     num_2q = 0
     num_1q = 0
 
-    TWO_QUBIT_GATES = {"CX", "CNOT", "CY", "CZ", "SWAP"}
+    TWO_QUBIT_GATES = {"CX", "CNOT", "CY", "CZ", "SWAP", *TWO_QUBIT_DECOMPOSITIONS}
     SINGLE_QUBIT_GATES = {
         "H", "X", "Y", "Z", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG",
-        "SQRT_Y", "SQRT_Y_DAG", "T", "T_DAG", "RX", "RY", "RZ",
+        "T", "T_DAG", "RX", "RY", "RZ", *ONE_QUBIT_DECOMPOSITIONS,
     }
 
     if isinstance(circuit, str):
@@ -663,7 +742,7 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
             if not name:
                 continue
             if name in TWO_QUBIT_GATES:
-                num_2q += max(1, len(targets) // 2)
+                num_2q += len(targets) // 2
             elif name in ("RX", "RY") and not args:
                 # RX and RY resets initialize to |+> and |i>, non-trivial basis prep
                 num_1q += len(targets)
@@ -677,10 +756,10 @@ def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[in
     else:
         for inst in circuit.flattened():
             name = inst.name
-            targets = [t.qubit_value for t in inst.targets_copy() if t.is_qubit_target]
+            targets = inst.targets_copy()
             args = inst.gate_args_copy()
             if name in TWO_QUBIT_GATES:
-                num_2q += max(1, len(targets) // 2)
+                num_2q += len(targets) // 2
             elif name in ("RX", "RY") and not args:
                 num_1q += len(targets)
             elif name == "RZ" and not args:

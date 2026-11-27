@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `maestro.sinter` translates the rest of Stim's one- and two-qubit Clifford
+  gates, which raised "Unsupported Stim instruction": `ISWAP`, `ISWAP_DAG`,
+  `CXSWAP`, `CZSWAP`, `SWAPCX`, `SQRT_XX`, `SQRT_XX_DAG`, `SQRT_YY`,
+  `SQRT_YY_DAG`, `SQRT_ZZ`, `SQRT_ZZ_DAG`, `XCX`, `XCY`, `XCZ`, `YCX`, `YCY`,
+  `YCZ`, `II`, `C_XYZ`, `C_ZYX`, `C_NXYZ`, `C_XNYZ`, `C_XYNZ`, `C_NZYX`,
+  `C_ZNYX`, `C_ZYNX`, `H_XY`, `H_YZ`, `H_NXY`, `H_NXZ` and `H_NYZ`. Circuits
+  such as the iSWAP syndrome extraction of directional codes can now run under
+  the `NoiseModel` layers Stim cannot simulate, such as coherent
+  over-rotations and T1. Each gate is built from Maestro gates, and only the
+  last of them is noisy, so a `NoiseModel` adds the gate's noise once, after
+  the whole gate, as it does for a native gate: the two-qubit layers on its
+  pair and the per-qubit layers on each of its qubits. Noise before trailing
+  local gates would be equivalent only for noise those gates leave unchanged,
+  such as depolarizing noise: an `X` error before an `H` becomes a `Z` error,
+  and coherent over-rotations and T1 differ too. `II`, like `I`, is a
+  zero-duration idle. `SQRT_XX`,
+  `SQRT_YY`, `XCX`, `XCY`, `YCX`, `YCY` and their inverses take two Maestro
+  entangling gates, because the noisy last gate must be one of Maestro's
+  two-qubit gates, which all have a Z on one side.
+- `QuantumCircuit.cx`, `cy`, `cz` and `swap` take `noiseless=True`, as `h`, `s`
+  and `sdg` do: a `NoiseModel` adds no gate noise after the gate. Their
+  arguments now have names (`control_qubit` and `target_qubit`, `qubit1` and
+  `qubit2`), as on the simulator's `ApplyCX` and `ApplySwap`.
+
 - `qc.noisy_prob`, `maestro.noisy_prob`, C++ `NoisyStateProbability` and the
   JSON `noisy_prob` request now evaluate basis probabilities on fixed
   backends that support quantum channels. These include QCSim and Aer
@@ -328,6 +352,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `maestro.sinter` accepts Stim's other gate names (`ZCX`, `ZCY`, `ZCZ`,
+  `SWAPCZ`, `H_XZ`) in circuit text and instruction tuples, as it already did
+  in a `stim.Circuit`, which reports the canonical name. In text they raised
+  "Unsupported Stim instruction".
+- Stim circuit text and instruction tuples raise `ValueError` for arguments
+  on fixed Clifford gates, such as `SQRT_ZZ(0) 0 1`, and for a pair that
+  repeats a qubit, such as `CX 1 1`.
+- A two-qubit gate with no targets counts as zero gates when the Sinter
+  sampler decides whether to checkpoint a prefix.
 - Fixed stabilizer validation in written measurement order when sampling
   reduction is enabled. QCSim and Aer stabilizers recognize and execute
   Clifford phase shifts consistently, including a phase produced by gate

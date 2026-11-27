@@ -106,8 +106,10 @@ counts = channel.full_noise_execute(maestro.NoiseModel(), shots=1000, noise_real
 print(counts)
 ```
 
-To keep a basis change that belongs to a measurement or reset out of a
-NoiseModel's gate noise, pass `noiseless=True` to `h`, `s` or `sdg`.
+To keep a gate out of a NoiseModel's gate noise, pass `noiseless=True` to `h`,
+`s`, `sdg`, `cx`, `cy`, `cz` or `swap`. That suits a basis change that belongs
+to a measurement or reset, or the leading gates of an operation built from
+several, whose noise should come once, after its last gate.
 
 (py_noise_mc)=
 ## Gate-by-gate Monte Carlo
