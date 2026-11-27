@@ -1729,6 +1729,93 @@ void TestFrameSamplerHandle()
     Check(!compile(automatic("stabilizer"), flip, "unsupported_capability"), "Frames accepted noise without fixed selection");
 }
 
+void TestCliffordPhaseFrames()
+{
+    const double pi = std::acos(-1.);
+    const auto gate = [](const char *name, int qubit) { return j::object{{"name", name}, {"qubits", j::array{qubit}}}; };
+    const auto measure = [](int qubit) { return j::object{{"name", "measure"}, {"qubits", j::array{qubit}}, {"clbits", j::array{qubit}}}; };
+    const auto execute = [&](j::array source, size_t qubits) {
+        auto request = Request("execute", qubits, "", "stabilizer");
+        request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", qubits}, {"num_clbits", qubits}, {"source", std::move(source)}};
+        request["simulator"].as_object()["options"] = j::object{{"counts_policy", "frame_v1"}};
+        return request;
+    };
+
+    struct Phase
+    {
+        const char *name;
+        double angle;
+        const char *equivalent;
+    };
+
+    for (const Phase phase : {Phase{"p", 0, ""},
+                              {"p", pi / 2, "s"},
+                              {"p", pi, "z"},
+                              {"p", -pi / 2, "sdg"},
+                              {"p", -pi, "z"},
+                              {"p", 2 * pi, ""},
+                              {"p", pi / 2 + 5e-11, "s"},
+                              {"u1", 3 * pi / 2, "sdg"},
+                              {"id", 0, ""}})
+    {
+        // Measure X for I/Z or Y for S/Sdg to distinguish the phase on |+>.
+        // A second qubit supplies random bits to compare the seeded streams.
+        j::array source{gate("h", 0)};
+        auto phaseGate = gate(phase.name, 0);
+        if (std::string_view(phase.name) != "id")
+            phaseGate["params"] = j::array{phase.angle};
+        source.push_back(phaseGate);
+        if (std::string_view(phase.equivalent) == "s" || std::string_view(phase.equivalent) == "sdg")
+            source.push_back(gate("sdg", 0));
+        source.push_back(gate("h", 0));
+        source.push_back(gate("h", 1));
+        source.push_back(measure(0));
+        source.push_back(measure(1));
+        auto request = execute(source, 2);
+        if (*phase.equivalent)
+            source[1] = gate(phase.equivalent, 0);
+        else
+            source.erase(source.begin() + 1);
+        auto named = execute(std::move(source), 2);
+        const auto counts = Call(request);
+        Check(counts.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && counts.at("counts") == Call(named).at("counts"),
+              "Clifford phase frame counts differ from the named gate");
+        request["execution"].as_object()["return_samples"] = true;
+        named["execution"].as_object()["return_samples"] = true;
+        const auto rows = Call(request);
+        Check(rows.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && rows.at("samples") == Call(named).at("samples"),
+              "Clifford phase frame rows differ from the named gate");
+
+        const auto input = j::serialize(j::object{{"schema_version", 2}, {"circuit", request.at("circuit")}});
+        void *sampler = MaestroCreateReferenceFrameSampler(input.c_str(), nullptr);
+        Check(sampler != nullptr, "The reference frame handle refused a Clifford phase");
+        const auto expected = Rows(rows);
+        std::vector<unsigned long long> packed(expected.size());
+        const bool sampled = MaestroReferenceFrameSampleBits(sampler, packed.size(), request.at("execution").at("seed").to_number<uint64_t>(), packed.data(),
+                                                             packed.size()) == 1;
+        MaestroDestroyReferenceFrameSampler(sampler);
+        Check(sampled, "The reference frame handle failed to sample a Clifford phase");
+        for (size_t shot = 0; shot < packed.size(); ++shot)
+            Check(packed[shot] == (expected[shot][0] - '0') + 2ULL * (expected[shot][1] - '0'), "Packed Clifford phase rows differ from execute");
+    }
+
+    auto outside =
+        execute({gate("h", 0), j::object{{"name", "p"}, {"qubits", j::array{0}}, {"params", j::array{pi / 2 + 2e-10}}}, gate("h", 0), measure(0)}, 1);
+    outside["simulator"] = j::object{
+        {"selection", "automatic"},
+        {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}}}};
+    Check(Call(outside).at("execution_metadata").at("method") == "statevector", "Out-of-tolerance phase did not fall back to the statevector");
+    const auto nonClifford = j::serialize(j::object{{"schema_version", 2}, {"circuit", outside.at("circuit")}, {"simulator", outside.at("simulator")}});
+    Check(MaestroCreateReferenceFrameSampler(nonClifford.c_str(), nullptr) == nullptr, "The reference frame handle rounded a non-Clifford phase");
+
+    // The original identity is a physical gate location for the noise model.
+    auto noisy = execute({gate("id", 0), measure(0)}, 1);
+    noisy["noise"] = j::object{{"mode", "pauli"}, {"realizations", 80}, {"channels", j::array{Channel("bit_flip", {{"probability", 1}})}}};
+    const auto result = Call(noisy);
+    Check(result.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && result.at("counts") == j::object{{"1", 80}},
+          "Reference frames dropped gate noise on an identity");
+}
+
 // Rows honor automatic selection and candidate lists as counts do, and packed
 // noisy rows are the JSON rows of the same request.
 void TestRowSelection()
@@ -2957,6 +3044,7 @@ void TestRequestNoiseAndOptions()
     TestPauliPropagatorExactNoise();
     TestShotRows();
     TestFrameSamplerHandle();
+    TestCliffordPhaseFrames();
     TestRowSelection();
     TestLegacyCountsPolicy();
     TestMultinomialCountReplay();

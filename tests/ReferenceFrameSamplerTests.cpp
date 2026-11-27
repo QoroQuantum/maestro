@@ -568,12 +568,44 @@ void StreamingCountsMatchRows()
     // occupied outcome, not require a dense shots-by-width byte matrix.
     auto wide = std::make_shared<Circuit>();
     wide->AddOperation(std::make_shared<Circuits::XGate<double>>(0));
+    wide->AddOperation(Measure(0, 0));
+    wide->AddOperation(Measure(0, 63));
     wide->AddOperation(Measure(0, 1024));
+    wide->AddOperation(std::make_shared<Circuits::Reset<double>>(Types::qubits_vector{0}));
+    wide->AddOperation(Measure(0, 63)); // overwrite a one with a zero
     const auto widePlan = MaestroExecution::CompileReferenceSampler(wide, 1, 1025);
     const auto counts = AsHistogram(widePlan->SampleCounts(100003, 5));
     std::vector<bool> expected(1025, false);
-    expected[1024] = true;
+    expected[0] = expected[1024] = true;
     Require(counts.size() == 1 && counts.at(expected) == 100003, "wide sparse histogram lost shots or classical positions");
+}
+
+void CountsWithOneSourceOfRandomness()
+{
+    // A random reset of one half of a Bell pair leaves its partner random,
+    // although that partner has a definite outcome in the reference tableau.
+    auto reset = std::make_shared<Circuit>();
+    reset->AddOperation(std::make_shared<Circuits::HadamardGate<double>>(0));
+    reset->AddOperation(std::make_shared<Circuits::CXGate<double>>(0, 1));
+    reset->AddOperation(std::make_shared<Circuits::Reset<double>>(Types::qubits_vector{0}));
+    reset->AddOperation(Measure(1, 0));
+
+    auto noisyReadout = std::make_shared<Circuit>();
+    auto measured = Measure(0, 0);
+    measured->SetReadout({{0.25, 0}});
+    noisyReadout->AddOperation(measured);
+
+    auto noisyGate = std::make_shared<Circuit>();
+    noisyGate->AddOperation(Channel({0}, {0.75, 0.25, 0, 0}));
+    noisyGate->AddOperation(Measure(0, 0));
+    for (const auto &circuit : {reset, noisyReadout, noisyGate})
+    {
+        const auto plan = MaestroExecution::CompileReferenceSampler(circuit, 2, 1);
+        const auto rows = plan->Sample(1025, 17);
+        const auto counts = AsHistogram(plan->SampleCounts(1025, 17));
+        const size_t ones = std::count(rows.begin(), rows.end(), uint8_t{1});
+        Require(counts.size() == 2 && counts.at({true}) == ones && counts.at({false}) == rows.size() - ones, "stochastic counts differ from seeded rows");
+    }
 }
 
 void SparseQubitsCompact()
@@ -816,6 +848,7 @@ int main()
         AsymmetricReadoutRates();
         StreamsArePrefixStable();
         StreamingCountsMatchRows();
+        CountsWithOneSourceOfRandomness();
         SparseQubitsCompact();
         KrausPauliMixtures();
         PackedRowHashSpreadsHighBits();

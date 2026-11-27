@@ -82,7 +82,9 @@ Disjoint sampling can exclude gates outside the measured cones when enabled
 in automatic measurement order.
 
 QCSim and Aer stabilizers support `p(angle)` at the four Clifford phases
-(identity, S, Z and S†), using a tolerance of `1e-10`. If two individually
+(identity, S, Z and S†), using a tolerance of `1e-10`. QCSim reference-frame
+sampling uses the same rule for `p`, its `u1` alias and the identity instruction.
+Noise attached to an identity instruction still applies. If two individually
 supported angles would sum to an unsupported angle, circuit simplification
 keeps both gates. A statevector still applies their full angles.
 

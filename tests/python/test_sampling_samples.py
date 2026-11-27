@@ -699,6 +699,41 @@ def test_public_reference_frame_sampler_reuses_one_compilation():
     assert maestro.compile_reference_sampler(circuit) is not None
 
 
+@pytest.mark.parametrize("angle,named_gate", [
+    (0.0, None), (math.pi / 2, "s"), (-math.pi, "z"),
+    (3 * math.pi / 2, "sdg"), (math.pi / 2 + 5e-11, "s"),
+])
+def test_compiled_reference_frames_replay_clifford_phases(angle, named_gate):
+    def prepare(use_phase):
+        circuit = QuantumCircuit()
+        circuit.h(0)
+        circuit.cx(0, 1)
+        if use_phase:
+            circuit.p(0, angle)
+        elif named_gate is not None:
+            getattr(circuit, named_gate)(0)
+        circuit.h(0)
+        circuit.h(1)
+        circuit.measure_all()
+        return circuit
+
+    phase, named = prepare(True), prepare(False)
+    actual, expected = maestro.compile_reference_sampler(phase), maestro.compile_reference_sampler(named)
+    shots, seed = 257, 17
+    rows = actual.sample(shots, seed=seed)
+    assert rows["sampling_strategy"] == "reference_frame_v1"
+    np.testing.assert_array_equal(rows["samples"], expected.sample(shots, seed=seed)["samples"])
+    expected_counts = expected.sample_counts(shots, seed=seed)["counts"]
+    assert actual.sample_counts(shots, seed=seed)["counts"] == expected_counts
+    config = maestro.SimulatorConfig(seed=seed, optimization_candidates=[
+        (maestro.SimulatorType.QCSim, maestro.SimulationType.Statevector),
+        (maestro.SimulatorType.QCSim, maestro.SimulationType.Stabilizer),
+    ])
+    result = phase.execute(config=config, shots=shots)
+    assert result["sampling_strategy"] == "reference_frame_v1"
+    assert result["counts"] == expected_counts
+
+
 def test_public_reference_frame_sampler_rejects_what_frames_cannot_represent():
     circuit = QuantumCircuit()
     circuit.h(0)

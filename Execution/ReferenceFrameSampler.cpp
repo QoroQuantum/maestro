@@ -236,7 +236,30 @@ std::optional<ReferenceFrameSampler> CompileReferenceSampler(const std::shared_p
                 Instruction instruction{Kind::H};
                 instruction.first = a;
                 instruction.second = b;
-                switch (gate->GetGateType())
+                auto gateType = gate->GetGateType();
+                if (gateType == Gate::kPhaseGateType)
+                {
+                    const auto params = gate->GetParams();
+                    if (params.size() != 1)
+                        return false;
+                    switch (Simulators::ClassifyCliffordPhase(params.front()))
+                    {
+                    case Simulators::CliffordPhase::Identity:
+                        continue;
+                    case Simulators::CliffordPhase::S:
+                        gateType = Gate::kSGateType;
+                        break;
+                    case Simulators::CliffordPhase::Z:
+                        gateType = Gate::kZGateType;
+                        break;
+                    case Simulators::CliffordPhase::Sdg:
+                        gateType = Gate::kSdgGateType;
+                        break;
+                    case Simulators::CliffordPhase::Unsupported:
+                        return false;
+                    }
+                }
+                switch (gateType)
                 {
                 case Gate::kXGateType:
                     reference.ApplyX(a);
@@ -333,6 +356,18 @@ FrameOutcomes ReferenceFrameSampler::SampleCounts(size_t shots, Seeds seeds) con
     FrameOutcomes result;
     if (!shots)
         return result;
+    // With no channel, random collapse (including reset) or readout error,
+    // the Pauli frame stays zero and every shot records the compiled tableau's outcomes.
+    if (std::none_of(instructions_.begin(), instructions_.end(),
+                     [](const Instruction &op) { return op.kind == Kind::Channel || op.random || op.readout.rate > 0; }))
+    {
+        std::vector<bool> bits(width_);
+        for (const auto &op : instructions_)
+            if (op.kind == Kind::Measurement)
+                bits[op.second] = op.referenceOne;
+        result.emplace_back(std::move(bits), shots);
+        return result;
+    }
     const size_t rowWords = width_ / 64 + (width_ % 64 != 0);
     const size_t batchLanes = std::min(shots, kBatchShots);
     if (rowWords != 0 && batchLanes > std::numeric_limits<size_t>::max() / rowWords)
