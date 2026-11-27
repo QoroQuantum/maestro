@@ -48,6 +48,57 @@ struct AerSimulatorTestFixture
 
 BOOST_AUTO_TEST_SUITE(aer_simulator_tests)
 
+BOOST_AUTO_TEST_CASE(capped_mps_snapshots_preserve_site_order_and_phase)
+{
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+    sim->Configure("matrix_product_state_max_bond_dimension", "2");
+    sim->AllocateQubits(4);
+    sim->Initialize();
+    sim->ApplyH(0);
+    sim->ApplyCX(0, 2);
+    sim->ApplyS(0);
+    sim->ApplyH(1);
+    sim->ApplyCX(1, 3);
+
+    // Each Bell pair occupies adjacent sites in Aer's current ordering. Restoring the logical order
+    // would put both pairs across the middle bond, whose rank would then have to be four.
+    const auto amplitude = [](size_t i) -> std::complex<double> {
+        if (i == 0 || i == 10)
+            return .5;
+        if (i == 5 || i == 15)
+            return {0, .5};
+        return 0.;
+    };
+    const auto check = [&](Simulators::ISimulator &chain, size_t flipped = 0) {
+        for (size_t i = 0; i < 16; ++i)
+            BOOST_CHECK_SMALL(std::abs(chain.Amplitude(i) - amplitude(i ^ flipped)), 1e-12);
+    };
+    sim->SaveState(); // also flushes the buffered preparation
+    check(*sim);
+    sim->ApplyX(0);
+    auto clone = sim->Clone();
+    check(*sim, 1);
+    check(*clone, 1);
+    clone->RestoreState();
+    check(*clone);
+    check(*sim, 1);
+    clone->ApplyX(1);
+    clone->SaveState();
+    sim->RestoreState();
+    check(*sim);
+    clone->RestoreState();
+    check(*clone, 2);
+
+    sim->SaveStateToInternalDestructive();
+    BOOST_CHECK_EQUAL(sim->GetNumberOfQubits(), 0U);
+    sim->SaveState(); // no live tensors to replace the checkpoint
+    for (size_t i = 0; i < 16; ++i)
+        BOOST_CHECK_SMALL(std::abs(sim->AmplitudeRaw(i) - amplitude(i)), 1e-12);
+    BOOST_CHECK_THROW(sim->AmplitudeRaw(16), std::out_of_range);
+    sim->RestoreInternalDestructiveSavedState();
+    check(*sim);
+}
+
 BOOST_FIXTURE_TEST_CASE(test, AerSimulatorTestFixture)
 {
     BOOST_REQUIRE(AER::is_avx2_supported());
@@ -131,6 +182,25 @@ BOOST_AUTO_TEST_CASE(density_matrix_kraus_target_order_matches_maestro)
     BOOST_TEST(statevector->SamplesQuantumChannels());
     statevector->ApplyBitFlipNoise(0, 1.0);
     BOOST_CHECK_CLOSE(statevector->Probability(1), 1.0, 1e-8);
+}
+
+BOOST_AUTO_TEST_CASE(density_matrix_diagnostics_preserve_filter_weight)
+{
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kDensityMatrix);
+    sim->AllocateQubits(1);
+    sim->Initialize();
+    sim->ApplyH(0);
+    Eigen::Matrix2cd projector = Eigen::Matrix2cd::Zero();
+    projector(1, 1) = 1.;
+    sim->ApplyGenericOneQubitGate(0, projector);
+
+    BOOST_CHECK_SMALL(std::abs(sim->DensityMatrixTrace() - 0.5), 1e-9);
+    BOOST_CHECK_SMALL(sim->DensityMatrixPurity() - 0.25, 1e-9);
+    BOOST_CHECK_SMALL(std::abs(sim->DensityMatrixTraceOfSquare() - 0.25), 1e-9);
+    BOOST_CHECK_SMALL(std::abs(sim->PartialTrace({})(0, 0) - 0.5), 1e-9);
+    BOOST_CHECK_THROW(sim->PartialTrace({0, 0}), std::invalid_argument);
+    BOOST_CHECK_THROW(sim->PartialTrace({1}), std::invalid_argument);
+    BOOST_CHECK_SMALL(sim->Probability(1) - 0.5, 1e-9);
 }
 
 // Aer's statevector and matrix product state take a channel as one sampled

@@ -18,6 +18,10 @@ struct SamplingResult
     size_t gate_fusion_max_qubits = 0;
     double time_taken = 0;
     std::string sampling_strategy;
+    // Multi-shot network batches can choose the sampler after mapping and
+    // planning each connected component.
+    bool network_terminal = false;
+    bool network_trajectory = false;
 };
 
 // A worker owns its session. Reusing the network avoids creating a public

@@ -161,6 +161,11 @@ template <typename Time = Types::time_type> class MeasurementOperation : public 
         SetStateFromSample(res, state, sim.get());
     }
 
+    template <class Sampler> auto SampleTerminalCounts(Sampler &&sample) const
+    {
+        return Utils::MeasurementTargets::ReadCounts(qubits, sample);
+    }
+
     /**
      * @brief Samples the measurement on the given simulator.
      *
@@ -177,9 +182,8 @@ template <typename Time = Types::time_type> class MeasurementOperation : public 
         if (qubits.empty())
             return;
 
-        const auto res = sim->SampleCountsMany(qubits, 1).begin()->first;
-
-        SetStateFromSample(res, state, sim.get());
+        const auto counts = SampleTerminalCounts([&](const auto &targets) { return sim->SampleCountsMany(targets, 1); });
+        SetStateFromSample(counts.begin()->first, state, sim.get());
     }
 
     /**

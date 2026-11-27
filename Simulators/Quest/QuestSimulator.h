@@ -488,6 +488,7 @@ class QuestSimulator : public QuestState
     {
         auto cloned = std::make_unique<QuestSimulator>();
         cloned->questLib = questLib;
+        cloned->configuration = configuration;
         cloned->nrQubits = nrQubits;
 
         if (sim)

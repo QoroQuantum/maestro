@@ -48,6 +48,23 @@ class MeasurementTargets
         return targets.Expand(measure(targets.Physical(wires)));
     }
 
+    // A terminal sampler returns one bit per distinct wire. Restore the bit
+    // for every occurrence once per occupied outcome, before applying readout.
+    template <class Sample> static auto ReadCounts(const Types::qubits_vector &wires, Sample &&sample)
+    {
+        if (wires.size() < 2)
+            return sample(wires);
+        const MeasurementTargets targets(wires);
+        auto counts = sample(targets.Physical(wires));
+        if (targets.positions.empty())
+            return counts;
+        decltype(counts) expanded;
+        expanded.reserve(counts.size());
+        for (const auto &[outcome, count] : counts)
+            expanded.emplace(targets.Expand(outcome), count);
+        return expanded;
+    }
+
     const Types::qubits_vector &Physical(const Types::qubits_vector &wires) const
     {
         return positions.empty() ? wires : physical;

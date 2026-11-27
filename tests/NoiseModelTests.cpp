@@ -1405,6 +1405,18 @@ BOOST_AUTO_TEST_CASE(NoiseAddKeepsNoChannelForANetworkThatTranslatesCircuits)
     const auto translates = MaestroExecution::ResolveNoiseRealizations(std::nullopt, relaxing, config, MaestroExecution::NoiseLayer::kPauli, 64, flipped, false,
                                                                        std::nullopt, true, false);
     BOOST_CHECK(!translates.runtime_channels && translates.chain_order == Circuits::ChainOrder::kNone);
+
+    for (const bool mpo : {false, true})
+    {
+        config.simulation_type = mpo ? Simulators::SimulationType::kMatrixProductOperator : Simulators::SimulationType::kMatrixProductState;
+        const auto expected = mpo ? Circuits::ChainOrder::kMixedState : Circuits::ChainOrder::kSampledChannels;
+        for (size_t cap : {2, 32})
+        {
+            config.max_bond_dimension = cap;
+            config.singular_value_threshold = .4;
+            BOOST_CHECK(MaestroExecution::OrdersForChain(config, mpo) == expected);
+        }
+    }
 }
 
 /** Each coherent setter replaces only its own component, so axes compose. */

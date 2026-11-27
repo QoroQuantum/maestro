@@ -43,8 +43,10 @@ def stabilizer_options(selection):
     if selection == "fixed":
         return dict(simulator_type=backend, simulation_type=method, fixed_backend=True)
     candidates = [(backend, method)]
-    if selection == "mixed":
+    if selection in {"mixed", "dense-first"}:
         candidates.append((backend, maestro.SimulationType.Statevector))
+        if selection == "dense-first":
+            candidates.reverse()
     return dict(simulator_type=backend, simulation_type=maestro.SimulationType.Statevector,
                 fixed_backend=False, optimization_candidates=candidates)
 
@@ -140,7 +142,48 @@ def test_parity_preserves_estimates_simplified_to_clifford(selection, disjoint_t
     assert result["expectation_values"] == pytest.approx([1.0])
 
 
-@pytest.mark.parametrize("gate,angle", [("T", math.pi / 4), ("P", math.pi / 4), ("P", -math.pi)])
+@pytest.mark.parametrize("selection", ["fixed", "candidate", "mixed", "dense-first"])
+@pytest.mark.parametrize("angle,quarter_turn", [
+    (-math.pi, math.pi), (3 * math.pi / 2, -math.pi / 2),
+    (-3 * math.pi / 2, math.pi / 2), (2 * math.pi, 0),
+    (math.pi / 2 + 5e-11, math.pi / 2),
+])
+def test_parity_reduces_clifford_phases(selection, angle, quarter_turn):
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(3):
+        circuit.h(q)
+    circuit.cz(0, 1)
+    circuit.p(0, angle)
+    observables = ["XZI", "YZI", "ZXI", "IIX"]
+    options = stabilizer_options(selection)
+    for enabled in (False, True):
+        result = circuit.estimate(observables, cfg(enabled, **options))
+        assert_allowed_simulator(result, options)
+        assert result["auto_reduced"] == enabled
+        assert (result["qubits_before"], result["qubits_after"]) == (3, 2 if enabled else 3)
+        effective = quarter_turn if result["method"] == maestro.SimulationType.Stabilizer else angle
+        assert result["expectation_values"] == pytest.approx([math.cos(effective), math.sin(effective), 1, 1], abs=1e-14, rel=0)
+
+
+@pytest.mark.parametrize("selection", ["fixed", "candidate", "dense-first"])
+@pytest.mark.parametrize("angle", [2 * math.pi, 5e-11])
+def test_parity_identity_rank_respects_possible_backends(selection, angle):
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(3):
+        circuit.h(q)
+    circuit.p(0, angle)
+    circuit.s(1)
+    options = stabilizer_options(selection)
+    result = circuit.estimate(["YII", "IYI"], cfg(True, **options))
+    assert_allowed_simulator(result, options)
+    assert result["auto_reduced"]
+    # Only a stabilizer-only configuration can discard the small phase on q0.
+    assert result["qubits_after"] == (2 if selection == "dense-first" else 1)
+    residual = 0 if result["method"] == maestro.SimulationType.Stabilizer else math.sin(angle)
+    assert result["expectation_values"] == pytest.approx([residual, 1], abs=1e-14, rel=0)
+
+
+@pytest.mark.parametrize("gate,angle", [("T", math.pi / 4), ("P", math.pi / 4), ("P", -math.pi / 4)])
 def test_stabilizer_estimate_diagnostic_names_unsupported_source_gate(gate, angle):
     circuit = maestro.circuits.QuantumCircuit()
     circuit.h(0)

@@ -1,5 +1,6 @@
 // Numerical contract tests through the public request API, without Python/GPU.
 #include "../Execution/NoisyEstimation.h"
+#include "../Simulators/Core/Factory.h"
 #include "../maestrolib/Interface.h"
 #include <array>
 #include <boost/json.hpp>
@@ -252,6 +253,15 @@ void TestPathIntegralNoisyProbability()
     Near(Real(seeded.at("std_error")), *direct.std_error);
     Check(direct.realizations_evaluated == 71 && std::string_view(direct.EstimateEvaluation()) == "trajectory_average",
           "Direct noisy probability did not report the evaluated trajectories");
+    // Noisy probability follows circuit order even on chains whose
+    // shot and expectation planners can reorder injected channels.
+    for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        auto chain = config;
+        chain.simulation_type = method;
+        const auto probability = MaestroExecution::NoisyStateProbability(circuit, {true}, model, 1, chain, 0);
+        Check(probability.policy.chain_order == Circuits::ChainOrder::kNone, "Noisy probability advertised unused chain scheduling");
+    }
     auto embedded = request;
     embedded["circuit"] = j::object{{"format", "instructions"},
                                     {"num_qubits", 1},
@@ -285,7 +295,7 @@ void TestPathIntegralNoisyProbability()
         }
         Check(rejected, "A selected layer silently accepted incompatible external Kraus noise");
     }
-    request["simulator"].as_object()["method"] = "statevector";
+    request["simulator"].as_object()["method"] = "stabilizer";
     Call(request, false, true);
 
     request = Request("noisy_prob", 1, "h q[0]; measure q[0]->c[0]; x q[0];", "path_integral");
@@ -313,6 +323,285 @@ void TestPathIntegralNoisyProbability()
             Check(Call(tooWide, false, validate).at("error").at("message").as_string().find("1024") != j::string::npos,
                   "A path integral scalar query did not report its register width limit");
     }
+}
+
+void TestBackendNoisyProbability()
+{
+    const j::array operators{j::array{1, 0, 0, .8}, j::array{0, .6, 0, 0}};
+    const auto external = Channel("kraus", {{"operators", operators}});
+    const auto readout = Channel("readout", {{"p_meas1_prep0", .1}, {"p_meas0_prep1", .3}});
+    // X followed by damping leaves P(1)=.64. With asymmetric readout P(recorded 1)=.484.
+    const auto check = [&](const char *backend, const char *method, bool ensemble) {
+        auto request = Request("noisy_prob", 1, "x q[0];", method);
+        request["simulator"].as_object()["backend"] = backend;
+        request["target_state"] = "1";
+        request["noise"] = j::object{{"channels", j::array{external, readout}}, {"seed", 31}, {"realizations", 512}};
+        Call(request, true, true);
+        const auto result = Call(request);
+        const double probability = Real(result.at("probability")), error = Real(result.at("std_error"));
+        Check(result.at("noise_realizations") == 512 && result.at("realizations_evaluated") == (ensemble ? 1 : 512),
+              "Noisy probability reported the wrong number of evaluations");
+        Check(result.at("execution_metadata").at("estimate_evaluation") == (ensemble ? "deterministic" : "trajectory_average"),
+              "Noisy probability reported the wrong evaluation");
+        if (ensemble)
+        {
+            Near(probability, .484);
+            Near(error, 0.);
+        }
+        else
+        {
+            Check(std::abs(probability - .484) < 5 * error, "Noisy probability missed the ensemble mean");
+            Near(error, std::sqrt((probability - .1) * (.7 - probability) / 511));
+        }
+    };
+    check("qcsim", "statevector", false);
+    check("qcsim", "matrix_product_state", false);
+    check("composite_qcsim", "statevector", false);
+    check("qcsim", "density_matrix", true);
+    check("qcsim", "matrix_product_operator", true);
+    check("qcsim", "pauli_propagator", true);
+#ifndef NO_QISKIT_AER
+    check("aer", "statevector", false);
+    check("aer", "matrix_product_state", false);
+    check("composite_aer", "statevector", false);
+    check("aer", "density_matrix", true);
+#endif
+    auto propagator = Request("state_probability", 1, "x q[0];", "pauli_propagator");
+    propagator["target_state"] = "1";
+    propagator["noise"] = j::object{{"channels", j::array{Channel("t1", {{"gamma", .36}})}}};
+    Near(Real(Call(propagator).at("probability")), .64);
+    propagator["noise"].as_object()["evaluation"] = "trajectories";
+    Call(propagator, false, true);
+
+    for (const auto *operation : {"state_probability", "noisy_prob"})
+    {
+        auto wide = Request(operation, 67, "x q[66];", "matrix_product_state");
+        wide["target_state"] = std::string(66, '0') + "1";
+        Near(Real(Call(wide).at("probability")), 1.);
+    }
+#ifndef NO_QISKIT_AER
+    for (const size_t width : {63, 64})
+    {
+        const auto last = width - 1;
+        auto wide = Request("state_probability", width, "x q[" + std::to_string(last) + "];", "matrix_product_state");
+        wide["simulator"].as_object()["backend"] = "aer";
+        wide["target_state"] = std::string(last, '0') + "1";
+        Near(Real(Call(wide).at("probability")), 1.);
+        wide["operation"] = "noisy_prob";
+        Near(Real(Call(wide).at("probability")), 1.);
+        wide.erase("target_state");
+        wide["basis_states"] = j::array{uint64_t{1} << last, 0};
+        wide["operation"] = "probabilities";
+        const auto selected = Call(wide).at("probabilities").as_array();
+        Near(Real(selected[0]), 1.);
+        Near(Real(selected[1]), 0.);
+        wide.erase("basis_states");
+        Call(wide, false, true);
+    }
+    auto tooWide = Request("noisy_prob", 65, "x q[64];", "matrix_product_state");
+    tooWide["simulator"].as_object()["backend"] = "aer";
+    tooWide["target_state"] = std::string(64, '0') + "1";
+    Call(tooWide, false, true);
+#endif
+}
+
+void TestNoisyProbabilityDelayOrder()
+{
+    const auto x = [](int q) { return j::object{{"name", "x"}, {"qubits", j::array{q}}}; };
+    const auto measure = [](int q) { return j::object{{"name", "measure"}, {"qubits", j::array{q}}, {"clbits", j::array{q}}}; };
+    const auto delay = [](int q) { return j::object{{"name", "delay"}, {"qubits", j::array{q}}, {"duration", 1.}}; };
+    auto query = Request("noisy_prob", 2, "", "density_matrix");
+    query["noise"] = j::object{{"channels", j::array{Channel("idle", {{"t1", 1.}, {"t2", 1.}}, {0, 1})}}};
+    query["target_state"] = "11";
+    query["circuit"] =
+        j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", j::array{x(0), x(1), measure(0), delay(0), measure(1)}}};
+    for (bool validate : {false, true})
+    {
+        const auto error = Call(query, false, validate).at("error").as_object();
+        Check(error.at("code") == "invalid_input" && error.at("message").as_string().find("mid-circuit measurement on qubit 0") != j::string::npos,
+              "Noisy probability accepted idle evolution after readout of the same wire");
+    }
+    // Moving the delay before readout, or delaying the other wire after
+    // readout, applies one T1 of relaxation to exactly one excited qubit.
+    for (const auto &source : {j::array{x(0), x(1), delay(0), measure(0), measure(1)}, j::array{x(0), x(1), measure(0), delay(1), measure(1)}})
+    {
+        query["circuit"].as_object()["source"] = source;
+        Call(query, true, true);
+        Near(Real(Call(query).at("probability")), std::exp(-1.));
+    }
+}
+
+void TestSingleNoisyState()
+{
+    const auto damping = Channel("kraus", {{"operators", j::array{j::array{1, 0, 0, .8}, j::array{0, .6, 0, 0}}}});
+    auto request = Request("state_probability", 1, "x q[0];", "matrix_product_state");
+    request["target_state"] = "1";
+    request["noise"] = j::object{{"channels", j::array{damping}}, {"seed", 51}, {"realizations", 1}};
+    Call(request, false, true); // A one-branch result requires explicit trajectory evaluation.
+    request["noise"].as_object()["evaluation"] = "trajectories";
+    Call(request, true, true);
+    size_t kept = 0;
+    for (uint64_t seed = 1; seed <= 20; ++seed)
+    {
+        request["execution"].as_object()["seed"] = seed;
+        const auto result = Call(request);
+        const double p = Real(result.at("probability"));
+        Check(p < 1e-12 || p > 1. - 1e-12, "A sampled state averaged its Kraus branches");
+        kept += p > .5;
+        const auto &metadata = result.at("execution_metadata").as_object();
+        Check(metadata.at("stochastic_execution").as_bool() && metadata.at("estimate_evaluation") == "single_trajectory" &&
+                  result.at("noise").at("realizations") == 1,
+              "A sampled state omitted its trajectory metadata");
+        auto other = request;
+        other["operation"] = "noisy_prob";
+        Near(Real(Call(other).at("probability")), p);
+        other.erase("target_state");
+        other["operation"] = "probabilities";
+        Near(Real(Call(other).at("probabilities").at(1)), p);
+        other["operation"] = "amplitudes";
+        other["basis_states"] = j::array{1};
+        const auto a = Call(other).at("amplitudes").at(0).as_array();
+        Near(std::pow(Real(a[0]), 2) + std::pow(Real(a[1]), 2), p);
+    }
+    Check(kept > 0 && kept < 20, "Noisy single-state queries reused a Kraus draw across seeds");
+    request["noise"].as_object()["realizations"] = 2;
+    Call(request, false, true);
+    request["noise"].as_object()["realizations"] = 1;
+    request["noise"].as_object()["channels"].as_array().emplace_back(Channel("readout", {{"probability", .1}}));
+    Call(request, false, true);
+}
+
+void TestPauliMeasurementFeedback()
+{
+    auto request = Request("execute", 2, "", "pauli_propagator");
+    // Measure a random bit, copy the recorded value to q1 by classical control,
+    // then invert and remeasure q0. Valid records are (b, b, !b).
+    const j::array ops{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}},
+                       j::object{{"name", "x"}, {"qubits", j::array{1}}, {"conditional_reg", j::array{0}}}, j::object{{"name", "x"}, {"qubits", j::array{0}}},
+                       j::object{{"name", "measure"}, {"qubits", j::array{0, 1}}, {"clbits", j::array{2, 1}}}};
+    request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 3}, {"source", ops}};
+    request["execution"] = j::object{{"shots", 256}, {"seed", 4}};
+    for (const auto *order : {"auto", "written"})
+    {
+        request["simulator"].as_object()["options"] = j::object{{"measurement_order", order}, {"pp_max_pauli_weight", 2}, {"pp_coefficient_threshold", .01}};
+        const auto counts = Call(request).at("counts").as_object();
+        Check(counts.size() == 2 && counts.at("001").to_number<size_t>() + counts.at("110").to_number<size_t>() == 256,
+              "Pauli execution lost measurement feedback or a repeated wire write");
+    }
+    request["simulator"].as_object().at("options").as_object()["measurement_order"] = "unknown";
+    Call(request, false, true);
+}
+
+void TestEntangledChainReadout()
+{
+    const j::object bell{{"format", "instructions"},
+                         {"num_qubits", 6},
+                         {"num_clbits", 6},
+                         {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}}}}};
+    const j::array wires{0, 1, 2, 3, 4, 5}, rest{1, 2, 3, 4, 5};
+    const auto check = [&](const char *backend, const char *method, std::string_view operation, const j::object &options) {
+        const bool measured = operation == "measure";
+        j::object first{{"name", std::string(operation)}, {"qubits", j::array{0}}};
+        if (measured)
+            first["clbits"] = j::array{0};
+        else if (operation == "kraus")
+        {
+            const double keep = std::sqrt(.4), decay = std::sqrt(.6);
+            first["operators"] = j::array{j::array{1, 0, 0, keep}, j::array{0, decay, 0, 0}};
+        }
+        // Qubit 0 is entangled with 1. The rest of the chain copies the Bell
+        // bit after the measurement, damping or reset on 0. Even when these
+        // gates are prepared first, the state needs only rank two (four for MPO).
+        j::array suffix{first};
+        for (size_t q = 1; q < 5; ++q)
+            suffix.push_back(j::object{{"name", "cx"}, {"qubits", j::array{q, q + 1}}});
+        const auto &read = measured ? rest : wires;
+        suffix.push_back(j::object{{"name", "measure"}, {"qubits", read}, {"clbits", read}});
+        std::map<std::string, double> expected{{"000000", .5}};
+        if (measured)
+            expected["111111"] = .5;
+        else if (operation == "reset")
+            expected["011111"] = .5;
+        else
+        {
+            expected["111111"] = .2;
+            expected["011111"] = .3;
+        }
+        for (bool checkpoint : {false, true})
+        {
+            auto request = Request(checkpoint ? "checkpoint_batch" : "execute", 6, "", method);
+            auto &sim = request["simulator"].as_object();
+            sim["backend"] = backend;
+            sim["options"] = options;
+            auto circuit = bell;
+            if (checkpoint)
+            {
+                auto tail = bell;
+                tail["source"] = suffix;
+                request["suffixes"] = j::array{tail};
+            }
+            else
+                for (const auto &op : suffix)
+                    circuit.at("source").as_array().push_back(op);
+            request["circuit"] = circuit;
+            auto &execution = request["execution"].as_object();
+            execution["shots"] = 512;
+            execution["seed"] = 37;
+            for (bool rows : {false, true})
+            {
+                if (rows && checkpoint)
+                    break; // checkpoint_batch exposes suffix counts
+                if (rows)
+                    execution["return_samples"] = true;
+                const auto output = Call(request);
+                const auto &result = checkpoint ? output.at("results").as_array()[0].as_object() : output;
+                std::map<std::string, size_t> counts;
+                if (rows)
+                {
+                    if (measured)
+                        Check(result.at("execution_metadata").at("sampling_strategy") == "terminal_v1", "An entangled terminal readout replayed shots");
+                    for (const auto &row : result.at("samples").as_array())
+                        ++counts[std::string(row.as_string())];
+                }
+                else
+                    for (const auto &entry : result.at("counts").as_object())
+                        counts[std::string(entry.key())] = entry.value().to_number<size_t>();
+                Check(counts.size() == expected.size(), "Entangled chain lost a branch or produced an impossible bit string");
+                for (const auto &[bits, probability] : expected)
+                    Check(std::abs(static_cast<double>(counts.at(bits)) / 512 - probability) < .10, "Entangled readout failed its joint probability");
+                if (!checkpoint && std::string_view(method) == "matrix_product_state")
+                {
+                    const auto key = rows ? "samples" : "counts";
+                    Check(Call(request).at(key) == result.at(key), "An entangled MPS readout failed seeded replay");
+                }
+            }
+        }
+    };
+    for (const char *backend : {"qcsim"
+#ifndef NO_QISKIT_AER
+                                ,
+                                "aer"
+#endif
+         })
+        for (const auto &options : {j::object{{"max_bond_dimension", 2}}, j::object{{"singular_value_threshold", 1e-10}}})
+        {
+            check(backend, "matrix_product_state", "measure", options);
+            check(backend, "matrix_product_state", "kraus", options);
+        }
+    check("qcsim", "matrix_product_state", "reset", {{"max_bond_dimension", 2}});
+    check("qcsim", "matrix_product_operator", "measure", {{"max_bond_dimension", 4}});
+
+    // The earlier classical bit controls q2 and the later X on q0 changes its
+    // second read. Both dependencies must survive preparation and shot replay.
+    auto feedback = Request("execute", 3,
+                            "h q[0]; cx q[0],q[1]; measure q[0] -> c[0]; if(c==1) x q[2]; x q[0]; "
+                            "measure q[1] -> c[1]; measure q[2] -> c[2]; measure q[0] -> c[3];",
+                            "matrix_product_state", 4);
+    feedback["simulator"].as_object()["options"] = j::object{{"singular_value_threshold", 1e-10}};
+    feedback["execution"].as_object()["shots"] = 512;
+    const auto counts = Call(feedback).at("counts").as_object();
+    Check(counts.size() == 2 && counts.contains("0001") && counts.contains("1110") && std::abs(Real(counts.at("1110")) / 512 - .5) < .10,
+          "Chain scheduling changed a classical control or reused a qubit before it was measured");
 }
 
 // Model channels and explicit instructions follow the same Kraus trajectory rules.
@@ -474,7 +763,18 @@ void TestSampledChannelRequests()
             saved["suffixes"].as_array().emplace_back(circuit({measure}));
             result = Call(saved);
             Check(Real(result.at("results").at(1).at("counts").at("11")) == 4096, "A sampled terminal channel overwrote the saved prefix");
-            saved["simulator"].as_object()["options"] = j::object{{"terminal_channel_policy", "trajectories"}};
+
+            saved["simulator"].as_object()["options"] = j::object{{"measurement_order", "written"}};
+            saved["suffixes"] = j::array{circuit({damping, measure}), circuit({damping, j::object{{"name", "x"}, {"qubits", j::array{1}}}, measure})};
+            result = Call(saved);
+            const auto &tails = result.at("results").as_array();
+            Check(tails[0].at("sampling_strategy") == "terminal_v1" && damped(tails[0].at("counts")), "Written order replayed terminal damping");
+            const auto &flipped = tails[1].at("counts").as_object();
+            Check(tails[1].at("sampling_strategy") == "trajectory_v1" && flipped.size() == 2 && flipped.contains("00") &&
+                      std::abs(Real(flipped.at("10")) / 4096 - 0.7) < .04,
+                  "Written order moved damping past a gate on another wire");
+
+            saved["simulator"].as_object().at("options").as_object()["terminal_channel_policy"] = "trajectories";
             result = Call(saved);
             Check(result.at("results").at(0).at("sampling_strategy") == "trajectory_v1" && damped(result.at("results").at(0).at("counts")),
                   "Checkpoint counts did not honor explicit trajectory sampling");
@@ -1429,6 +1729,93 @@ void TestFrameSamplerHandle()
     Check(!compile(automatic("stabilizer"), flip, "unsupported_capability"), "Frames accepted noise without fixed selection");
 }
 
+void TestCliffordPhaseFrames()
+{
+    const double pi = std::acos(-1.);
+    const auto gate = [](const char *name, int qubit) { return j::object{{"name", name}, {"qubits", j::array{qubit}}}; };
+    const auto measure = [](int qubit) { return j::object{{"name", "measure"}, {"qubits", j::array{qubit}}, {"clbits", j::array{qubit}}}; };
+    const auto execute = [&](j::array source, size_t qubits) {
+        auto request = Request("execute", qubits, "", "stabilizer");
+        request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", qubits}, {"num_clbits", qubits}, {"source", std::move(source)}};
+        request["simulator"].as_object()["options"] = j::object{{"counts_policy", "frame_v1"}};
+        return request;
+    };
+
+    struct Phase
+    {
+        const char *name;
+        double angle;
+        const char *equivalent;
+    };
+
+    for (const Phase phase : {Phase{"p", 0, ""},
+                              {"p", pi / 2, "s"},
+                              {"p", pi, "z"},
+                              {"p", -pi / 2, "sdg"},
+                              {"p", -pi, "z"},
+                              {"p", 2 * pi, ""},
+                              {"p", pi / 2 + 5e-11, "s"},
+                              {"u1", 3 * pi / 2, "sdg"},
+                              {"id", 0, ""}})
+    {
+        // Measure X for I/Z or Y for S/Sdg to distinguish the phase on |+>.
+        // A second qubit supplies random bits to compare the seeded streams.
+        j::array source{gate("h", 0)};
+        auto phaseGate = gate(phase.name, 0);
+        if (std::string_view(phase.name) != "id")
+            phaseGate["params"] = j::array{phase.angle};
+        source.push_back(phaseGate);
+        if (std::string_view(phase.equivalent) == "s" || std::string_view(phase.equivalent) == "sdg")
+            source.push_back(gate("sdg", 0));
+        source.push_back(gate("h", 0));
+        source.push_back(gate("h", 1));
+        source.push_back(measure(0));
+        source.push_back(measure(1));
+        auto request = execute(source, 2);
+        if (*phase.equivalent)
+            source[1] = gate(phase.equivalent, 0);
+        else
+            source.erase(source.begin() + 1);
+        auto named = execute(std::move(source), 2);
+        const auto counts = Call(request);
+        Check(counts.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && counts.at("counts") == Call(named).at("counts"),
+              "Clifford phase frame counts differ from the named gate");
+        request["execution"].as_object()["return_samples"] = true;
+        named["execution"].as_object()["return_samples"] = true;
+        const auto rows = Call(request);
+        Check(rows.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && rows.at("samples") == Call(named).at("samples"),
+              "Clifford phase frame rows differ from the named gate");
+
+        const auto input = j::serialize(j::object{{"schema_version", 2}, {"circuit", request.at("circuit")}});
+        void *sampler = MaestroCreateReferenceFrameSampler(input.c_str(), nullptr);
+        Check(sampler != nullptr, "The reference frame handle refused a Clifford phase");
+        const auto expected = Rows(rows);
+        std::vector<unsigned long long> packed(expected.size());
+        const bool sampled = MaestroReferenceFrameSampleBits(sampler, packed.size(), request.at("execution").at("seed").to_number<uint64_t>(), packed.data(),
+                                                             packed.size()) == 1;
+        MaestroDestroyReferenceFrameSampler(sampler);
+        Check(sampled, "The reference frame handle failed to sample a Clifford phase");
+        for (size_t shot = 0; shot < packed.size(); ++shot)
+            Check(packed[shot] == (expected[shot][0] - '0') + 2ULL * (expected[shot][1] - '0'), "Packed Clifford phase rows differ from execute");
+    }
+
+    auto outside =
+        execute({gate("h", 0), j::object{{"name", "p"}, {"qubits", j::array{0}}, {"params", j::array{pi / 2 + 2e-10}}}, gate("h", 0), measure(0)}, 1);
+    outside["simulator"] = j::object{
+        {"selection", "automatic"},
+        {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}}}};
+    Check(Call(outside).at("execution_metadata").at("method") == "statevector", "Out-of-tolerance phase did not fall back to the statevector");
+    const auto nonClifford = j::serialize(j::object{{"schema_version", 2}, {"circuit", outside.at("circuit")}, {"simulator", outside.at("simulator")}});
+    Check(MaestroCreateReferenceFrameSampler(nonClifford.c_str(), nullptr) == nullptr, "The reference frame handle rounded a non-Clifford phase");
+
+    // The original identity is a physical gate location for the noise model.
+    auto noisy = execute({gate("id", 0), measure(0)}, 1);
+    noisy["noise"] = j::object{{"mode", "pauli"}, {"realizations", 80}, {"channels", j::array{Channel("bit_flip", {{"probability", 1}})}}};
+    const auto result = Call(noisy);
+    Check(result.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1" && result.at("counts") == j::object{{"1", 80}},
+          "Reference frames dropped gate noise on an identity");
+}
+
 // Rows honor automatic selection and candidate lists as counts do, and packed
 // noisy rows are the JSON rows of the same request.
 void TestRowSelection()
@@ -1911,9 +2298,12 @@ void TestAutomaticMixedStateNoise()
     FreeResult(catalogText);
     const j::object pathIntegral{{"backend", "qcsim"}, {"method", "path_integral"}};
     const auto &channelSamplers = catalog.at("noise").at("sampled_channel_configurations").as_array();
-    Check(std::find(channelSamplers.begin(), channelSamplers.end(), j::value(pathIntegral)) != channelSamplers.end() &&
-              catalog.at("noisy_prob").at("supported_configurations") == j::array{pathIntegral},
+    Check(std::find(channelSamplers.begin(), channelSamplers.end(), j::value(pathIntegral)) != channelSamplers.end(),
           "Path integral channel capabilities missing from discovery");
+    const auto &probabilities = catalog.at("noisy_prob").at("supported_configurations").as_array();
+    for (const auto *family : {"sampled_channel_configurations", "exact_configurations"})
+        for (const auto &pair : catalog.at("noise").at(family).as_array())
+            Check(std::find(probabilities.begin(), probabilities.end(), pair) != probabilities.end(), "Noisy probability missing for a channel backend");
     Check(catalog.at("noise").at("realizations").at("accepts") == j::array{"positive_integer", "null", "auto"} &&
               catalog.at("noise").at("checkpoint_prefix").at("field") == "prefix" && !catalog.at("noise").at("exact_configurations").as_array().empty(),
           "Capabilities omit the noise realization policy");
@@ -2654,6 +3044,7 @@ void TestRequestNoiseAndOptions()
     TestPauliPropagatorExactNoise();
     TestShotRows();
     TestFrameSamplerHandle();
+    TestCliffordPhaseFrames();
     TestRowSelection();
     TestLegacyCountsPolicy();
     TestMultinomialCountReplay();
@@ -2661,6 +3052,11 @@ void TestRequestNoiseAndOptions()
     TestRoutedCheckpointSuffixes();
     TestThermalApproximation();
     TestPathIntegralNoisyProbability();
+    TestBackendNoisyProbability();
+    TestNoisyProbabilityDelayOrder();
+    TestSingleNoisyState();
+    TestEntangledChainReadout();
+    TestPauliMeasurementFeedback();
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();
     TestDeterministicChannelInstructions();

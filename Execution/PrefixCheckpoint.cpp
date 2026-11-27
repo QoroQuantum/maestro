@@ -19,7 +19,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
     if (given && num_qubits <= 0)
         num_qubits_ = std::max(1, static_cast<int>(given->GetMaxQubitIndex()) + 1);
     // What runs is the prefix without its end measurements (ExecutedCheckpointPrefix).
-    const RecordCircuitPtr prefix = ExecutedCheckpointPrefix(given);
+    const RecordCircuitPtr prefix = ExecutedCheckpointPrefix(given, config_);
     // The simulator is created explicitly below: resolve a candidate list to the
     // one backend it creates, so suffix noise policy and metadata describe it.
     // Probing several candidates already configures the network built below,

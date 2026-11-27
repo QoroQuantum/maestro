@@ -45,7 +45,7 @@ for more physical detail:
 | `full_noise_estimate` | N noisy runs | Every configured noise layer | Device-level expectation values |
 | `full_noise_execute` | N noisy runs | Every configured noise layer, plus shot noise | Device-level sampling |
 | `noisy_fidelity` | N inner products | Every noise layer | Fidelity to the ideal state |
-| `qc.noisy_prob` | Path integral | Sampled circuit and model noise, first-order readout correction | Single-outcome probabilities |
+| `qc.noisy_prob` | Channel-capable simulators | Ensemble channels or trajectories, first-order readout correction | Single-outcome probabilities |
 
 N is the effective `noise_realizations`. Its default, `None`, selects one
 realization for deterministic density-matrix/MPO evolution, and for Pauli-type
@@ -381,11 +381,13 @@ the QCSim path integral and the composite statevector, in the execute and estima
   operations that read them. When every two-qubit gate and channel of a circuit
   acts on neighbouring qubits, so that nothing has to be routed, the QCSim
   matrix product state runs the operations in an order that stays close along
-  the chain. Operations on different qubits commute, so it is the same circuit;
-  only the order in which the channels draw their branches changes, and with it
-  a seeded trajectory, not the distribution. The QCSim matrix product operator
-  does the same for its exact channels: there the result is the same up to
-  truncation, which acts in another order. A circuit laid out on a line of a
+  the chain. The QCSim matrix product operator also schedules its ensemble
+  channels this way. The order preserves the operations on each wire. In
+  exact arithmetic it preserves the joint distribution, although a seeded
+  trajectory can draw different branches. A finite bond cap or singular-value
+  cutoff can discard different terms when the schedule changes. The same
+  truncation settings apply to circuit channels and model-injected errors.
+  A circuit laid out on a line of a
   device counts as well, although the indices of its qubits are not in order:
   when the two-qubit operations give every qubit at most two partners and close
   no ring, the qubits are placed along the lines they form, which needs no
@@ -534,11 +536,12 @@ suffixes. The prefix's own channel instructions follow the same rule: the
 channel-sampling methods would draw one branch of them for every
 suffix shot to share, so a prefix that holds channel instructions with a branch
 to draw raises `ValueError` there; put those channels in the suffixes. A channel
-with one branch is a gate and may stay in the prefix. Only suffixes are sampled,
-so a prefix runs without its end measurements: one that is a whole program, as
-a circuit parsed from OpenQASM is, does not collapse the saved state. A
-measurement that later operations of the prefix follow or read runs, and
-collapses once for every suffix shot. Dynamic checkpoint suffixes evolve their deterministic head once per
+with one branch is a gate and may stay in the prefix. Only suffixes are sampled.
+With `measurement_order="auto"`, a prefix drops end measurements on wires whose
+quantum state and recorded bit it no longer uses. With `"written"`, the prefix
+drops only its trailing measurements, ignoring barriers and no-op placeholders. A measurement before a
+gate on another wire then collapses the saved state once for all suffix shots.
+Dynamic checkpoint suffixes evolve their deterministic head once per
 realization when all four retained states (the checkpoint's live state and saved
 prefix, the copy and its saved head) fit `trajectory_max_memory_mb`, then replay
 only their branches.
@@ -592,7 +595,8 @@ print(bell.noisy_prob("11", readout)["probability"])  # 0.5 * (1 - 0.06)**2
 flips away from `"11"`, such as `"00"`, don't contribute.
 
 For circuit channels or gate noise, `noisy_prob` averages the target probability
-over trajectories. For example, damping an excited qubit with probability 0.36
+over trajectories on pure-state simulators. Density matrices, MPOs and the QCSim
+Pauli propagator can read the ensemble result directly. Damping an excited qubit with probability 0.36
 gives a mean probability of 0.64 for `"1"`.
 
 ```{code-cell} python
@@ -601,13 +605,24 @@ decay.x(0)
 decay.channel([0], maestro.QuantumChannel.amplitude_damping(0.36))
 result = decay.noisy_prob("1", maestro.NoiseModel(), noise_realizations=1000, seed=7)
 print(result["probability"], result["std_error"])
+# Read the same probability directly from a density matrix.
+config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix)
+exact = decay.noisy_prob("1", maestro.NoiseModel(), config=config)
+print(exact["probability"], exact["realizations_evaluated"])  # 0.64, 1
 ```
 
 `qc.noisy_prob` and `maestro.noisy_prob` accept an optional `mode`.
 The default `"combined"` accepts all external gate noise. Use `"pauli"` for
 per-qubit Pauli noise or `"coherent"` for coherent rotations. Each checks
 that the supplied model contains only the selected gate noise family. Circuit
-channels and independent readout error apply in every mode.
+channels and independent readout error apply in every mode. The optional
+`evaluation` argument accepts `"auto"` (default), `"exact"`, or `"trajectories"`.
+Exact evaluation requires an ensemble backend. With no `config`, both functions
+continue to use QCSim path integral.
+
+In a circuit passed to `noisy_prob`, place an idle delay before the measurement
+of its qubit. A delay on a previously measured qubit is rejected because its
+noise would act after the recorded result. Delays on other qubits can continue.
 
 `noise_realizations` gives the scheduled count and `realizations_evaluated`
 counts the realizations actually evaluated. An ideal or readout-only query

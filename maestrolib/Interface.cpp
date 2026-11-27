@@ -160,10 +160,25 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
     {
         std::string policy = "shot_v1";
         std::string terminal_policy = "auto";
+        std::string measurementOrder = "auto";
+        bool optimizeCircuit = true;
         uint64_t workers = 0;
         uint64_t memoryMb = 1024;
         if (config.is_object())
         {
+            if (const auto *value = config.as_object().if_contains("optimize_circuit"))
+            {
+                if (!value->is_bool())
+                    return false;
+                optimizeCircuit = value->as_bool();
+            }
+            if (const auto *value = config.as_object().if_contains("measurement_order"))
+            {
+                if (!value->is_string())
+                    return false;
+                measurementOrder = std::string(value->as_string());
+                Simulators::IsWrittenMeasurementOrder(measurementOrder);
+            }
             if (const auto *value = config.as_object().if_contains("terminal_channel_policy"))
             {
                 if (!value->is_string())
@@ -210,6 +225,8 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
         network.Configure("trajectory_max_memory_mb", std::to_string(memoryMb).c_str());
         network.Configure("trajectory_policy", policy.c_str());
         network.Configure("terminal_channel_policy", terminal_policy.c_str());
+        network.Configure("measurement_order", measurementOrder.c_str());
+        network.Configure("optimize_circuit", optimizeCircuit ? "true" : "false");
         return true;
     }
     catch (const std::exception &)

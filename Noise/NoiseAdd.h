@@ -377,7 +377,9 @@ class NoiseAdd
     {
         if (requested && *requested <= 0)
             throw std::invalid_argument("noise_realizations must be positive");
-        const auto config = ExecutionBackends(network);
+        auto config = ExecutionBackends(network);
+        if (const auto simulator = network->GetSimulator())
+            config.native_options = simulator->GetExplicitConfigMap();
         // Only a simple network runs the channel instructions a realization
         // may keep for a backend that samples them (IsSimpleNetwork).
         return MaestroExecution::ResolveNoiseRealizations(requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt, model, config,

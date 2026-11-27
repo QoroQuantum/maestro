@@ -230,6 +230,120 @@ def test_raw_terminal_measurements_draw_rows_from_one_prepared_state(method):
     assert not np.array_equal(rows, circuit.execute(config=config, shots=4000, return_samples=True)["samples"])
 
 
+@pytest.mark.parametrize("backend,options", [
+    ("QCSim", {"singular_value_threshold": 1e-10}),
+    ("QiskitAer", {"max_bond_dimension": 2}),
+])
+def test_isolated_mps_readout_preserves_joint_distribution_and_seeded_rows(backend, options):
+    backend_type = getattr(maestro.SimulatorType, backend, None)
+    if backend_type is None:
+        pytest.skip(f"{backend} is not compiled in")
+    circuit = QuantumCircuit()
+    circuit.ry(0, 0.79)
+    circuit.measure([(0, 2)])
+    circuit.ry(1, 1.13)
+    for q in range(1, 4):
+        circuit.cx(q, q + 1)
+    circuit.measure([(1, 4), (2, 3), (3, 1), (4, 0)])
+
+    # The isolated bit and the GHZ branch are independent. Both have biased
+    # marginals, so a readout layout error also changes the joint distribution.
+    a, b = math.sin(0.79 / 2) ** 2, math.sin(1.13 / 2) ** 2
+    expected = {"00000": (1 - a) * (1 - b), "00100": a * (1 - b),
+                "11011": (1 - a) * b, "11111": a * b}
+    shots = 2048
+    cfg = maestro.SimulatorConfig(simulator_type=backend_type, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=71, max_simulators=1, **options)
+    first = circuit.execute(config=cfg, shots=shots, return_samples=True)
+    assert first["sampling_strategy"] == "terminal_v1"
+    rows = _records(first, shots, 5)
+    counts = Counter("".join(map(str, row)) for row in rows)
+    assert set(counts) == set(expected)
+    for bits, probability in expected.items():
+        assert counts[bits] / shots == pytest.approx(probability, abs=0.035)
+    first_counts = circuit.execute(config=cfg, shots=shots)["counts"]
+    assert set(first_counts) == set(expected)
+    for bits, probability in expected.items():
+        assert first_counts[bits] / shots == pytest.approx(probability, abs=0.035)
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=shots, return_samples=True)["samples"])
+    assert first_counts == circuit.execute(config=cfg, shots=shots)["counts"]
+
+
+@pytest.mark.parametrize("backend,width,cap", [
+    ("QCSim", 12, 4), ("QCSim", 16, 64), ("QiskitAer", 12, 4),
+])
+def test_isolated_mps_readout_before_routed_gates(backend, width, cap):
+    backend_type = getattr(maestro.SimulatorType, backend, None)
+    if backend_type is None:
+        pytest.skip(f"{backend} is not compiled in")
+    # A long-range gate on other wires routes across the isolated logical site.
+    mid = width // 2
+    sites = [q for q in range(width) if q != mid]
+    circuit = QuantumCircuit()
+    circuit.x(mid)
+    circuit.measure([(mid, mid)])
+    circuit.ry(0, 1.19)
+    for a, b in zip(sites, sites[1:]):
+        circuit.cx(a, b)
+    circuit.measure([(q, q) for q in sites])
+    cfg = maestro.SimulatorConfig(simulator_type=backend_type, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=301, max_simulators=1, max_bond_dimension=cap)
+    result = circuit.execute(config=cfg, shots=769, return_samples=True)
+    assert result["sampling_strategy"] == "terminal_v1"
+    rows = _records(result, 769, width)
+    assert np.all(rows[:, mid] == 1)
+    assert np.all(rows[:, sites] == rows[:, :1])
+    assert rows[:, 0].mean() == pytest.approx(math.sin(1.19 / 2) ** 2, abs=0.06)
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=769, return_samples=True)["samples"])
+
+
+@pytest.mark.parametrize("algorithm,readout", [
+    ("apply_measure", "full"), ("probabilities", "subset"), ("probabilities", "overwritten"),
+])
+@pytest.mark.parametrize("order", ["auto", "written"])
+def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, readout, order):
+    aer = getattr(maestro.SimulatorType, "QiskitAer", None)
+    if aer is None:
+        pytest.skip("Aer is not compiled in")
+    circuit = QuantumCircuit()
+    circuit.ry(0, 1.13)
+    for q in range(5):
+        circuit.cx(q, q + 1)
+    circuit.x(3)
+    if readout == "subset":
+        # Aer samples a subset per shot even with the probabilities setting.
+        # The omitted sites, including q0 and q1, control the measured sites.
+        destinations = [(5, 5), (3, 1), (2, 4)]
+        excited = "000011"
+    else:
+        if readout == "overwritten":
+            # All six sites are measured and all six bits are written. Q3
+            # overwrites q0's only destination.
+            circuit.measure([(0, 1), (2, 2)])
+        else:
+            circuit.measure([(0, 2)])
+        destinations = [(1, 0), (2, 4), (3, 1), (4, 3), (5, 5)]
+        excited = "101111"
+    circuit.measure(destinations)
+    cfg = maestro.SimulatorConfig(simulator_type=aer, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=73, max_simulators=1, mps_sampling=algorithm, measurement_order=order)
+    shots = 1025  # Four complete logical batches and a one-shot tail.
+    raw = circuit.execute(config=cfg, shots=shots, return_samples=True)
+    assert raw["sampling_strategy"] == "terminal_v1"
+    rows = _records(raw, shots, 6)
+    counts = circuit.execute(config=cfg, shots=shots)["counts"]
+    for histogram in (counts, Counter("".join(map(str, row)) for row in rows)):
+        assert sum(histogram.values()) == shots
+        assert set(histogram) == {"010000", excited}
+        assert histogram[excited] / shots == pytest.approx(math.sin(1.13 / 2) ** 2, abs=0.06)
+
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=shots, return_samples=True)["samples"])
+    assert counts == circuit.execute(config=cfg, shots=shots)["counts"]
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])
 def test_raw_terminal_readout_is_drawn_per_row(method):
     circuit = QuantumCircuit()
@@ -492,18 +606,27 @@ def test_terminal_mps_logical_batches_replay_across_workers(return_samples, read
             assert sum(result.values()) == shots
 
 
-@pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector])
-def test_raw_readout_flip_precedes_classical_control(method):
+@pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector,
+                                    maestro.SimulationType.PauliPropagator])
+@pytest.mark.parametrize("measurement_order", ["auto", "written"])
+def test_raw_readout_flip_precedes_classical_control(method, measurement_order):
     circuit = maestro.QasmToCirc().parse_and_translate(
         "OPENQASM 3.0; qubit[2] q; bit[4] c; "
         "x q[1]; c[0] = measure q[0]; if (c[0]) { x q[1]; } c[3] = measure q[1];")
     model = maestro.NoiseModel()
     model.set_readout_error_symmetric(0, 1.0)
+    config = _config(method, workers=4)
+    config.measurement_order = measurement_order
     rows = _records(circuit.noisy_execute(
-        model, config=_config(method, workers=4), shots=71, noise_realizations=71,
+        model, config=config, shots=71, noise_realizations=71,
         noise_seed=3, return_samples=True), 71, 4)
     np.testing.assert_array_equal(rows, np.tile([1, 0, 0, 0], (71, 1)))
-    clean = circuit.execute(config=_config(method), shots=7, return_samples=True)["samples"]
+    checkpoint = maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 2, config)
+    suffix = dict(shots=71, noise_model=model, noise_realizations=71, noise_seed=3, num_measurements=4)
+    saved = checkpoint.execute_suffix(circuit, return_samples=True, **suffix)
+    np.testing.assert_array_equal(_records(saved, 71, 4), rows)
+    assert checkpoint.execute_suffix(circuit, **suffix)["counts"] == {"1000": 71}
+    clean = circuit.execute(config=config, shots=7, return_samples=True)["samples"]
     np.testing.assert_array_equal(clean, np.tile([0, 0, 0, 1], (7, 1)))
 
 
@@ -574,6 +697,41 @@ def test_public_reference_frame_sampler_reuses_one_compilation():
         sampler.sample(-1)
     # A noiseless Clifford circuit compiles without a model.
     assert maestro.compile_reference_sampler(circuit) is not None
+
+
+@pytest.mark.parametrize("angle,named_gate", [
+    (0.0, None), (math.pi / 2, "s"), (-math.pi, "z"),
+    (3 * math.pi / 2, "sdg"), (math.pi / 2 + 5e-11, "s"),
+])
+def test_compiled_reference_frames_replay_clifford_phases(angle, named_gate):
+    def prepare(use_phase):
+        circuit = QuantumCircuit()
+        circuit.h(0)
+        circuit.cx(0, 1)
+        if use_phase:
+            circuit.p(0, angle)
+        elif named_gate is not None:
+            getattr(circuit, named_gate)(0)
+        circuit.h(0)
+        circuit.h(1)
+        circuit.measure_all()
+        return circuit
+
+    phase, named = prepare(True), prepare(False)
+    actual, expected = maestro.compile_reference_sampler(phase), maestro.compile_reference_sampler(named)
+    shots, seed = 257, 17
+    rows = actual.sample(shots, seed=seed)
+    assert rows["sampling_strategy"] == "reference_frame_v1"
+    np.testing.assert_array_equal(rows["samples"], expected.sample(shots, seed=seed)["samples"])
+    expected_counts = expected.sample_counts(shots, seed=seed)["counts"]
+    assert actual.sample_counts(shots, seed=seed)["counts"] == expected_counts
+    config = maestro.SimulatorConfig(seed=seed, optimization_candidates=[
+        (maestro.SimulatorType.QCSim, maestro.SimulationType.Statevector),
+        (maestro.SimulatorType.QCSim, maestro.SimulationType.Stabilizer),
+    ])
+    result = phase.execute(config=config, shots=shots)
+    assert result["sampling_strategy"] == "reference_frame_v1"
+    assert result["counts"] == expected_counts
 
 
 def test_public_reference_frame_sampler_rejects_what_frames_cannot_represent():

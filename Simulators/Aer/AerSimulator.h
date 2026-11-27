@@ -96,7 +96,7 @@ class AerSimulator : public AerState
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
         if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("P gate not supported in stabilizer simulation");
+            return ApplyCliffordPhase(qubit, lambda);
 
         const Types::qubits_vector qubits = {qubit};
 
@@ -1064,7 +1064,16 @@ class AerSimulator : public AerState
         auto localSavedExtendedStabilizerState = savedExtendedStabilizerState;
 
         // now the tricky part
-        if (state && state->is_initialized())
+        if (simulationType == SimulationType::kMatrixProductState)
+        {
+            // Saved tensors are read-only after publication. The clone needs its own live tensors and can share the checkpoint.
+            sim->savedMps = savedMps;
+            if (state && state->is_initialized())
+                sim->RestoreMatrixProductState(state->matrix_product_register());
+            else if (savedMps)
+                sim->RestoreMatrixProductState(*savedMps);
+        }
+        else if (state && state->is_initialized())
         {
             SaveState(); // this also restores the state if it's destroyed in the
                          // saving process!

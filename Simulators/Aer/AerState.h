@@ -222,6 +222,12 @@ class AerState : public ISimulator
     {
         if (!key || !value)
             throw std::invalid_argument("Null Aer configuration");
+        // The Maestro shot planner consumes this option before calling Aer.
+        if (std::string_view(key) == "measurement_order")
+        {
+            configuration.SetConfiguration(key, value);
+            return;
+        }
         if (std::string(key) == "precision" || std::string(key) == "use_double_precision")
         {
             const bool useDouble = Configuration::ParsePrecision(key, value);
@@ -777,6 +783,38 @@ class AerState : public ISimulator
         return Amplitude(0);
     }
 
+    std::complex<double> DensityMatrixTrace() const override
+    {
+        return state->reduced_density_matrix({})(0, 0);
+    }
+
+    double DensityMatrixPurity() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return rho.squaredNorm(); });
+    }
+
+    std::complex<double> DensityMatrixTraceOfSquare() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return rho.cwiseProduct(rho.transpose()).sum(); });
+    }
+
+    double DensityMatrixHermiticityResidual() const override
+    {
+        return state->read_density_matrix([](const auto &rho) { return (rho - rho.adjoint()).norm(); });
+    }
+
+    bool IsDensityMatrixHermitian(double eps = 1e-10) const override
+    {
+        return DensityMatrixHermiticityResidual() < eps;
+    }
+
+    Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override
+    {
+        const auto reduced = state->reduced_density_matrix(AER::reg_t(qubits.begin(), qubits.end()));
+        using ColumnMajorMatrix = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
+        return Eigen::Map<const ColumnMajorMatrix>(reduced.data(), reduced.GetRows(), reduced.GetColumns());
+    }
+
     /**
      * @brief Returns the probabilities of all possible outcomes.
      *
@@ -1038,7 +1076,12 @@ class AerState : public ISimulator
      */
     void SaveStateToInternalDestructive() override
     {
-        if (simulationType == SimulationType::kDensityMatrix)
+        if (simulationType == SimulationType::kMatrixProductState)
+        {
+            SaveState();
+            Clear();
+        }
+        else if (simulationType == SimulationType::kDensityMatrix)
             savedDensityMatrix = state->move_to_matrix();
         else
             savedAmplitudes = state->move_to_vector();
@@ -1052,6 +1095,11 @@ class AerState : public ISimulator
      */
     void RestoreInternalDestructiveSavedState() override
     {
+        if (simulationType == SimulationType::kMatrixProductState)
+        {
+            RestoreState();
+            return;
+        }
         if (simulationType == SimulationType::kDensityMatrix)
         {
             const size_t numQubits = static_cast<size_t>(log2(savedDensityMatrix.GetRows()));
@@ -1073,12 +1121,20 @@ class AerState : public ISimulator
      */
     void SaveState() override
     {
-        if (!state)
+        if (!state || (simulationType == SimulationType::kMatrixProductState && !state->is_initialized()))
             return;
         savedPendingDeviation = pendingDeviation;
         normSaved = true;
 
         const auto numQubits = GetNumberOfQubits();
+
+        if (simulationType == SimulationType::kMatrixProductState)
+        {
+            // Aer's exported MPS sorts the sites into logical order. Those SWAPs can truncate a capped bond.
+            // Copy the native tensors and their logical-to-site map without applying any gates.
+            savedMps = std::make_shared<AER::MatrixProductState::MPS>(state->matrix_product_register());
+            return;
+        }
 
         if (simulationType == SimulationType::kExtendedStabilizer)
         {
@@ -1095,8 +1151,6 @@ class AerState : public ISimulator
                 InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
             return;
         }
-
-        bool saved = false;
 
         if (state->is_initialized())
         {
@@ -1117,10 +1171,7 @@ class AerState : public ISimulator
             AER::ExperimentResult &last_result = state->last_result();
             // state should be in last_result.data
             if (last_result.status == AER::ExperimentResult::Status::completed)
-            {
                 savedState = std::move(last_result.data);
-                saved = true;
-            }
         }
         else
         {
@@ -1128,19 +1179,8 @@ class AerState : public ISimulator
             AER::ExperimentResult &last_result_prev = state->last_result();
             // state should be in last_result.data
             if (last_result_prev.status == AER::ExperimentResult::Status::completed)
-            {
                 savedState = std::move(last_result_prev.data);
-                saved = true;
-            }
         }
-
-        // this is a hack, for statevector and matrix product state if the last op
-        // is executed, it can destroy the state! see also the workaround for
-        // statevector for the stabilizer at least for now it doesn't seem to do
-        // that
-        // TODO: check everything!!!!
-        if (saved && simulationType == SimulationType::kMatrixProductState)
-            RestoreState();
     }
 
     /**
@@ -1196,25 +1236,10 @@ class AerState : public ISimulator
             state->restore_extended_stabilizer_state(savedExtendedStabilizerState);
             return;
         case SimulationType::kMatrixProductState:
-            op.type = AER::Operations::OpType::set_mps;
-            op.name = "set_mps";
-            op.mps = static_cast<AER::DataMap<AER::SingleData, AER::mps_container_t>>(savedState).value()["s"].value();
-
-            /*
-            {
-                    auto& value = static_cast<AER::DataMap<AER::SingleData,
-            AER::mps_container_t>>(savedState).value(); if (!value.empty())
-                    {
-                            if (value.find("s") != value.end())
-                                    op.mps = value["s"].value();
-                            else if (value.find("matrix_product_state") !=
-            value.end()) op.mps = value["matrix_product_state"].value();
-                    }
-            }
-            */
-
-            numQubits = op.mps.first.size();
-            break;
+            if (!savedMps)
+                throw std::runtime_error("AerState::RestoreState: no matrix product state was saved");
+            RestoreMatrixProductState(*savedMps);
+            return;
         case SimulationType::kStabilizer:
             op.type = AER::Operations::OpType::set_stabilizer;
             op.name = "set_stabilizer";
@@ -1271,6 +1296,14 @@ class AerState : public ISimulator
         if (simulationType == SimulationType::kDensityMatrix)
             throw std::runtime_error("AerState::AmplitudeRaw is not defined for density matrix "
                                      "simulation");
+
+        if (simulationType == SimulationType::kMatrixProductState && savedMps)
+        {
+            const auto qubits = savedMps->num_qubits();
+            if (qubits == 0 || (qubits < std::numeric_limits<Types::qubit_t>::digits && (outcome >> qubits) != 0))
+                throw std::out_of_range("AerState::AmplitudeRaw: basis state " + std::to_string(outcome) + " is not in the saved state");
+            return savedMps->get_amplitude_vector({outcome})[0];
+        }
 
         // Read from the destructively saved amplitudes: the state itself, and so its qubit count, is gone.
         if (outcome >= savedAmplitudes.size())
@@ -1423,6 +1456,17 @@ class AerState : public ISimulator
     }
 
   protected:
+    void RestoreMatrixProductState(const AER::MatrixProductState::MPS &snapshot)
+    {
+        if (!state->is_initialized() || GetNumberOfQubits() != snapshot.num_qubits())
+        {
+            Clear();
+            AllocateQubits(snapshot.num_qubits());
+            Initialize();
+        }
+        state->matrix_product_register().initialize(snapshot);
+    }
+
     void InitializeStatevectorBuffer(size_t numQubits, std::complex<double> *amplitudes)
     {
         RequireStatevectorMethod();
@@ -1778,6 +1822,8 @@ class AerState : public ISimulator
     bool normSaved = false;                 /**< Whether SaveState has run. */
     AER::cmatrix_t savedDensityMatrix;      /**< The density matrix, saved. */
     std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
+    // Aer's get_amplitude_vector is non-const, but contracts only local temporaries. Clones can read this checkpoint concurrently.
+    std::shared_ptr<AER::MatrixProductState::MPS> savedMps;
 
     bool enableMultithreading = true; /**< The multithreading flag. */
     AER::Data savedState;             /**< The saved data - here there will be the saved state

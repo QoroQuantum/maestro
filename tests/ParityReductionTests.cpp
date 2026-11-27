@@ -20,7 +20,7 @@ void Check(bool value, const char *message)
         throw std::runtime_error(message);
 }
 
-void CheckCliffordParityReduction(const SimulatorConfig &config, bool dual, bool inverseCheck, bool inverseMixer)
+void CheckCliffordParityReduction(const SimulatorConfig &config, bool dual, bool inverseCheck, bool inverseMixer, bool continuousPhase = false)
 {
     auto source = std::make_shared<Circuit>();
     if (!dual)
@@ -38,8 +38,17 @@ void CheckCliffordParityReduction(const SimulatorConfig &config, bool dual, bool
     source->AddOperation(cnot);
     source->AddOperation(Factory::CreateGate(negativeCheck, 1));
     source->AddOperation(cnot);
-    source->AddOperation(Factory::CreateGate(inverseCheck ? negativeCheck : positiveCheck, 1));
-    source->AddOperation(Factory::CreateGate(inverseMixer ? negativeMixer : positiveMixer, 0));
+    const double angle = std::acos(-1.) / 2. + 5e-11;
+    // The physical phase projects to a logical XX check, or to a ZZ mixer
+    // in the dual circuit. Exercise the full parity ladder on both backends.
+    if (continuousPhase && !dual)
+        source->AddOperation(Factory::CreateGate(Gate::kPhaseGateType, 1, 0, 0, angle));
+    else
+        source->AddOperation(Factory::CreateGate(inverseCheck ? negativeCheck : positiveCheck, 1));
+    if (continuousPhase && dual)
+        source->AddOperation(Factory::CreateGate(Gate::kPhaseGateType, 0, 0, 0, angle));
+    else
+        source->AddOperation(Factory::CreateGate(inverseMixer ? negativeMixer : positiveMixer, 0));
     source->AddOperation(Factory::CreateGate(Gate::kCZGateType, 0, 1));
 
     std::vector<std::string> physicalObservables{"IIZ"};
@@ -61,10 +70,13 @@ void CheckCliffordParityReduction(const SimulatorConfig &config, bool dual, bool
         input->Execute(simulator, bits);
         return simulator->ExpectationValues(paulis);
     };
-    const auto expected = execute(source, 3, Simulators::SimulationType::kStatevector, physicalObservables);
-    const auto actual = execute(circuit, 2, Simulators::SimulationType::kStabilizer, observables);
-    for (size_t i = 0; i < observables.size(); ++i)
-        Check(std::abs(actual[i] * ctx.expectation_factors[i] - expected[i]) < 1e-12, "Projected Clifford expectations differ from the full statevector");
+    for (const auto method : {Simulators::SimulationType::kStabilizer, Simulators::SimulationType::kStatevector})
+    {
+        const auto expected = execute(source, 3, continuousPhase ? method : Simulators::SimulationType::kStatevector, physicalObservables);
+        const auto actual = execute(circuit, 2, method, observables);
+        for (size_t i = 0; i < observables.size(); ++i)
+            Check(std::abs(actual[i] * ctx.expectation_factors[i] - expected[i]) < 1e-13, "Projected expectations differ from the full circuit");
+    }
 }
 
 void CheckNearQuarterTurn()
@@ -85,15 +97,35 @@ void CheckNearQuarterTurn()
     auto rotation = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(circuit->GetOperations().front());
     Check(rotation && rotation->GetGateType() == Gate::kRxGateType && rotation->GetParams() == std::vector<double>{angle}, "Generic rotation angle changed");
 
-    // P's existing stabilizer eligibility allows a small tolerance around
-    // pi/2. The transform must keep that original gate for the backend.
+    // A fixed stabilizer treats this P as S. The projection of S about X is SX.
     source->ReplaceOperation(2, Factory::CreateGate(Gate::kPhaseGateType, 0, 0, 0, angle));
     circuit = source;
     observables = {"XI"};
     config.simulation_type = Simulators::SimulationType::kStabilizer;
     config.fixed_backend = true;
     TransformPipeline::Run(ctx);
-    Check(!ctx.auto_reduced && circuit == source, "Near-Clifford phase gate was rewritten for a stabilizer");
+    Check(ctx.auto_reduced && ctx.qubits_after == 1 && circuit->GetOperations().size() == 1, "Fixed stabilizer phase should reduce to one gate");
+    rotation = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(circuit->GetOperations()[0]);
+    Check(rotation && rotation->GetGateType() == Gate::kSxGateType, "Fixed stabilizer projected the wrong quarter turn");
+
+    // A mixed list can run the same projected circuit on a dense backend.
+    // Check the gate parameter directly; it differs from pi/2 by just one ULP.
+    circuit = source;
+    observables = {"XI"};
+    config.fixed_backend = false;
+    config.optimization_candidates = {{config.simulator_type, Simulators::SimulationType::kStatevector},
+                                      {config.simulator_type, Simulators::SimulationType::kStabilizer}};
+    TransformPipeline::Run(ctx);
+    Check(ctx.auto_reduced && ctx.qubits_after == 1 && circuit->IsClifford(), "Mixed phase reduction lost stabilizer eligibility");
+    const auto &ops = circuit->GetOperations();
+    Check(ops.size() == 3, "Continuous logical X phase should use H P H");
+    for (const auto i : {0, 2})
+    {
+        const auto h = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(ops[i]);
+        Check(h && h->GetGateType() == Gate::kHadamardGateType, "Missing basis change for logical X phase");
+    }
+    rotation = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(ops[1]);
+    Check(rotation && rotation->GetGateType() == Gate::kPhaseGateType && rotation->GetParams() == std::vector<double>{angle}, "Mixed phase parameter changed");
 }
 
 int main()
@@ -114,6 +146,8 @@ int main()
                 for (const bool inverseCheck : {false, true})
                     for (const bool inverseMixer : {false, true})
                         CheckCliffordParityReduction(config, dual, inverseCheck, inverseMixer);
+        for (const bool dual : {false, true})
+            CheckCliffordParityReduction(mixedCandidates, dual, false, false, true);
         CheckNearQuarterTurn();
         auto source = std::make_shared<Circuit>();
         for (size_t q = 0; q < 37; ++q)

@@ -1,5 +1,6 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
+#include "../Network/Configuration.h"
 #include "../Simulators/Core/RandomSeed.h"
 #include "../Utils/SystemMemory.h"
 #include "../Utils/Threads/RealizationWorkers.h"
@@ -224,6 +225,9 @@ struct SimulatorConfig
     // Auto averages eligible statevector channels at the final observable or measurement.
     // Trajectories requests branch sampling for those channels too.
     std::string terminal_channel_policy = "auto";
+    // Written preserves measurement boundaries. An explicit native option
+    // overrides this member, as it does for optimize_circuit. The default is auto.
+    std::optional<std::string> measurement_order;
 
     // Whether the configuration may run this backend and method. With
     // automatic selection a candidate list names every backend allowed and
@@ -252,9 +256,15 @@ struct SimulatorConfig
             throw std::invalid_argument("mps_routing_truncation_weight must be finite and nonnegative");
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
+        if (const auto native = native_options.find("optimize_circuit"); native != native_options.end())
+            Network::ParseOptimizeCircuit(native->second);
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
         RequireOneOf(counts_policy, CountsPolicies(), "counts_policy");
         RequireOneOf(terminal_channel_policy, TerminalChannelPolicies(), "terminal_channel_policy");
+        if (measurement_order)
+            Simulators::IsWrittenMeasurementOrder(*measurement_order);
+        if (const auto native = native_options.find(Simulators::kMeasurementOrderOption); native != native_options.end())
+            Simulators::IsWrittenMeasurementOrder(native->second);
         if (const auto native = native_options.find("counts_policy"); native != native_options.end())
             RequireOneOf(native->second, CountsPolicies(), "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
@@ -382,6 +392,31 @@ inline size_t ConfiguredBondCap(const SimulatorConfig &config)
     if (value == config.native_options.end())
         value = config.native_options.find("matrix_product_state_max_bond_dimension");
     return value == config.native_options.end() ? 0 : static_cast<size_t>(std::stoull(value->second));
+}
+
+inline bool UsesWrittenMeasurementOrder(const SimulatorConfig &config)
+{
+    return Simulators::UsesWrittenMeasurementOrder(config.native_options, config.measurement_order);
+}
+
+// Splitting the circuit into independent measurement cones changes which
+// operations execute. Written order keeps the whole circuit on the backend.
+inline bool AllowsDisjointSampling(const SimulatorConfig &config)
+{
+    return config.enable_sampling_reduction && !UsesWrittenMeasurementOrder(config) && !Simulators::IsDistributedGpuSimulator(config.simulator_type);
+}
+
+inline bool EffectiveOptimizeCircuit(const SimulatorConfig &config)
+{
+    const auto it = config.native_options.find("optimize_circuit");
+    return it == config.native_options.end() ? config.optimize_circuit : Network::ParseOptimizeCircuit(it->second);
+}
+
+// Python sets typed options; native requests can supply the same settings
+// in native_options. Match ConfigureNetwork's precedence for dry-run planning.
+inline Simulators::ShotPrefixPolicy ConfiguredShotPrefix(const SimulatorConfig &config, Simulators::SimulatorType type, Simulators::SimulationType method)
+{
+    return Simulators::ShotPrefixPolicy::FromConfiguration(type, method, config.native_options, config.path_integral_threshold, config.measurement_order);
 }
 
 inline bool IsAerTrajectoryBackend(const SimulatorConfig &config);
@@ -767,7 +802,7 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->SetOptimizeSimulator(!config.fixed_backend);
     network->Configure("counts_policy", config.counts_policy.c_str());
     network->Configure("terminal_channel_policy", config.terminal_channel_policy.c_str());
-    network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
+    network->GetController()->SetOptimizeCircuit(EffectiveOptimizeCircuit(config));
     if (!config.singular_value_threshold && !config.native_options.count("matrix_product_state_truncation_threshold") &&
         !config.native_options.count("matrix_product_operator_truncation_threshold"))
         network->RemoveConfiguration("matrix_product_state_truncation_threshold");
@@ -798,7 +833,10 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
                 network->RemoveConfiguration(key);
     }
     for (const auto &[key, value] : config.native_options)
-        network->Configure(key.c_str(), value.c_str());
+        if (key != "optimize_circuit" && key != Simulators::kMeasurementOrderOption)
+            network->Configure(key.c_str(), value.c_str());
+    // Reusing a network also restores automatic order when both forms are unset.
+    network->Configure("measurement_order", UsesWrittenMeasurementOrder(config) ? "written" : "auto");
     if (config.mps_routing_strategy)
         network->Configure(Simulators::RoutingConfig::kStrategy, config.mps_routing_strategy->c_str());
     if (config.mps_routing_virtual_bonds)

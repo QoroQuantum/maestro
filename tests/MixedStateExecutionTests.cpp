@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <map>
 
 void Check(bool, const char *);
@@ -20,6 +21,117 @@ using CF = Circuits::CircuitFactory<>;
 using Gate = Circuits::QuantumGateType;
 using Method = Simulators::SimulationType;
 using MaestroExecution::RecordCircuitPtr;
+
+void CheckStabilizerPhases(Simulators::SimulatorType backend)
+{
+    const double halfPi = std::acos(-1.) / 2;
+    const std::shared_ptr<Simulators::ISimulator> sim = Simulators::SimulatorsFactory::CreateImmediateSimulatorUnique(backend, Method::kStabilizer);
+    sim->AllocateQubits(1);
+    sim->Initialize();
+    for (double angle : {0., halfPi, 2 * halfPi, -halfPi, -3 * halfPi, 8 * halfPi, halfPi + 5e-11})
+    {
+        Check(Circuits::PhaseGate<>(0, angle).IsClifford(), "A Clifford phase was rejected");
+        sim->Reset();
+        sim->ApplyH(0);
+        sim->ApplyP(0, angle);
+        Check(std::abs(sim->ExpectationValue("X") - std::round(std::cos(angle))) < 1e-12 &&
+                  std::abs(sim->ExpectationValue("Y") - std::round(std::sin(angle))) < 1e-12,
+              "Stabilizer applied the wrong Clifford phase");
+    }
+    for (double angle : {halfPi / 2, halfPi + 2e-10, std::ldexp(halfPi, 56), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+    {
+        Check(!Circuits::PhaseGate<>(0, angle).IsClifford(), "An unsupported phase was classified as Clifford");
+        bool rejected = false;
+        try
+        {
+            sim->ApplyP(0, angle);
+        }
+        catch (const std::runtime_error &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "Stabilizer accepted an unsupported phase");
+    }
+    // A statevector retains the angle even within the stabilizer's tolerance.
+    const double angle = halfPi + 5e-11;
+    const std::shared_ptr<Simulators::ISimulator> state = Simulators::SimulatorsFactory::CreateImmediateSimulatorUnique(backend, Method::kStatevector);
+    state->AllocateQubits(1);
+    state->Initialize();
+    state->ApplyH(0);
+    state->ApplyP(0, angle);
+    Check(std::abs(state->ExpectationValue("X") - std::cos(angle)) < 1e-14, "Statevector rounded a near-Clifford phase");
+
+    // Each near-quarter turn is admissible on a stabilizer, but their combined
+    // phase is outside its tolerance. A statevector must retain that difference.
+    Circuits::OperationState classical;
+    const auto amplitudes = [&](const RecordCircuitPtr &pair) {
+        state->Reset();
+        for (size_t q = 0; q < state->GetNumberOfQubits(); ++q)
+            state->ApplyH(q);
+        pair->Execute(state, classical);
+        return state->GetStateVector();
+    };
+    const auto phase = [](double theta) { return std::make_shared<Circuits::PhaseGate<>>(0, theta); };
+    const double nearQuarter = halfPi + 7e-11;
+    // The spacing of doubles here is 16 radians. P(huge) is within 2e-15 of
+    // identity, while Rz(huge) is within 1e-15 of minus identity.
+    constexpr double huge = 0x1.5399bad67fc50p+56;
+    const auto s = CF::CreateGate(Gate::kSGateType, 0);
+
+    struct PhasePair
+    {
+        MaestroExecution::OperationPtr first, second;
+        bool clifford;
+        std::complex<double> expectedPhase;
+    };
+
+    const PhasePair pairs[] = {{phase(nearQuarter), phase(nearQuarter), true, std::polar(1., 2 * nearQuarter)},
+                               {phase(-nearQuarter), phase(-nearQuarter), true, std::polar(1., -2 * nearQuarter)},
+                               {phase(.21), phase(.21), false, std::polar(1., .42)},
+                               {phase(huge), s, true, {0., 1.}},
+                               {s, phase(huge), true, {0., 1.}}};
+    for (const auto &[first, second, clifford, expectedPhase] : pairs)
+    {
+        const auto original = CF::CreateCircuit({first, second});
+        Check(original->IsClifford() == clifford, "Incorrect stabilizer classification before phase simplification");
+        const auto before = amplitudes(original);
+        Check(std::abs(before[1] - std::sqrt(.5) * expectedPhase) < 1e-14, "Unoptimized phase pair lost its dense relative phase");
+        for (const bool written : {false, true})
+        {
+            const auto optimized = CF::CreateCircuit(original->GetOperations());
+            optimized->OptimizeForSampling(written);
+            if (clifford)
+            {
+                Check(optimized->IsClifford(), "Phase simplification made a Clifford circuit unsupported");
+                sim->Reset();
+                sim->ApplyH(0);
+                optimized->Execute(sim, classical);
+                Check(std::abs(sim->ExpectationValue("X") - std::round(expectedPhase.real())) < 1e-12 &&
+                          std::abs(sim->ExpectationValue("Y") - std::round(expectedPhase.imag())) < 1e-12,
+                      "Optimized Clifford phase pair applied the wrong phase on a stabilizer");
+            }
+            else
+                Check(optimized->size() == 1, "Ordinary non-Clifford phases no longer merge");
+            const auto after = amplitudes(optimized);
+            Check(std::abs(after[0] - before[0]) < 1e-14 && std::abs(after[1] - before[1]) < 1e-14, "Phase simplification changed dense amplitudes");
+        }
+    }
+    state->Clear();
+    state->AllocateQubits(2);
+    state->Initialize();
+    const auto rotations = CF::CreateCircuit({CF::CreateGate(Gate::kCRzGateType, 0, 1, 0, huge), CF::CreateGate(Gate::kCRzGateType, 0, 1, 0, halfPi)});
+    const auto before = amplitudes(rotations);
+    Check(std::abs(before[1] + std::polar(.5, -halfPi / 2)) < 1e-14 && std::abs(before[3] + std::polar(.5, halfPi / 2)) < 1e-14,
+          "Unoptimized controlled rotation lost its relative minus sign");
+    for (const bool written : {false, true})
+    {
+        const auto optimized = CF::CreateCircuit(rotations->GetOperations());
+        optimized->OptimizeForSampling(written);
+        const auto after = amplitudes(optimized);
+        for (size_t i = 0; i < before.size(); ++i)
+            Check(std::abs(after[i] - before[i]) < 1e-14, "Optimization changed the phase of a controlled rotation");
+    }
+}
 
 void CheckUnitaryPreparation()
 {
@@ -299,22 +411,42 @@ void PathIntegralChannelComposition()
     }
 }
 
-void PreparedStateContract(Method method)
+void PreparedStateContract(Method method, const char *measurementOrder = "auto")
 {
     auto simulator = Simulator(method);
+    simulator->Configure("measurement_order", measurementOrder);
+    const auto policy = simulator->GetShotPrefixPolicy();
     simulator->SaveState();
     auto calls = std::make_shared<std::atomic<size_t>>(0);
     auto terminal = CF::CreateCircuit();
     auto nested = CF::CreateCircuit();
     nested->AddOperation(std::make_shared<CountedX>(0, calls));
     terminal->AddOperation(nested);
+    terminal->AddOperation(CF::CreateMeasurement({{1, 3}})); // overwritten by the next instruction
+    if (policy.writtenMeasurements)
+        terminal->AddOperation(CF::CreateNoOp());
     auto readout = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 3}, {1, 0}});
     readout->SetReadout({{0.0, 1.0}, {0.0, 0.0}});
     terminal->AddOperation(readout);
     terminal->AddOperation(CF::CreateMeasurement({{0, 2}}));
+    if (policy.writtenMeasurements)
+        terminal->AddOperation(CF::CreateNoOp());
     Circuits::OperationState state(5);
     state.SetBit(1);
     state.SetBit(4);
+    if (policy.writtenMeasurements)
+    {
+        const auto mask = terminal->PlanNonMeasurements(state, policy);
+        const auto writes = terminal->GetTerminalReadout(mask, /*sort=*/true, policy.writtenMeasurements);
+        Check(writes->GetQubits() == Types::qubits_vector{1, 0, 1, 0} && writes->GetBitsIndices() == std::vector<size_t>{3, 3, 0, 2},
+              "Written terminal readout lost or reordered a recorded write");
+        Check(writes->GetReadout().at(1).p_meas0_prep1 == 1., "Terminal readout lost a measurement's readout rate");
+        const auto counts = writes->SampleTerminalCounts([](const Types::qubits_vector &targets) {
+            Check(targets == Types::qubits_vector{1, 0}, "Physical wires must be sampled once in first-measurement order");
+            return MaestroExecution::TerminalHistogram{{{true, false}, 17}};
+        });
+        Check(counts.size() == 1 && counts.at({true, false, true, false}) == 17, "Terminal readout did not expand repeated wire outcomes");
+    }
     std::vector<bool> seen(67, false);
     const std::vector<bool> expected{true, true, true, false, true};
     const bool sampled =
@@ -711,6 +843,38 @@ void ArbitraryPureCheckpointReset()
     for (size_t shot = 0; shot < 1024; ++shot)
         ones += result.rows[2 * shot];
     Check(ones > 400 && ones < 624, "Pure-state checkpoint reused one sampled reset branch for every shot");
+}
+
+void TerminalMeasurementPlaceholders()
+{
+    const auto h = CF::CreateGate(Gate::kHadamardGateType, 0);
+    const auto noop = CF::CreateNoOp();
+    const auto read0 = CF::CreateMeasurement({{0, 0}});
+    const auto read1 = CF::CreateMeasurement({{1, 1}});
+    const auto program = CF::CreateCircuit({h, read0, noop, read1, noop});
+    constexpr size_t shots = 64;
+    for (const char *order : {"auto", "written"})
+    {
+        auto config = Config(Method::kPathIntegral);
+        config.measurement_order = order;
+        config.path_integral_threshold = .01; // Both planners now require a contiguous prefix.
+        const auto direct = MaestroExecution::SampleCircuitRows(program, config, shots);
+        Check(direct.sampling_strategy == "terminal_v1", "No-op in terminal readout disabled bulk shot records");
+
+        // The prefix's H prepares |+0>. Its end measurements are stripped, so
+        // the suffix's H returns the register to |00> for every shot.
+        MaestroExecution::PrefixCheckpoint checkpoint(program, 2, config);
+        for (const bool rows : {false, true})
+        {
+            const auto result = checkpoint.ExecuteSuffix(program, shots, nullptr, std::nullopt, 17, 2, rows);
+            Check(result.sampling_strategy == "terminal_v1", "No-op in terminal checkpoint readout forced trajectory sampling");
+            if (rows)
+                Check(result.rows == std::vector<uint8_t>(shots * 2, 0), "No-op kept a terminal measurement in the saved checkpoint");
+            else
+                Check(result.counts.size() == 1 && result.counts.front().first == std::vector<bool>{false, false} && result.counts.front().second == shots,
+                      "Checkpoint with a terminal no-op did not preserve its prepared state");
+        }
+    }
 }
 
 void PureCheckpointTerminalSampling(Method method)
@@ -1202,6 +1366,10 @@ void TerminalStatevectorExpectations(Simulators::SimulatorType backend)
 
 void TestMixedStateExecution()
 {
+    CheckStabilizerPhases(Simulators::SimulatorType::kQCSim);
+#ifndef NO_QISKIT_AER
+    CheckStabilizerPhases(Simulators::SimulatorType::kQiskitAer);
+#endif
     PathIntegralKrausBranches();
     PathIntegralChannelComposition();
     CheckUnitaryPreparation();
@@ -1218,7 +1386,10 @@ void TestMixedStateExecution()
         CheckpointEvolutionCounts(method);
         RawEvolutionCounts(method);
     }
+    for (const auto method : {Method::kStatevector, Method::kPauliPropagator, Method::kMatrixProductState, Method::kDensityMatrix})
+        PreparedStateContract(method, "written");
     ArbitraryPureCheckpointReset();
+    TerminalMeasurementPlaceholders();
     for (const auto method : {Method::kStatevector, Method::kStabilizer, Method::kMatrixProductState})
         PureCheckpointTerminalSampling(method);
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix})

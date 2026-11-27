@@ -158,6 +158,8 @@ class QuestState : public ISimulator
             rng.seed(seed);
             configuration.SetConfiguration(key, value);
         }
+        else if (std::string_view(key) == "measurement_order")
+            configuration.SetConfiguration(key, value);
     }
 
     /**

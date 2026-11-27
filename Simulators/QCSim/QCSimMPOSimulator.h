@@ -431,7 +431,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     double ProbabilityBits(const std::vector<bool> &bits) override
     {
         if (!mpoSimulator)
-            return IState::ProbabilityBits(bits);
+            throw std::runtime_error("QCSim MPO state is not initialized");
         MPOValidation::Bits(bits, nrQubits);
         return mpoSimulator->getBasisStateProbability(bits);
     }
