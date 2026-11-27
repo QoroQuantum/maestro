@@ -140,7 +140,19 @@ def test_parity_preserves_estimates_simplified_to_clifford(selection, disjoint_t
     assert result["expectation_values"] == pytest.approx([1.0])
 
 
-@pytest.mark.parametrize("gate,angle", [("T", math.pi / 4), ("P", math.pi / 4), ("P", -math.pi)])
+@pytest.mark.parametrize("selection", ["fixed", "candidate", "mixed"])
+def test_stabilizer_estimate_accepts_negative_pi_phase(selection):
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.h(1)
+    circuit.p(0, -math.pi)
+    options = stabilizer_options(selection)
+    result = circuit.estimate(["XI", "YI"], maestro.SimulatorConfig(**options))
+    assert_allowed_simulator(result, options)
+    assert result["expectation_values"] == pytest.approx([-1.0, 0.0], abs=1e-14)
+
+
+@pytest.mark.parametrize("gate,angle", [("T", math.pi / 4), ("P", math.pi / 4), ("P", -math.pi / 4)])
 def test_stabilizer_estimate_diagnostic_names_unsupported_source_gate(gate, angle):
     circuit = maestro.circuits.QuantumCircuit()
     circuit.h(0)
