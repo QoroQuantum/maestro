@@ -552,11 +552,8 @@ template <typename Time = Types::time_type> class ExecuteJob
   private:
     bool HasTerminalMeasurements() const
     {
-        // A serial job can resize its template register before applying the configured Pauli weight limit.
-        const auto policy = optSim && optSim->GetNumberOfQubits() == nrQubits
-                                ? optSim->GetShotPrefixPolicy()
-                                : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap(), {}, nrQubits);
-        return !dcirc->HasOpsAfterMeasurementsOn(policy);
+        const auto policy = optSim ? optSim->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap());
+        return dcirc->CanBatchMeasurements(policy);
     }
 
     // Whether the job's simulator samples reproducibly. Only the dense methods
@@ -725,13 +722,14 @@ template <typename Time = Types::time_type> class ExecuteJob
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
                     // Finalize source ordering before preparing fusion. Routing layers
                     // are only a cost model and must never replace executable operations.
-                    auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                    auto ordered = sim->GetShotPrefixPolicy().writtenMeasurements ? dcirc : Circuits::Circuit<Time>::LayersToCircuit(layers);
                     // As in the network's copy of this function: qubits that form lines out of index
                     // order are placed along them, which needs no swap (Circuits::ChainLine).
                     const std::vector<long long int> line = network->GetInitialQubitsMapOptimization()
                                                                 ? Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits())
                                                                 : std::vector<long long int>();
-                    dcirc->SetOperations(ordered->GetOperations());
+                    if (ordered != dcirc)
+                        dcirc->SetOperations(ordered->GetOperations());
                     sim->SetUpcomingGates(dcirc->GetOperations());
                     // Measurements and resets enter the model of a backend that reports them (the QCSim chains).
                     const bool tracksDisentangling = sim->GetType() == Simulators::SimulatorType::kQCSim;

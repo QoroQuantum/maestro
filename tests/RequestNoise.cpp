@@ -446,8 +446,8 @@ void TestTruncatedPauliShotOrder()
     request["execution"] = j::object{{"shots", 4096}, {"seed", 4}};
     for (double threshold : {0., .49})
     {
-        request["simulator"].as_object()["options"] =
-            j::object{{"pp_coefficient_threshold", threshold}, {"pp_gates_between_trims", 1}, {"pp_gates_between_deduplications", 1}};
+        request["simulator"].as_object()["options"] = j::object{
+            {"measurement_order", "written"}, {"pp_coefficient_threshold", threshold}, {"pp_gates_between_trims", 1}, {"pp_gates_between_deduplications", 1}};
         for (bool condition : {false, true})
         {
             auto ops = source;
@@ -471,20 +471,29 @@ void TestTruncatedPauliShotOrder()
                           j::object{{"name", "measure"}, {"qubits", j::array{1, 2}}, {"clbits", j::array{1, 2}}}};
     for (int weight : {2, 3})
     {
-        request["simulator"].as_object()["options"] =
-            j::object{{"pp_max_pauli_weight", weight}, {"pp_gates_between_trims", 1}, {"pp_gates_between_deduplications", 1}};
-        for (bool condition : {false, true})
+        for (bool written : {false, true})
         {
-            auto ops = weightSource;
-            if (condition)
-                ops[5].as_object()["conditional_reg"] = j::array{0};
-            request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 3}, {"num_clbits", 3}, {"source", ops}};
-            const auto counts = Call(request).at("counts").as_object();
-            // At weight two the written-order projector drops the three-site term.
-            // At full weight both outcomes survive on this same branch.
-            Check(counts.contains("101") && counts.contains("111") == (weight == 3), "Pauli weight cap moved CX ahead of a measurement");
+            request["simulator"].as_object()["options"] = j::object{{"measurement_order", written ? "written" : "auto"},
+                                                                    {"pp_max_pauli_weight", weight},
+                                                                    {"pp_gates_between_trims", 1},
+                                                                    {"pp_gates_between_deduplications", 1}};
+            for (bool condition : {false, true})
+            {
+                auto ops = weightSource;
+                if (condition)
+                    ops[5].as_object()["conditional_reg"] = j::array{0};
+                request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 3}, {"num_clbits", 3}, {"source", ops}};
+                const auto counts = Call(request).at("counts").as_object();
+                // At weight two, preparing CX before the measurement retains a different
+                // term on c0 = 1. Reading c0 forces CX to execute after the projector.
+                const bool followsMeasurement = written || condition;
+                Check(counts.contains("101") == (weight == 3 || followsMeasurement) && counts.contains("111") == (weight == 3 || !followsMeasurement),
+                      "Weight-capped Pauli execution lost a classical dependency or used the wrong measurement order");
+            }
         }
     }
+    request["simulator"].as_object().at("options").as_object()["measurement_order"] = "unknown";
+    Call(request, false, true);
 }
 
 void TestEntangledChainReadout()

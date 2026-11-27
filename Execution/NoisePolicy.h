@@ -228,10 +228,26 @@ inline RecordCircuitPtr InlinedCheckpointCircuit(const RecordCircuitPtr &circuit
 // measurement that later operations of the prefix follow or read stays, and
 // collapses once. Plain execution keeps its measurements: they are what it
 // samples. One rule for PrefixCheckpoint and for checkpoint_batch requests.
-inline RecordCircuitPtr ExecutedCheckpointPrefix(const RecordCircuitPtr &prefix)
+inline RecordCircuitPtr ExecutedCheckpointPrefix(const RecordCircuitPtr &prefix, const SimulatorConfig &config = {})
 {
     const auto inlined = InlinedCheckpointCircuit(prefix);
-    return inlined ? inlined->RemoveEndMeasurements() : inlined;
+    if (!inlined)
+        return nullptr;
+    if (!UsesWrittenMeasurementOrder(config))
+        return inlined->RemoveEndMeasurements();
+    // In written order a measurement before any subsequent operation collapses
+    // the saved branch, even when the later operation uses a different wire.
+    const auto &ops = inlined->GetOperations();
+    auto end = ops.end();
+    while (end != ops.begin())
+    {
+        const auto type = (*(end - 1))->GetType();
+        if (type != Circuits::OperationType::kMeasurement && type != Circuits::OperationType::kConditionalMeasurement)
+            break;
+        --end;
+    }
+    using Circuit = Circuits::Circuit<double>;
+    return std::make_shared<Circuit>(Circuit::OperationsVector(ops.begin(), end), inlined->GetGlobalPhase());
 }
 
 // A checkpoint prefix runs once. A backend that samples channels from its state
@@ -277,6 +293,8 @@ inline Circuits::Circuit<double>::ChannelDraws InjectedChannelDraws(bool runtime
 // applies them.
 inline Circuits::ChainOrder OrdersForChain(const SimulatorConfig &config, bool exact_channels)
 {
+    if (UsesWrittenMeasurementOrder(config))
+        return Circuits::ChainOrder::kNone;
     const auto all = [&](Simulators::SimulationType wanted) {
         const auto chain = [&](Simulators::SimulatorType type, Simulators::SimulationType method) {
             return type == Simulators::SimulatorType::kQCSim && method == wanted;
@@ -310,7 +328,15 @@ inline bool MayRunPauliPropagator(const SimulatorConfig &config)
 // The method is not checked: a candidate list may run the propagator with them.
 inline bool SetsPauliTruncation(const SimulatorConfig &config, size_t qubits)
 {
-    return Simulators::ShotPrefixPolicy::TruncatesPauli(config.native_options, qubits, config.pp_coefficient_threshold, config.pp_max_pauli_weight);
+    auto coefficient = config.pp_coefficient_threshold;
+    if (!coefficient)
+        if (const auto it = config.native_options.find("pauli_propagator_coefficient_threshold"); it != config.native_options.end())
+            coefficient = std::strtod(it->second.c_str(), nullptr);
+    auto weight = config.pp_max_pauli_weight;
+    if (!weight)
+        if (const auto it = config.native_options.find("pauli_propagator_pauli_weight_threshold"); it != config.native_options.end())
+            weight = std::stoull(it->second);
+    return coefficient.value_or(0.) > 0. || (weight && *weight < qubits);
 }
 
 // SetsPauliTruncation for a configuration whose method is the Pauli propagator.

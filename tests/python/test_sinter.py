@@ -390,7 +390,8 @@ def test_collect_extended_vacuous_without_prior():
                                     maestro.SimulationType.MatrixProductState])
 def test_extended_reference_uses_requested_exact_backend(method, monkeypatch):
     config = maestro.SimulatorConfig(simulation_type=method, max_bond_dimension=1,
-                                    singular_value_threshold=0.2, seed=71)
+                                    singular_value_threshold=0.2, seed=71,
+                                    measurement_order="written", optimize_circuit=False)
     original = maestro.SimulatorConfig
     used = []
 
@@ -406,6 +407,7 @@ def test_extended_reference_uses_requested_exact_backend(method, monkeypatch):
     assert not obs.any()
     reference, = used
     assert reference.simulation_type == method
+    assert reference.measurement_order == "written" and reference.optimize_circuit is False
     assert reference.max_bond_dimension is None and reference.singular_value_threshold == 0
     assert (config.max_bond_dimension, config.singular_value_threshold, config.seed) == (1, 0.2, 71)
 

@@ -707,12 +707,12 @@ void CheckStabilizerGates(const CircuitPtr &circuit, const SimulatorConfig &conf
     if (!config.fixed_backend || config.simulation_type != Simulators::SimulationType::kStabilizer)
         return;
     auto executed = circuit;
-    if (networkExecuted && config.optimize_circuit)
+    if (networkExecuted && EffectiveOptimizeCircuit(config))
     {
         // Optimize replaces operations and never enters nested circuits, so a
         // new container leaves the request's circuit unchanged.
         executed = std::make_shared<Circuit>(circuit->GetOperations());
-        executed->Optimize();
+        executed->OptimizeForSampling(UsesWrittenMeasurementOrder(config));
     }
     const auto &operations = executed->GetOperations();
     Supported(std::all_of(operations.begin(), operations.end(), RunsOnStabilizer),
@@ -808,6 +808,8 @@ template <class Result> json::object ReductionMetadata(const Result &execution, 
     if (config.gate_fusion)
         options["gate_fusion"] = *config.gate_fusion;
     options["auto_reduce"] = config.auto_reduce;
+    options["optimize_circuit"] = EffectiveOptimizeCircuit(config);
+    options["measurement_order"] = UsesWrittenMeasurementOrder(config) ? "written" : "auto";
     options["enable_causal_cone_reduction"] = config.enable_causal_cone_reduction;
     options["enable_observable_clustering"] = config.enable_observable_clustering;
     options["allow_reset_marginalization"] = config.allow_reset_marginalization;
@@ -849,6 +851,8 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
     options["counts_policy"] = config.counts_policy;
     options["terminal_channel_policy"] = config.terminal_channel_policy;
     const json::value requestedFusion = config.gate_fusion ? json::value(*config.gate_fusion) : json::value();
+    options["optimize_circuit"] = EffectiveOptimizeCircuit(config);
+    options["measurement_order"] = UsesWrittenMeasurementOrder(config) ? "written" : "auto";
     if (config.gate_fusion)
         options["gate_fusion"] = *config.gate_fusion;
     result["gate_fusion"] = json::object{{"requested", requestedFusion},
@@ -1293,7 +1297,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // and on a pure state a reset, collapse once, for every suffix shot.
         // Channel instructions run where the backend takes them (CheckChannels).
         Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only");
-        circuit = ExecutedCheckpointPrefix(input.circuit);
+        circuit = ExecutedCheckpointPrefix(input.circuit, config);
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
         Require(!suffixes.empty() && suffixes.size() <= 256, "Invalid suffix count");

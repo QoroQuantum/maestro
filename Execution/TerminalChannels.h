@@ -31,8 +31,8 @@ inline bool AllowsTerminalPopulationSampling(const SimulatorConfig &config)
 {
     const auto &policy = EffectiveCountsPolicy(config);
     const auto sampling = config.native_options.find("sampling_policy");
-    return config.terminal_channel_policy == "auto" && UsesChannelSamplingStatevector(config) && !HasCandidateList(config) &&
-           !config.enable_sampling_reduction && (policy == "auto" || policy == "multinomial_v1") &&
+    return config.terminal_channel_policy == "auto" && !UsesWrittenMeasurementOrder(config) && UsesChannelSamplingStatevector(config) &&
+           !HasCandidateList(config) && !config.enable_sampling_reduction && (policy == "auto" || policy == "multinomial_v1") &&
            (sampling == config.native_options.end() || sampling->second != "legacy");
 }
 

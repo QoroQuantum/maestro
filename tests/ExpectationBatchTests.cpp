@@ -1,3 +1,4 @@
+#include "Execution/SimulatorConfig.h"
 #include "NativeTestSuites.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Core/Factory.h"
@@ -89,6 +90,56 @@ void PathIntegralMeasurementPrefix()
     checkThreshold("1.0000000000000003e-15", false, false);
     checkThreshold("0.2", false, false);
     checkThreshold("0", true, true);
+}
+
+void PauliMeasurementPrefix()
+{
+    Circuit circuit;
+    circuit.AddOperation(CF::CreateMeasurement({{0, 0}}));
+    circuit.AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    auto simulator = Make(Method::kPauliPropagator, 2);
+    MaestroExecution::SimulatorConfig config;
+    config.pp_max_pauli_weight = 1;
+    config.native_options["pauli_propagator_pauli_weight_threshold"] = "1";
+    simulator->Configure("pauli_propagator_pauli_weight_threshold", "1");
+
+    const auto check = [&](bool contiguous) {
+        const auto policy = MaestroExecution::ConfiguredShotPrefix(config, Backend::kQCSim, Method::kPauliPropagator);
+        Circuits::OperationState state(2);
+        const std::vector<bool> expected{false, !contiguous};
+        Check(circuit.PlanNonMeasurements(state, policy) == expected, "Pauli configuration planned the wrong shot prefix");
+        Check(circuit.ExecuteNonMeasurements(simulator, state) == expected, "Live Pauli simulator used the wrong shot prefix");
+    };
+    check(false);
+    config.native_options["pauli_propagator_coefficient_threshold"] = "0.01";
+    simulator->Configure("pauli_propagator_coefficient_threshold", "0.01");
+    check(false);
+    config.native_options["measurement_order"] = "written";
+    simulator->Configure("measurement_order", "written");
+    check(true);
+    // A typed order overrides the native option map when configuring a network.
+    config.measurement_order = "auto";
+    simulator->Configure("measurement_order", "auto");
+    check(false);
+
+    for (const auto &[value, enabled] : {std::pair{"false", false}, std::pair{"0", false}, std::pair{"true", true}, std::pair{"1", true}})
+    {
+        config.optimize_circuit = !enabled;
+        config.native_options["optimize_circuit"] = value;
+        config.Validate();
+        Check(MaestroExecution::EffectiveOptimizeCircuit(config) == enabled, "Native circuit optimization did not override the typed default");
+    }
+    config.native_options["optimize_circuit"] = "unknown";
+    bool rejected = false;
+    try
+    {
+        config.Validate();
+    }
+    catch (const std::invalid_argument &e)
+    {
+        rejected = std::string_view(e.what()).find("optimize_circuit") != std::string_view::npos;
+    }
+    Check(rejected, "Invalid native circuit optimization was accepted");
 }
 
 void RealBatches()
@@ -695,7 +746,10 @@ int RunMaestroExpectationBatchTests()
         }
 #endif
         if (backend == Backend::kQCSim)
+        {
             PathIntegralMeasurementPrefix();
+            PauliMeasurementPrefix();
+        }
         RealBatches();
         ComplexAndC();
         ProbabilityQueriesInC();

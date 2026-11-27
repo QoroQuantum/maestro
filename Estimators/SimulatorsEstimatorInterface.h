@@ -48,7 +48,7 @@ template <typename Time = Types::time_type> class SimulatorsEstimatorInterface
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy());
+        const bool hasMeasurementsOnlyAtEnd = dcirc->CanBatchMeasurements(sim->GetShotPrefixPolicy());
 
         executed = dcirc->ExecuteNonMeasurements(sim, state, curMaxBondDim);
 

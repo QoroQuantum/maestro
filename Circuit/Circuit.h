@@ -1645,6 +1645,39 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         } while (changed);
     }
 
+    // Keep the ordinary gate simplifications inside each consecutive gate
+    // sequence. A measurement, channel, classical operation or nested circuit
+    // can change the state on which subsequent gates act.
+    void OptimizeForSampling(bool writtenMeasurementOrder, bool optimizeRotationGates = true)
+    {
+        if (!writtenMeasurementOrder)
+        {
+            Optimize(optimizeRotationGates);
+            return;
+        }
+        OperationsVector result;
+        result.reserve(operations.size());
+        Circuit gateRun;
+        const auto flush = [&] {
+            if (gateRun.operations.size() > 1)
+                gateRun.Optimize(optimizeRotationGates);
+            result.insert(result.end(), gateRun.operations.begin(), gateRun.operations.end());
+            gateRun.operations.clear();
+        };
+        for (const auto &op : operations)
+        {
+            if (op->GetType() == OperationType::kGate)
+                gateRun.operations.push_back(op);
+            else
+            {
+                flush();
+                result.push_back(op);
+            }
+        }
+        flush();
+        operations.swap(result);
+    }
+
     /**
      * @brief Move the measurements and resets closer to the beginning of the
      * circuit
@@ -2229,6 +2262,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     {
         size_t measuredWidth;
         return HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, measuredWidth, policy.contiguous);
+    }
+
+    // Joint readout omits the individual projectors, even if all measurements
+    // are terminal. In written order a worker replays those instructions.
+    bool CanBatchMeasurements(Simulators::ShotPrefixPolicy policy, size_t *measuredWidth = nullptr) const
+    {
+        size_t width;
+        const bool dynamic = HasOpsAfterMeasurementsDrawing(ChannelDraws::kAll, policy.exactChannels, width, policy.contiguous);
+        if (measuredWidth)
+            *measuredWidth = width;
+        return !dynamic && !(policy.writtenMeasurements && width);
     }
 
     // As HasOpsAfterMeasurements, and report the number of distinct measured

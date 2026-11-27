@@ -222,6 +222,12 @@ class AerState : public ISimulator
     {
         if (!key || !value)
             throw std::invalid_argument("Null Aer configuration");
+        // The Maestro shot planner consumes this option before calling Aer.
+        if (std::string_view(key) == "measurement_order")
+        {
+            configuration.SetConfiguration(key, value);
+            return;
+        }
         if (std::string(key) == "precision" || std::string(key) == "use_double_precision")
         {
             const bool useDouble = Configuration::ParsePrecision(key, value);

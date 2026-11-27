@@ -830,11 +830,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         InlineTerminalComposites();
 
         auto simType = simulator->GetType();
-        if (distCirc->HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()) && (
+        const auto prefixPolicy = simulator->GetShotPrefixPolicy();
+        if (!prefixPolicy.writtenMeasurements && distCirc->HasOpsAfterMeasurementsOn(prefixPolicy) &&
+            (
 #ifndef NO_QISKIT_AER
-                                                                                         simType == Simulators::SimulatorType::kCompositeQiskitAer ||
+                simType == Simulators::SimulatorType::kCompositeQiskitAer ||
 #endif
-                                                                                         simType == Simulators::SimulatorType::kCompositeQCSim))
+                simType == Simulators::SimulatorType::kCompositeQCSim))
             distCirc->MoveMeasurementsAndResets();
 
         auto method = simulator->GetSimulationType();
@@ -883,7 +885,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastDistributedPlacement.clear();
 
         size_t measuredWidth;
-        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method, terminalSampling);
         usedTerminalSampling = shots > 1 && terminalSampling;
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
@@ -1066,13 +1068,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (!distributed && GetController()->GetOptimizeCircuit())
         {
             mappingCircuit = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
-            mappingCircuit->Optimize();
+            mappingCircuit->OptimizeForSampling(simulator && simulator->GetShotPrefixPolicy().writtenMeasurements);
         }
         const auto reverseQubitsMap = MapCircuitOnHost(mappingCircuit, hostId, nrQubits, nrCbits, true);
         // Resolve indexing before optimization can remove a wire that disambiguates
         // local from global numbering (for example a cancelling pair on qubit 0).
         if (distributed && distCirc && GetController()->GetOptimizeCircuit())
-            distCirc->Optimize();
+            distCirc->OptimizeForSampling(simulator->GetShotPrefixPolicy().writtenMeasurements);
         if (nrCbits == 0)
             nrCbits = nrQubits;
 
@@ -1086,11 +1088,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         CaptureSimulatorConfiguration();
 
-        if (distCirc->HasOpsAfterMeasurementsOn(simulator->GetShotPrefixPolicy()) && (
+        const auto prefixPolicy = simulator->GetShotPrefixPolicy();
+        if (!prefixPolicy.writtenMeasurements && distCirc->HasOpsAfterMeasurementsOn(prefixPolicy) &&
+            (
 #ifndef NO_QISKIT_AER
-                                                                                         simType == Simulators::SimulatorType::kCompositeQiskitAer ||
+                simType == Simulators::SimulatorType::kCompositeQiskitAer ||
 #endif
-                                                                                         simType == Simulators::SimulatorType::kCompositeQCSim))
+                simType == Simulators::SimulatorType::kCompositeQCSim))
             distCirc->MoveMeasurementsAndResets();
 
         auto method = simulator->GetSimulationType();
@@ -1132,7 +1136,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastDistributedPlacement.clear();
 
         size_t measuredWidth;
-        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
+        const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, measuredWidth);
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method, terminalSampling);
         usedTerminalSampling = shots > 1 && terminalSampling;
         const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, nrQubits, measuredWidth, true, optSim);
@@ -1386,6 +1390,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (!key || !value)
             return;
 
+        if (std::string_view(key) == "optimize_circuit")
+        {
+            GetController()->SetOptimizeCircuit(ParseOptimizeCircuit(value));
+            return;
+        }
+
         if (std::string("trajectory_policy") == key)
         {
             const std::string policy(value);
@@ -1464,6 +1474,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     {
         if (!key)
             return;
+        if (std::string_view(key) == "optimize_circuit")
+        {
+            GetController()->SetOptimizeCircuit(true);
+            return;
+        }
 
         // Settings made directly on the simulator survive the re-creation: it
         // gets them from the network's configuration.
@@ -2592,12 +2607,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
   private:
     bool HasTerminalMeasurements(Simulators::SimulatorType type, Simulators::SimulationType method, const std::shared_ptr<Simulators::ISimulator> &chosen,
-                                 size_t qubits, size_t &measuredWidth) const
+                                 size_t &measuredWidth) const
     {
-        const auto policy = chosen && chosen->GetNumberOfQubits() == qubits
-                                ? chosen->GetShotPrefixPolicy()
-                                : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
-        return !distCirc->HasOpsAfterMeasurementsWithWidth(policy.exactChannels, measuredWidth, policy.contiguous);
+        const auto policy =
+            chosen ? chosen->GetShotPrefixPolicy() : Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap());
+        return distCirc->CanBatchMeasurements(policy, &measuredWidth);
     }
 
     std::shared_ptr<Simulators::ISimulator> ChooseShotSimulator(size_t &shots, size_t qubits, size_t cbits, size_t resultBits, Simulators::SimulatorType &type,
@@ -2867,7 +2881,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!dontRunCircuitStart)
                 {
                     if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy()) ? "true" : "false");
+                        sim->Configure("reproducible_trajectory", dcirc->CanBatchMeasurements(sim->GetShotPrefixPolicy()) ? "false" : "true");
                     sim->SetMultithreading(true);
                     try
                     {
@@ -2961,7 +2975,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!dontRunCircuitStart)
                 {
                     if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurementsOn(sim->GetShotPrefixPolicy()) ? "true" : "false");
+                        sim->Configure("reproducible_trajectory", dcirc->CanBatchMeasurements(sim->GetShotPrefixPolicy()) ? "false" : "true");
                     sim->SetMultithreading(true);
                     Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed,
                                                                                             &curMaxBondDim);
@@ -3473,6 +3487,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const auto &state = selected ? selected : simulator;
             if (shots < 2 || !recreateIfNeeded || method != Simulators::SimulationType::kStatevector || !Simulators::SamplesQuantumChannels(type, method) ||
                 !state || state->GetType() != type || state->GetSimulationType() != method ||
+                Simulators::UsesWrittenMeasurementOrder(configuration.GetConfigMap()) ||
                 configuration.GetConfiguration("terminal_channel_policy") == "trajectories" ||
                 !Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.GetConfiguration("sampling_policy")))
                 return false;
@@ -3783,10 +3798,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     {
         auto result = configuration;
         if (type == Simulators::SimulatorType::kQCSim)
-            result.SetConfiguration("reproducible_trajectory", distCirc && distCirc->HasOpsAfterMeasurementsOn(Simulators::ShotPrefixPolicy::FromConfiguration(
-                                                                               type, method, configuration.GetConfigMap(), {}, qubits))
-                                                                   ? "true"
-                                                                   : "false");
+        {
+            const auto policy = Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap());
+            result.SetConfiguration("reproducible_trajectory", distCirc && !distCirc->CanBatchMeasurements(policy) ? "true" : "false");
+        }
         const auto found = resolvedDistributedDevices.find(type);
         if (!Simulators::IsDistributedGpuSimulator(type) || !configuration.GetConfiguration("distributed_devices").empty() ||
             found == resolvedDistributedDevices.end())
@@ -3853,18 +3868,20 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     std::vector<long long int> line;
                     if (freshRegister)
                     {
-                        auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                        const bool written = sim->GetShotPrefixPolicy().writtenMeasurements;
+                        auto ordered = written ? dcirc : Circuits::Circuit<Time>::LayersToCircuit(layers);
                         // Place a path along the chain when this avoids all swaps.
                         if (placeQubits)
                             line = Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits());
-                        if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                        if (!written && sim->GetType() == Simulators::SimulatorType::kQCSim)
                             ordered = Circuits::ChainOrdered(ordered,
                                                              sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
                                                                  ? Circuits::ChainOrder::kMixedState
                                                              : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
                                                                                              : Circuits::ChainOrder::kNone,
                                                              line.empty() ? nullptr : &line);
-                        dcirc->SetOperations(ordered->GetOperations());
+                        if (ordered != dcirc)
+                            dcirc->SetOperations(ordered->GetOperations());
                     }
                     // A suffix keeps its source order. The sampler installs the
                     // executed window after restore; only fusion needs a view now.
@@ -3979,7 +3996,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!line.empty())
                 {
                     sim->SetInitialQubitsMap(line);
-                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim && !sim->GetShotPrefixPolicy().writtenMeasurements)
                     {
                         const auto ordered = Circuits::ChainOrdered(dcirc,
                                                                     sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator

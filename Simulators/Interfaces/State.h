@@ -31,6 +31,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -169,12 +170,33 @@ inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
 
 class IState;
 
+inline const std::string kMeasurementOrderOption = "measurement_order";
+
+inline bool IsWrittenMeasurementOrder(std::string_view value)
+{
+    if (value == "auto")
+        return false;
+    if (value == "written")
+        return true;
+    throw std::invalid_argument("measurement_order must be auto or written");
+}
+
+inline bool UsesWrittenMeasurementOrder(const std::unordered_map<std::string, std::string> &options, const std::optional<std::string> &order = {})
+{
+    if (order)
+        return IsWrittenMeasurementOrder(*order);
+    const auto it = options.find(kMeasurementOrderOption);
+    return it != options.end() && IsWrittenMeasurementOrder(it->second);
+}
+
 // A shot planner can run before the selected simulator has allocated a register.
 struct ShotPrefixPolicy
 {
     bool exactChannels;
     bool contiguous;
     bool contiguousWithDrawnChannels = false;
+    // Physical measurement instructions must run in their authored order.
+    bool writtenMeasurements = false;
 
     // QCSim's native default. At this tolerance measurement-only circuits can
     // share independent gates across shots. Coarser pruning preserves the
@@ -182,36 +204,21 @@ struct ShotPrefixPolicy
     // whenever pruning is enabled.
     static constexpr double kDefaultPathIntegralThreshold = 1e-15;
 
-    static ShotPrefixPolicy ForPathIntegral(double threshold)
+    static ShotPrefixPolicy ForPathIntegral(double threshold, bool written = false)
     {
-        return {false, threshold > kDefaultPathIntegralThreshold, threshold > 0.};
-    }
-
-    // A measurement adds a normalized projector to the backward propagation.
-    // Its coefficients and Pauli weights can move a term across a trim boundary.
-    static bool TruncatesPauli(const std::unordered_map<std::string, std::string> &options, size_t qubits, std::optional<double> coefficient = {},
-                               std::optional<size_t> weight = {})
-    {
-        if (!coefficient)
-            if (const auto it = options.find("pauli_propagator_coefficient_threshold"); it != options.end())
-                coefficient = std::strtod(it->second.c_str(), nullptr);
-        if (!weight)
-            if (const auto it = options.find("pauli_propagator_pauli_weight_threshold"); it != options.end())
-                weight = std::stoull(it->second);
-        return coefficient.value_or(0.) > 0. || (weight && *weight < qubits);
+        return {false, written || threshold > kDefaultPathIntegralThreshold, threshold > 0., written};
     }
 
     static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0)
+                                              std::optional<double> pathIntegralThreshold = std::nullopt, const std::optional<std::string> &order = {})
     {
-        if (type == SimulatorType::kQCSim && method == SimulationType::kPauliPropagator)
-            return {true, TruncatesPauli(options, qubits)};
+        const bool written = UsesWrittenMeasurementOrder(options, order);
         if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
-            return {EvolvesExactQuantumChannels(type, method), false};
+            return {EvolvesExactQuantumChannels(type, method), written, false, written};
         if (pathIntegralThreshold)
-            return ForPathIntegral(*pathIntegralThreshold);
+            return ForPathIntegral(*pathIntegralThreshold, written);
         const auto value = options.find("path_integral_threshold");
-        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second));
+        return ForPathIntegral(value == options.end() ? kDefaultPathIntegralThreshold : std::stod(value->second), written);
     }
 };
 
@@ -721,10 +728,8 @@ class IState
     // conditional gate when the simulator prunes the whole state per operation.
     virtual ShotPrefixPolicy GetShotPrefixPolicy() const
     {
-        const auto method = GetSimulationType();
-        if (method == SimulationType::kPauliPropagator && GetType() == SimulatorType::kQCSim)
-            return {true, ShotPrefixPolicy::TruncatesPauli(GetExplicitConfigMap(), GetNumberOfQubits())};
-        return {SupportsQuantumChannels(), false};
+        const bool written = UsesWrittenMeasurementOrder(GetExplicitConfigMap());
+        return {SupportsQuantumChannels(), written, false, written};
     }
 
     /**

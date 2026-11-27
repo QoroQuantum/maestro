@@ -123,9 +123,21 @@ probabilities. Increasing the cap or decreasing the cutoff lets you check
 convergence. In exact arithmetic the two legal schedules give the same
 distribution. Their seeded shot sequences can still differ.
 
-The QCSim Pauli propagator preserves measurement order when a positive
-coefficient threshold or a Pauli weight limit below the register width can
-discard terms. Terminal measurements can still share one preparation.
+Every backend accepts `SimulatorConfig(measurement_order="written")` for
+counts and shot records. Each measurement instruction takes effect where it
+appears, including successive measurements at the end. Work before the first
+measurement can still be shared. The default, `"auto"`, uses each backend's
+usual scheduler. On the QCSim Pauli propagator that can turn an early
+measurement and later independent measurements into a single joint readout,
+at any coefficient threshold or weight cap. Written order can improve a
+correlation under tight pruning, but may repeat gates for every shot.
+Compare the two modes at a looser pruning limit to check convergence.
+
+Use `optimize_circuit=False` to keep gates that Maestro's circuit simplifier
+would cancel, such as two successive X gates on one wire. It defaults to
+`True`. To inspect the effects of individual gates on a backend with gate
+fusion, you can also set `gate_fusion=False`. Both controls are independent of
+`measurement_order`.
 
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames

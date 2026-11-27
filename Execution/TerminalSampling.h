@@ -60,7 +60,7 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
     // entangled arbitrary checkpoint on pure-state methods.
     if (!policy.exactChannels && !known_zero_initial_state && HasResetOperation(circuit))
         return false;
-    if (circuit.HasOpsAfterMeasurementsOn(policy))
+    if (!circuit.CanBatchMeasurements(policy))
         return false;
     Circuits::OperationState dry(width);
     const auto executed = circuit.PlanNonMeasurements(dry, policy);

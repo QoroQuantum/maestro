@@ -6400,6 +6400,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "fixed_backend": True,
     "optimization_candidates": [(maestro.SimulatorType.QCSim, maestro.SimulationType.DensityMatrix)],
     "terminal_channel_policy": "trajectories",
+    "measurement_order": "written",
+    "optimize_circuit": False,
 }
 
 
@@ -6423,6 +6425,7 @@ class TestSimulatorConfigFields:
         ("mps_routing_strategy", "current"),
         ("extended_stabilizer_sampling_method", "gibbs"),
         ("terminal_channel_policy", "sometimes"),
+        ("measurement_order", "sometimes"),
     ]
 
     def test_constructor_is_keyword_only(self):
@@ -6431,6 +6434,47 @@ class TestSimulatorConfigFields:
         with pytest.raises(TypeError):
             maestro.SimulatorConfig(maestro.SimulatorType.QCSim,
                                     maestro.SimulationType.Statevector)
+
+    @pytest.mark.parametrize("gate_fusion", [False, True])
+    def test_circuit_optimization_is_independent_of_gate_fusion(self, gate_fusion):
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.h(0)
+        circuit.t(0)
+        circuit.t(0)
+        circuit.measure([(0, 0)])
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer,
+                                         fixed_backend=True, gate_fusion=gate_fusion, seed=7)
+        # T followed by T simplifies to the Clifford S before execution.
+        assert config.optimize_circuit is True
+        assert sum(circuit.execute(config=config, shots=32)["counts"].values()) == 32
+        config.optimize_circuit = False
+        assert pickle.loads(pickle.dumps(config)).optimize_circuit is False
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            circuit.execute(config=config, shots=32)
+
+    def test_written_measurement_limits_gate_simplification(self):
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.h(1)
+        circuit.t(1)
+        circuit.measure([(0, 0)])
+        circuit.t(1)
+        circuit.measure([(1, 1)])
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer,
+                                         fixed_backend=True, seed=7)
+        # With automatic scheduling T;T on q1 can still simplify to S.
+        assert sum(circuit.execute(config=config, shots=32)["counts"].values()) == 32
+        config.measurement_order = "written"
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            circuit.execute(config=config, shots=32)
+
+    @pytest.mark.parametrize("value", [0, 1, "false", None])
+    def test_circuit_optimization_requires_a_boolean(self, value):
+        with pytest.raises(TypeError):
+            maestro.SimulatorConfig(optimize_circuit=value)
+        config = maestro.SimulatorConfig(optimize_circuit=False)
+        with pytest.raises(TypeError):
+            config.optimize_circuit = value
+        assert config.optimize_circuit is False
 
     def test_constructor_accepts_every_field(self):
         config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)

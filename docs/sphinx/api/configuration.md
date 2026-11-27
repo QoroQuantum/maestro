@@ -72,6 +72,8 @@ The constructor takes every option by keyword only.
 | `max_cluster_qubits` | `int` or `None` | `None` | Also split overlapping lightcones into groups of at most this many qubits; see {ref}`py_circuits_cluster_budget` |
 | `min_cluster_qubits` | `int` or `None` | `None` | Batch disjoint small lightcones together up to this width, within the maximum |
 | `auto_reduce` | `bool` | `True` | Detect invariant check subspaces and simulate the reduced register on the configured backend |
+| `optimize_circuit` | `bool` | `True` | Simplify the circuit before execution. For example, two consecutive X gates on the same wire cancel. Set to `False` to skip this pass. Gate fusion has its own control. |
+| `measurement_order` | `str` | `"auto"` | Shot scheduling on every backend. Use `"written"` to execute each measurement instruction where it appears, including terminal readout. |
 | `observable_error_tolerance` | `float` or `None` | `None` | Opt-in absolute error budget for bounded backward evaluation of exact noisy channels |
 | `enable_sampling_reduction` | `bool` | `False` | Sample disjoint measurement lightcones independently and exactly; repeated seeded requests remain reproducible |
 | `allow_reset_marginalization` | `bool` | `False` | Allow ensemble-equivalent reset marginalization; individual trajectories can change |

@@ -897,6 +897,35 @@ void TestFusionPublicInterfaces()
         char *invalid =
             estimate ? SimpleEstimate(handle, circuit, "ZI", "{\"gate_fusion\":\"false\"}") : SimpleExecute(handle, circuit, "{\"gate_fusion\":\"false\"}");
         Check(!invalid, "Legacy API accepted a nonboolean fusion setting");
+        for (const bool defaults : {false, true})
+        {
+            const char *options = defaults ? "{}" : R"({"measurement_order":"written","optimize_circuit":false})";
+            char *result = estimate ? SimpleEstimate(handle, circuit, "ZI", options) : SimpleExecute(handle, circuit, options);
+            Check(result != nullptr, "Legacy API failed to configure circuit planning");
+            FreeResult(result);
+            Check(network->GetController()->GetOptimizeCircuit() == defaults, "Legacy API kept the wrong circuit simplification setting");
+            Check(network->GetSimulator()->GetShotPrefixPolicy().writtenMeasurements == !defaults, "Legacy API kept the wrong measurement order");
+        }
+        for (const char *options : {R"({"optimize_circuit":"false"})", R"({"measurement_order":"reverse"})"})
+            Check(!(estimate ? SimpleEstimate(handle, circuit, "ZI", options) : SimpleExecute(handle, circuit, options)),
+                  "Invalid legacy planner option accepted");
+        if (!estimate)
+        {
+            auto calls = std::make_shared<std::atomic<size_t>>(0);
+            auto xs = std::make_shared<Circuits::Circuit<>>();
+            xs->AddOperation(std::make_shared<CountedX>(0, calls));
+            xs->AddOperation(std::make_shared<CountedX>(0, calls));
+            xs->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement({{0, 0}}));
+            for (bool fusion : {false, true})
+                for (bool simplify : {true, false})
+                {
+                    network->Configure("gate_fusion", fusion ? "true" : "false");
+                    network->Configure("optimize_circuit", simplify ? "true" : "false");
+                    *calls = 0;
+                    network->RepeatedExecuteOnHost(xs, 0, 1);
+                    Check(*calls == (simplify ? 0U : 2U), "Circuit simplification failed to control adjacent X cancellation independently of gate fusion");
+                }
+        }
         DestroySimpleSimulator(handle);
     }
     for (int width : {1, 2, 3})

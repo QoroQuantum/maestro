@@ -1952,7 +1952,8 @@ _BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[
 
 @pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
                                           (S.DensityMatrix, "density_matrix")])
-def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_request(method, name):
+@pytest.mark.parametrize("order", ["auto", "written"])
+def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_request(method, name, order):
     """Only suffixes are sampled. A prefix that ends with its measurements, as a circuit parsed from
     OpenQASM does, runs without them, so the saved state is not collapsed. A measurement that a later
     operation of the prefix follows runs, and collapses once for every suffix shot. A plain execution
@@ -1960,7 +1961,8 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     shots = 500
     suffix = QuantumCircuit()
     suffix.measure([(0, 0), (1, 1)])  # measure_all() would read only the qubits the suffix itself uses
-    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method,
+                                     seed=3, fixed_backend=True, measurement_order=order)
     measured = {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
                 "source": [{"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]}
 
@@ -1968,7 +1970,8 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
         """The counts of the suffix after this prefix: from Python, and from a request with the same prefix."""
         counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
         native = _native_request({"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit, "suffixes": [measured],
-                                  "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"},
+                                  "simulator": {"backend": "qcsim", "method": name, "selection": "fixed",
+                                                "options": {"measurement_order": order}},
                                   "execution": {"shots": shots, "seed": 3}})
         assert native["ok"], native
         return (("Python", dict(counts)), ("request", native["results"][0]["counts"]))
@@ -2005,6 +2008,17 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     prefix.z(0)
     for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]}, {"name": "z", "qubits": [0]})):
         assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+
+    # The measured wire is idle for the rest of this prefix. Automatic scheduling can strip
+    # its measurement. Written order must collapse once before the Z on the other wire.
+    prefix = bell()
+    prefix.measure([(0, 0)])
+    prefix.z(1)
+    for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]}, {"name": "z", "qubits": [1]})):
+        if order == "written":
+            assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+        else:
+            assert whole(read), f"{label} on {name}: {read}"
 
     # A reset of that qubit: a pure state collapses once with it, so the other qubit reads the same in
     # every shot; a density matrix applies the reset exactly and keeps both branches.

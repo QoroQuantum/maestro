@@ -536,11 +536,12 @@ suffixes. The prefix's own channel instructions follow the same rule: the
 channel-sampling methods would draw one branch of them for every
 suffix shot to share, so a prefix that holds channel instructions with a branch
 to draw raises `ValueError` there; put those channels in the suffixes. A channel
-with one branch is a gate and may stay in the prefix. Only suffixes are sampled,
-so a prefix runs without its end measurements: one that is a whole program, as
-a circuit parsed from OpenQASM is, does not collapse the saved state. A
-measurement that later operations of the prefix follow or read runs, and
-collapses once for every suffix shot. Dynamic checkpoint suffixes evolve their deterministic head once per
+with one branch is a gate and may stay in the prefix. Only suffixes are sampled.
+With `measurement_order="auto"`, a prefix drops end measurements on wires whose
+quantum state and recorded bit it no longer uses. With `"written"`, the prefix
+drops only consecutive measurements at its very end. A measurement before a
+gate on another wire then collapses the saved state once for all suffix shots.
+Dynamic checkpoint suffixes evolve their deterministic head once per
 realization when all four retained states (the checkpoint's live state and saved
 prefix, the copy and its saved head) fit `trajectory_max_memory_mb`, then replay
 only their branches.

@@ -32,7 +32,7 @@ class RawSamplingSession
   public:
     // qubits is the register a circuit may touch, including noise spectators.
     RawSamplingSession(size_t qubits, const SimulatorConfig &config, bool multithreading)
-        : registerQubits(std::max<size_t>(1, qubits)), optimizeCircuit(config.optimize_circuit && MergingChangesResults(config.simulation_type))
+        : registerQubits(std::max<size_t>(1, qubits)), optimizeCircuit(EffectiveOptimizeCircuit(config) && MergingChangesResults(config.simulation_type))
     {
         if (registerQubits > static_cast<size_t>(std::numeric_limits<int>::max()))
             throw std::invalid_argument("Circuit width exceeds the simulator limit");
@@ -85,7 +85,7 @@ class RawSamplingSession
         if (optimizeCircuit)
         {
             auto optimized = std::make_shared<Circuits::Circuit<double>>(execution_circuit->GetOperations());
-            optimized->Optimize();
+            optimized->OptimizeForSampling(simulator->GetShotPrefixPolicy().writtenMeasurements);
             execution_circuit = std::move(optimized);
         }
         // Nested circuits share the enclosing classical state, so inlining them
@@ -310,6 +310,8 @@ bool SampleNetworkTerminalChannels(const RecordCircuitPtr &circuit, const std::s
                                    size_t classical_width, size_t result_width, std::optional<uint64_t> seed, const std::function<void()> &prepare,
                                    Circuits::Circuit<double>::ExecuteResults &counts)
 {
+    if (simulator->GetShotPrefixPolicy().writtenMeasurements)
+        return false;
     auto layer = FindTerminalPopulationLayer(circuit);
     TerminalPopulations populations;
     if (!layer.prefix || !CanSampleTerminal(*layer.prefix, *simulator, classical_width, true) || !CompileTerminalPopulations(layer, populations))
@@ -344,7 +346,7 @@ std::optional<ShotRecords> SampleTerminalChannels(const RecordCircuitPtr &circui
         layer = SplitTerminalChannels(compaction.Apply(circuit));
     // The network optimizes the circuit before executing a fixed Aer or composite register. In a composite,
     // eliminating cancelling entanglers can also avoid joining otherwise independent components.
-    if (config.optimize_circuit && config.simulator_type != Simulators::SimulatorType::kQCSim)
+    if (EffectiveOptimizeCircuit(config) && config.simulator_type != Simulators::SimulatorType::kQCSim)
         layer.prefix->Optimize();
     TerminalPopulations populations;
     if (!CompileTerminalPopulations(layer, populations) || (identity_only && !populations.IsIdentity()))
@@ -608,9 +610,11 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     using Method = Simulators::SimulationType;
     // Asked of the circuit before its noise is injected: a realization holds the gates drawn from a Pauli channel,
     // and on a backend that samples no channels those drawn from a one-qubit mixture of unitaries too.
-    const auto prefix = ConfiguredShotPrefix(config, config.simulator_type, config.simulation_type, budget_qubits);
-    const bool prepared_batches = !circuit->HasOpsAfterMeasurementsWith(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
-                                                                        UsesExactQuantumChannels(config), prefix.contiguous) &&
+    const auto prefix = ConfiguredShotPrefix(config, config.simulator_type, config.simulation_type);
+    size_t measured_width;
+    const bool prepared_batches = !circuit->HasOpsAfterMeasurementsDrawing(InjectedChannelDraws(InjectsRuntimeChannels(config, exact)),
+                                                                           UsesExactQuantumChannels(config), measured_width, prefix.contiguous) &&
+                                  !(prefix.writtenMeasurements && measured_width) &&
                                   (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
                                    config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     // Network trajectories retain their prepared source and checkpoint plus

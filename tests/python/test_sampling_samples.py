@@ -605,18 +605,22 @@ def test_terminal_mps_logical_batches_replay_across_workers(return_samples, read
             assert sum(result.values()) == shots
 
 
-@pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector])
-def test_raw_readout_flip_precedes_classical_control(method):
+@pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector,
+                                    maestro.SimulationType.PauliPropagator])
+@pytest.mark.parametrize("measurement_order", ["auto", "written"])
+def test_raw_readout_flip_precedes_classical_control(method, measurement_order):
     circuit = maestro.QasmToCirc().parse_and_translate(
         "OPENQASM 3.0; qubit[2] q; bit[4] c; "
         "x q[1]; c[0] = measure q[0]; if (c[0]) { x q[1]; } c[3] = measure q[1];")
     model = maestro.NoiseModel()
     model.set_readout_error_symmetric(0, 1.0)
+    config = _config(method, workers=4)
+    config.measurement_order = measurement_order
     rows = _records(circuit.noisy_execute(
-        model, config=_config(method, workers=4), shots=71, noise_realizations=71,
+        model, config=config, shots=71, noise_realizations=71,
         noise_seed=3, return_samples=True), 71, 4)
     np.testing.assert_array_equal(rows, np.tile([1, 0, 0, 0], (71, 1)))
-    clean = circuit.execute(config=_config(method), shots=7, return_samples=True)["samples"]
+    clean = circuit.execute(config=config, shots=7, return_samples=True)["samples"]
     np.testing.assert_array_equal(clean, np.tile([0, 0, 0, 1], (7, 1)))
 
 

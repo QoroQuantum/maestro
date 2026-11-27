@@ -71,7 +71,10 @@ template <typename Time = Types::time_type> class SimpleController : public ICon
         // done after 'ConvertForDistribution' because the swap is converted to 3
         // cnots
         if (optimize)
-            distCirc->Optimize(optimizeRotationGates);
+        {
+            const auto simulator = network->GetSimulator();
+            distCirc->OptimizeForSampling(simulator && simulator->GetShotPrefixPolicy().writtenMeasurements, optimizeRotationGates);
+        }
 
         // this converts the 3 qubit gates and swap to 2-qubit gates (the swap to 3
         // cnots)

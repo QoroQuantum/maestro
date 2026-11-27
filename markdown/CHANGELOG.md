@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `qc.noisy_prob`, `maestro.noisy_prob`, C++ `NoisyStateProbability` and the
+  JSON `noisy_prob` request now evaluate basis probabilities on fixed
+  backends that support quantum channels. These include QCSim and Aer
+  statevectors, MPS and density matrices, composite statevectors, QCSim path
+  integral and Pauli propagator, and supported MPOs. Python's `evaluation`
+  argument and JSON's `noise.evaluation` select `auto`, `exact` or
+  `trajectories`. Results report the number of realizations evaluated and
+  the standard error of a trajectory average.
+- Aer density matrices support trace, purity, trace of the square,
+  Hermiticity checks and partial trace in diagnostics requests.
+- All simulators accept `measurement_order="written"` to execute shot
+  measurements in circuit order. The default `"auto"` uses the backend's
+  usual scheduler. Tight pruning can make the two distributions differ.
+- Python, legacy execution and estimation, and the command line now expose
+  `optimize_circuit`, the existing C++ and JSON circuit simplification
+  control. It defaults to true and is independent of gate fusion.
 - `extended_stabilizer_amplitude_tolerance` and
   `extended_stabilizer_max_components` select QCSim's approximate extended
   stabilizer, which until now no caller could reach. They are
@@ -51,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Aer MPS uses one native batch for full-register probability sampling.
+  Seeded partial-register readout and `apply_measure` can distribute shots
+  over workers and reproduce the same results across worker counts with the
+  default sampling policy.
 - `Probabilities(outcomes)` takes basis-state indices and returns one
   probability per index on every backend, as documented. On the Qiskit Aer
   statevector, MPS and stabilizer it returned Aer's marginal distribution of
@@ -303,6 +323,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Aer MPS checkpoints and clones preserve native tensors, bond values and
+  qubit ordering. Standalone request validation and diagnostic validation
+  recognize supported channel instructions on trajectory backends.
 - A QuEST statevector too large for the machine's memory is refused with an
   error instead of ending the process. QuEST does not report such a register:
   its validation prints a message and exits, which no caller could catch.

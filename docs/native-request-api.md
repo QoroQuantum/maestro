@@ -129,12 +129,12 @@ there it returns the state of one branch, as Python's `get_statevector` and
 `execution_metadata.stochastic_execution` is then `true`, and the seed selects
 the branch. A `checkpoint_batch` prefix also runs once, before the state is
 saved, by the rules of the prefix of Python's `PrefixCheckpointedSimulator`.
-Only suffixes are sampled, so its end measurements are removed, as for
-`estimate`: a prefix that is a whole program, with its measurements at the end,
-does not collapse the saved state. A measurement that later operations of the
-prefix follow or read runs, and collapses once, as does a reset on a pure-state
-method (a mixed-state backend applies a reset exactly): every suffix shot then
-continues from that one outcome, which is not returned. Plain `execute` keeps
+Only suffixes are sampled. With `measurement_order: "auto"`, the prefix drops
+end measurements on wires whose quantum state and recorded bit it no longer uses.
+With `"written"`, it drops only the consecutive measurements at the very end.
+For example, measuring q0 before a gate on q1 collapses q0 once in written
+order. Every suffix shot then starts from that same branch. A pure-state
+reset can also collapse the prefix once. Plain `execute` keeps
 its measurements: they are what it samples. A prefix's channel instructions run
 where the backend takes them: a mixed-state
 backend and the `pauli_propagator` apply them exactly; channel-sampling methods
@@ -305,7 +305,9 @@ and the C ABI's `MaestroApplyKrausChannel` use the backend's channel semantics.
 
 Each `checkpoint_batch` suffix shot starts with the saved quantum state and
 the classical bits written by measurements that ran in the prefix. An end
-measurement stripped from the prefix writes no bit. A suffix can overwrite
+measurement stripped from the prefix writes no bit. In written order, any
+prefix measurement before a later gate writes its bit to the checkpoint.
+A suffix can overwrite
 these bits without changing the checkpoint for any other suffix or shot.
 
 Other state queries remove terminal measurements and reject mid-circuit measurements.
@@ -480,7 +482,8 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_routing_virtual_bonds` | same | boolean | QCSim/GPU MPS and MPO |
 | `mps_routing_truncation_weight` | same | nonnegative | QCSim/GPU MPS and MPO |
 | `mps_routing_legacy_cap` | same | boolean | QCSim/GPU MPS and MPO |
-| `optimize_circuit` | `` | boolean | all |
+| `optimize_circuit` | `optimize_circuit` (network) | boolean, default `true` | all |
+| `measurement_order` | `measurement_order` | `auto` (default) or `written` | all |
 | `gate_fusion` | `` | boolean | all |
 | `auto_reduce` | `` | boolean | all (default true) |
 | `enable_causal_cone_reduction` | `` | boolean | all (default true) |
@@ -517,6 +520,13 @@ are rejected. Small floating-point thresholds retain their precision.
 | `extended_stabilizer_metropolis_mixing_time` | `extended_stabilizer_metropolis_mixing_time` | positive_integer (default 5000) | aer_extended_stabilizer |
 | `extended_stabilizer_norm_estimation_samples` | `extended_stabilizer_norm_estimation_samples` | positive_integer (default 100) | aer_extended_stabilizer |
 | `extended_stabilizer_norm_estimation_repetitions` | `extended_stabilizer_norm_estimation_repetitions` | positive_integer (default 3) | aer_extended_stabilizer |
+
+With `measurement_order: "written"`, each measurement instruction executes
+at its position in the shot circuit, including repeated terminal reads and
+writes to the same classical destination. The default `"auto"` uses the
+backend's usual shot planner. On the Pauli propagator, joint readout and
+successive collapses can yield different correlations under tight pruning.
+State queries continue to use the measurement conventions of their operation.
 
 The two extended stabilizers approximate in different ways, and each has its
 own options. The QCSim one (`cpu_extended_stabilizer`) runs exactly unless it
@@ -592,6 +602,11 @@ controls and seed, while most backend settings use validated `native_options` an
 to option names, conversion or semantics must account for both paths; the typed
 fields are not dead code. The native parser avoids populating duplicate
 representations of the same setting.
+
+In C++, a supplied `native_options["optimize_circuit"]` overrides the
+`optimize_circuit` member. A supplied `measurement_order` member takes
+precedence over its native option. Python and JSON each expose one setting
+for each control.
 
 ## Noise models
 
@@ -840,6 +855,13 @@ estimate or execution. Noisy requests also accept `noise.evaluation: "trajectori
 Legacy `SimpleEstimate` and `SimpleExecute` accept `terminal_channel_policy`
 in their `config` object. Their instruction arrays accept the same `kraus`,
 `pauli_channel` and structured `channel` instructions as a versioned request.
+
+The legacy configuration also accepts `measurement_order` and the Boolean
+`optimize_circuit`. Omitting them restores the defaults on a reused handle.
+The executable exposes `--measurement-order auto|written` and
+`--optimize-circuit true|false`. Setting the latter to false skips the
+circuit pass that cancels adjacent inverse gates. The `gate_fusion` option
+controls fusion separately.
 
 On pure-state backends a reset that precedes every other operation on its qubit
 leaves `|0>` and does not make an estimate stochastic; a later reset does.
