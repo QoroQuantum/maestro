@@ -35,20 +35,6 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
                 throw std::invalid_argument("Quantum-channel target qubits must be distinct");
     }
 
-    // A generated noise layer can schedule independent errors locally on a
-    // certified tensor chain. Explicit circuit instructions keep their draw order.
-    static std::shared_ptr<QuantumChannelOperation> FromNoiseModel(const Types::qubits_vector &targets, const Simulators::QuantumChannel &channel)
-    {
-        auto op = std::make_shared<QuantumChannelOperation>(targets, channel);
-        op->fromNoiseModel_ = true;
-        return op;
-    }
-
-    bool IsFromNoiseModel() const
-    {
-        return fromNoiseModel_;
-    }
-
     void Execute(const std::shared_ptr<Simulators::ISimulator> &simulator, OperationState &state) const override
     {
         (void)state;
@@ -91,7 +77,7 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
 
     std::shared_ptr<IOperation<Time>> Clone() const override
     {
-        return std::make_shared<QuantumChannelOperation<Time>>(*this);
+        return std::make_shared<QuantumChannelOperation<Time>>(targets_, channel_, IOperation<Time>::GetDelay());
     }
 
     std::shared_ptr<IOperation<Time>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
@@ -105,16 +91,13 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
             if (mapped != qubitsMap.end())
                 target = mapped->second;
         }
-        auto op = std::make_shared<QuantumChannelOperation<Time>>(remappedTargets, channel_, IOperation<Time>::GetDelay());
-        op->fromNoiseModel_ = fromNoiseModel_;
-        return op;
+        return std::make_shared<QuantumChannelOperation<Time>>(remappedTargets, channel_, IOperation<Time>::GetDelay());
     }
 
   private:
     Types::qubits_vector targets_;
     Simulators::QuantumChannel channel_;
     bool deterministic_;
-    bool fromNoiseModel_ = false;
 };
 
 } // namespace Circuits

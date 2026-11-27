@@ -1937,7 +1937,7 @@ inline void inject_1q_pauli_exact_(std::shared_ptr<Circuits::Circuit<double>> &o
 {
     if (qn.px == 0.0 && qn.py == 0.0 && qn.pz == 0.0)
         return;
-    out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, memo.Pauli(qn.px, qn.py, qn.pz)));
+    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.Pauli(qn.px, qn.py, qn.pz)));
 }
 
 /**
@@ -1964,7 +1964,7 @@ inline void inject_thermal_relaxation_(std::shared_ptr<Circuits::Circuit<double>
     if (exact_channels)
     {
         if (const auto *channel = nm.get_thermal_relaxation_for_gate(qi, is_2q))
-            out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, *channel));
+            out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, *channel));
         return;
     }
 
@@ -2006,7 +2006,7 @@ inline void inject_phase_damping_(std::shared_ptr<Circuits::Circuit<double>> &ou
     if (exact_channels)
     {
         if (const auto *channel = nm.get_phase_damping(qi))
-            out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, *channel));
+            out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, *channel));
         return;
     }
 
@@ -2023,11 +2023,11 @@ inline void inject_additional_exact_channels_(std::shared_ptr<Circuits::Circuit<
     {
         const int qi = static_cast<int>(q);
         if (const auto *channel = nm.get_generalized_amplitude_damping(qi))
-            out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, *channel));
+            out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, *channel));
 
         for (const ConfiguredKrausChannel &configured : nm.get_kraus_channels())
             if (configured.targets.size() == 1 && configured.targets[0] == q)
-                out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(configured.targets, configured.channel));
+                out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(configured.targets, configured.channel));
     }
 
     if (affected.size() != 2)
@@ -2035,7 +2035,7 @@ inline void inject_additional_exact_channels_(std::shared_ptr<Circuits::Circuit<
     const Types::qubit_t q0 = affected[0];
     const Types::qubit_t q1 = affected[1];
     if (const auto *channel = nm.get_correlated_phase_flip(static_cast<int>(q0), static_cast<int>(q1)))
-        out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q0, q1}, *channel));
+        out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q0, q1}, *channel));
 
     for (const ConfiguredKrausChannel &configured : nm.get_kraus_channels())
     {
@@ -2043,7 +2043,7 @@ inline void inject_additional_exact_channels_(std::shared_ptr<Circuits::Circuit<
             continue;
         const bool sameTargetSet = (configured.targets[0] == q0 && configured.targets[1] == q1) || (configured.targets[0] == q1 && configured.targets[1] == q0);
         if (sameTargetSet)
-            out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(configured.targets, configured.channel));
+            out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(configured.targets, configured.channel));
     }
 }
 
@@ -2494,7 +2494,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
                     if (exact_channels ||
                         (runtime_channels && !ThermalRelaxation{tau, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact()))
                     {
-                        out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(
+                        out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
                             Types::qubits_vector{q}, memo.ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
                     }
                     else
@@ -2548,7 +2548,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             if (exact_channels || runtime_channels)
             {
                 if (gamma != 0.0)
-                    out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
             }
             else if (gamma > 0 && dist(rng) < gamma)
             {
@@ -2595,7 +2595,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             if (exact_channels)
             {
                 if (p2q != 0.0)
-                    out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
             }
             else if (p2q > 0)
             {
@@ -3010,7 +3010,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
                     if (exact_channels ||
                         (runtime_channels && !ThermalRelaxation{tau, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact()))
                     {
-                        out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(
+                        out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
                             Types::qubits_vector{q}, memo.ThermalRelaxation(tau, idle->t1, idle->t2, idle->excited_population)));
                     }
                     else
@@ -3129,7 +3129,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             if (exact_channels || runtime_channels)
             {
                 if (gamma != 0.0)
-                    out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, memo.AmplitudeDamping(gamma)));
             }
             else if (gamma > 0 && dist(rng) < gamma)
             {
@@ -3182,7 +3182,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             if (exact_channels)
             {
                 if (p2q != 0.0)
-                    out->AddOperation(Circuits::QuantumChannelOperation<>::FromNoiseModel(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
+                    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q1, q2}, memo.TwoQubitDepolarizing(p2q)));
             }
             else if (p2q > 0)
             {

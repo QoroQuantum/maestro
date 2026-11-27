@@ -391,8 +391,7 @@ inline Simulators::ShotPrefixPolicy ConfiguredShotPrefix(const SimulatorConfig &
 {
     if (type == Simulators::SimulatorType::kQCSim && method == Simulators::SimulationType::kPauliPropagator)
         return {true, Simulators::ShotPrefixPolicy::TruncatesPauli(config.native_options, qubits, config.pp_coefficient_threshold, config.pp_max_pauli_weight)};
-    return Simulators::ShotPrefixPolicy::FromConfiguration(type, method, config.native_options, config.path_integral_threshold, qubits,
-                                                           config.max_bond_dimension, config.singular_value_threshold);
+    return Simulators::ShotPrefixPolicy::FromConfiguration(type, method, config.native_options, config.path_integral_threshold, qubits);
 }
 
 inline bool IsAerTrajectoryBackend(const SimulatorConfig &config);

@@ -275,11 +275,11 @@ inline Circuits::Circuit<double>::ChannelDraws InjectedChannelDraws(bool runtime
 // form: when every backend the request may run is the QCSim matrix product
 // state, which samples channels, or the QCSim matrix product operator, which
 // applies them.
-inline Circuits::ChainOrder OrdersForChain(const SimulatorConfig &config, bool exact_channels, size_t qubits = 0)
+inline Circuits::ChainOrder OrdersForChain(const SimulatorConfig &config, bool exact_channels)
 {
     const auto all = [&](Simulators::SimulationType wanted) {
         const auto chain = [&](Simulators::SimulatorType type, Simulators::SimulationType method) {
-            return type == Simulators::SimulatorType::kQCSim && method == wanted && !ConfiguredShotPrefix(config, type, method, qubits).contiguous;
+            return type == Simulators::SimulatorType::kQCSim && method == wanted;
         };
         if (HasCandidateList(config))
             return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
@@ -452,7 +452,7 @@ struct NoiseRealizationPolicy
 inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> requested, const noise::NoiseModel &model, const SimulatorConfig &config,
                                                        NoiseLayer layer, size_t fallback, const std::shared_ptr<Circuits::Circuit<double>> &circuit = {},
                                                        bool estimation = false, std::optional<bool> exact_channels = std::nullopt, bool fresh_register = true,
-                                                       bool runs_channels = true, size_t register_qubits = 0)
+                                                       bool runs_channels = true)
 {
     if ((requested && *requested == 0) || fallback == 0)
         throw std::invalid_argument("noise_realizations must be >= 1.");
@@ -465,7 +465,7 @@ inline NoiseRealizationPolicy ResolveNoiseRealizations(std::optional<size_t> req
     else
         result.exact_channels = circuit ? InjectsExactChannels(config, model, *circuit) : InjectsExactChannels(config, model);
     result.runtime_channels = runs_channels && InjectsRuntimeChannels(config, result.exact_channels);
-    result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels, register_qubits) : Circuits::ChainOrder::kNone;
+    result.chain_order = runs_channels ? OrdersForChain(config, result.exact_channels) : Circuits::ChainOrder::kNone;
     result.stochastic_noise = (layer != NoiseLayer::kPauli && model.has_coherent()) || (layer == NoiseLayer::kCombined && model.has_correlated());
     if (!result.exact_channels)
         result.stochastic_noise = result.stochastic_noise || model.has_non_readout_noise() || (circuit && circuit->HasDrawnChannels());

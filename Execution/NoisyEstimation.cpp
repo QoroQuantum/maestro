@@ -482,11 +482,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     Simulators::ValidatePauliStrings(observables);
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyEstimate out;
-    const auto clean = circuit->RemoveEndMeasurements();
-    size_t qubits = clean->GetMaxQubitIndex() + 1;
-    for (const auto &observable : observables)
-        qubits = std::max(qubits, observable.size());
-    out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels, true, true, qubits);
+    out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels);
     out.realizations = out.policy.realizations;
     if (observables.empty())
     {
@@ -498,6 +494,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
         return out;
     }
     const size_t count = observables.size();
+    const auto clean = circuit->RemoveEndMeasurements();
     const bool exact = out.policy.exact_channels;
     if (exact && SamplesQuantumChannels(config))
         throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
@@ -552,7 +549,9 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     std::vector<Realization> realizations(noise_realizations);
     // Each realization's register also holds the idle qubits its observables
     // name: the host executor keeps every position of a Pauli string.
-    qubits = std::max(qubits, plan.RegisterWidth());
+    size_t qubits = std::max({size_t{1}, clean->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+    for (const auto &observable : observables)
+        qubits = std::max(qubits, observable.size());
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
     // The workers available to the realizations after the warm-up one below,
     // which runs alone: two realizations run one after the other whatever the
@@ -823,8 +822,7 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
     unsigned long probed = 0;
     const auto config = ResolveCandidateBackend(requested_config, qubits, probed);
     spare.handle = probed;
-    const auto policy =
-        ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true, std::nullopt, true, true, qubits);
+    const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true);
     const size_t noise_realizations = policy.realizations;
     auto rng = MakeNoiseRng(config, noise_seed);
     const bool exact = policy.exact_channels;

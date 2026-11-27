@@ -384,7 +384,7 @@ class NoiseAdd
         // may keep for a backend that samples them (IsSimpleNetwork).
         return MaestroExecution::ResolveNoiseRealizations(requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt, model, config,
                                                           EstimationLayer(layer), estimation ? 100 : 64, circuit, estimation, exact_channels_override, true,
-                                                          IsSimpleNetwork(*network), network->GetNumQubits() + network->GetNumNetworkEntangledQubits());
+                                                          IsSimpleNetwork(*network));
     }
 
     struct ExecutionContext

@@ -2338,7 +2338,6 @@ def test_a_checkpoint_suffix_without_noise_reports_the_channels_it_draws(name, s
 def test_chain_ordered_model_trajectories_match_the_density_matrix(options):
     # Each physical bond sees at most two CNOTs. Cap four covers all of their
     # ranks, including branches chosen by the interleaved non-unital T1 noise.
-    # A cutoff alone takes the model scheduler's path without the rank bound.
     width = 6
     gates = []
     for layer in range(3):

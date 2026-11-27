@@ -1750,7 +1750,7 @@ void MultinomialTerminalDispatch()
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
     const auto workers = [&](Method method, size_t bits, size_t shots, bool terminal = true) {
-        const bool fullBatch = terminal && network->UsesFullTerminalBatch(Backend::kQCSim, method, shots, bits, true, prepared);
+        const bool fullBatch = terminal && network->UsesFullTerminalBatch(Backend::kQCSim, method, shots, 10, bits, true, prepared);
         return network->ExecutionThreads(circuit, 10, 10, 10, shots, Backend::kQCSim, method, terminal, fullBatch, prepared, executed);
     };
     network->Configure("seed", "0");
@@ -1802,6 +1802,32 @@ void MultinomialTerminalDispatch()
         }
     }
 }
+
+#ifndef NO_QISKIT_AER
+void AerMpsTerminalDispatch()
+{
+    auto network = std::make_shared<ThreadingNetwork>(Types::qubits_vector{3}, std::vector<size_t>{3});
+    network->GetController()->SetOptimizeCircuit(false);
+    network->CreateSimulator(Backend::kQiskitAer, Method::kMatrixProductState);
+    network->Configure("seed", "37");
+    auto circuit = CF::CreateCircuit({CF::CreateGate(Gate::kHadamardGateType, 0), CF::CreateGate(Gate::kCXGateType, 0, 1),
+                                      CF::CreateGate(Gate::kCXGateType, 1, 2), CF::CreateMeasurement({{1, 1}, {2, 2}})});
+    const auto fullBatch = [&] {
+        network->RepeatedExecuteOnHost(circuit, 0, 0); // Map the terminal circuit without drawing shots.
+        size_t width = 0;
+        Check(!network->GetDistributedCircuit()->HasOpsAfterMeasurementsWithWidth(false, width), "Aer dispatch fixture has a dynamic readout");
+        return network->UsesFullTerminalBatch(Backend::kQiskitAer, Method::kMatrixProductState, 1025, 3, width, true, nullptr);
+    };
+    Check(!fullBatch(), "Aer MPS restricted a native subset readout to a single batch");
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    Check(fullBatch(), "Aer MPS split a full-register probabilities draw");
+    network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
+    Check(!fullBatch(), "Aer MPS restricted native apply_measure shots to a single batch");
+    network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
+    circuit->AddOperation(CF::CreateMeasurement({{2, 0}}));
+    Check(!fullBatch(), "Aer MPS counted an overwritten measurement in its final sampler width");
+}
+#endif
 
 // The first logical terminal batch samples the prepared state itself, and the
 // others either keep sampling it (one worker) or copy it afterwards. What a
@@ -1872,7 +1898,7 @@ void ClearedMpoStillSamplesInParallel()
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
-    const bool fullBatch = network->UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 1000, 2, true, prepared);
+    const bool fullBatch = network->UsesFullTerminalBatch(Backend::kQCSim, Method::kMatrixProductOperator, 1000, 2, 2, true, prepared);
     const auto threads =
         network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, fullBatch, prepared, executed);
     Check(threads == 4 && prepared && prepared->GetNumberOfQubits() == 2 && calls->load() == 1, "A cleared MPO forced terminal sampling onto one worker");
@@ -3692,6 +3718,9 @@ try
     KeptMixedCandidateIsPrepared();
     ClearedMpoStillSamplesInParallel();
     MultinomialTerminalDispatch();
+#ifndef NO_QISKIT_AER
+    AerMpsTerminalDispatch();
+#endif
     TerminalBatchesSampleThePreparedState();
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();

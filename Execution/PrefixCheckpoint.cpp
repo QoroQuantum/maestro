@@ -62,7 +62,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits
                                         "Pauli propagator, without coherent or correlated noise");
         std::optional<uint64_t> seed = 0; // no sampled layer reads it
         auto rng = MakeNoiseRng(config_, seed);
-        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise, false, OrdersForChain(config_, true, num_qubits_));
+        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise, false, OrdersForChain(config_, true));
         executed_prefix = InjectPlanned(NoiseLayer::kCombined, plan, rng, true);
         // As for suffixes: crosstalk spectators beyond a prefix that fits the
         // register stay in |0>, where their rotations are a global phase.
@@ -167,8 +167,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &given, size_
     if (!noise_model)
         noise_model = &no_noise;
     // The suffix continues the saved prefix state, not a fresh register.
-    const auto policy =
-        ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false, true, num_qubits_);
+    const auto policy = ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false);
 
     // A checkpoint can alternate counts and ordered rows on the same simulator.
     // Pin the sampler for this call before cloning its workers.

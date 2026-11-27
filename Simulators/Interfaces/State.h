@@ -201,50 +201,13 @@ struct ShotPrefixPolicy
         return coefficient.value_or(0.) > 0. || (weight && *weight < qubits);
     }
 
-    // A truncating SVD depends on the state of the whole chain. A disjoint gate
-    // can change which terms survive before a measurement or a Kraus draw.
-    // Keep ordinary numerical cutoffs fast. A bond cap matters only below
-    // the maximum Schmidt rank across the centre (site dimension 2 or 4).
-    static bool TruncatesChain(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options, size_t qubits,
-                               std::optional<size_t> bondCap = {}, std::optional<double> cutoff = {})
-    {
-        const bool mpo = method == SimulationType::kMatrixProductOperator;
-        if (!mpo && method != SimulationType::kMatrixProductState)
-            return false;
-        if (!cutoff)
-        {
-            auto it = options.find("matrix_product_state_truncation_threshold");
-            if (it == options.end())
-                it = options.find("matrix_product_operator_truncation_threshold");
-            if (it != options.end())
-                cutoff = std::strtod(it->second.c_str(), nullptr);
-        }
-        double numericalCutoff = 1e-15;
-#ifndef NO_QISKIT_AER
-        if (type == SimulatorType::kQiskitAer)
-            numericalCutoff = 1e-16;
-#endif
-        if (cutoff.value_or(0.) > numericalCutoff)
-            return true;
-        if (!bondCap)
-        {
-            auto it = mpo ? options.find("matrix_product_operator_max_bond_dimension") : options.end();
-            if (it == options.end())
-                it = options.find("matrix_product_state_max_bond_dimension");
-            bondCap = it == options.end() ? (type == SimulatorType::kGpuSim ? 128 : 0) : std::stoull(it->second);
-        }
-        const size_t rankBits = (qubits / 2) * (mpo ? 2 : 1);
-        return *bondCap && (!qubits || rankBits >= std::numeric_limits<size_t>::digits || *bondCap < (size_t{1} << rankBits));
-    }
-
     static ShotPrefixPolicy FromConfiguration(SimulatorType type, SimulationType method, const std::unordered_map<std::string, std::string> &options,
-                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0, std::optional<size_t> bondCap = {},
-                                              std::optional<double> cutoff = {})
+                                              std::optional<double> pathIntegralThreshold = {}, size_t qubits = 0)
     {
         if (type == SimulatorType::kQCSim && method == SimulationType::kPauliPropagator)
             return {true, TruncatesPauli(options, qubits)};
         if (type != SimulatorType::kQCSim || method != SimulationType::kPathIntegral)
-            return {EvolvesExactQuantumChannels(type, method), TruncatesChain(type, method, options, qubits, bondCap, cutoff)};
+            return {EvolvesExactQuantumChannels(type, method), false};
         if (pathIntegralThreshold)
             return ForPathIntegral(*pathIntegralThreshold);
         const auto value = options.find("path_integral_threshold");
@@ -761,8 +724,6 @@ class IState
         const auto method = GetSimulationType();
         if (method == SimulationType::kPauliPropagator && GetType() == SimulatorType::kQCSim)
             return {true, ShotPrefixPolicy::TruncatesPauli(GetExplicitConfigMap(), GetNumberOfQubits())};
-        if (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator)
-            return {SupportsQuantumChannels(), ShotPrefixPolicy::TruncatesChain(GetType(), method, GetExplicitConfigMap(), GetNumberOfQubits())};
         return {SupportsQuantumChannels(), false};
     }
 

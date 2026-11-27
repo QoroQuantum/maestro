@@ -148,7 +148,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         if (optSim && optimiseMultipleShots && executedGates.size() == dcirc->size() &&
             std::none_of(executedGates.begin(), executedGates.end(), [](bool executed) { return executed; }))
         {
-            executedGates = ExecuteSharedPrefix(state, &curMaxBondDimLocal);
+            executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
             if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                 optSim->SaveState();
         }
@@ -172,7 +172,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             if (optimiseMultipleShots)
             {
-                executedGates = ExecuteSharedPrefix(state, &curMaxBondDimLocal);
+                executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
 
                 dcirc = dcirc->RemoveExecutedOperations(executedGates);
                 if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
@@ -339,7 +339,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
                 if (optimiseMultipleShots)
                 {
-                    executedGates = ExecuteSharedPrefix(state, curMaxBondDim);
+                    executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
                     dcirc = dcirc->RemoveExecutedOperations(executedGates);
                     if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
@@ -369,7 +369,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 }
                 if (needToExecuteGates && optimiseMultipleShots)
                 {
-                    executedGates = ExecuteSharedPrefix(state, curMaxBondDim);
+                    executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
                     dcirc = dcirc->RemoveExecutedOperations(executedGates);
                     if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
                         network->GetMPSOptimizeSwaps())
@@ -423,7 +423,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             if (optimiseMultipleShots)
             {
-                executedGates = ExecuteSharedPrefix(state, curMaxBondDim);
+                executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
                 dcirc = dcirc->RemoveExecutedOperations(executedGates);
                 if ((method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator) &&
                     network->GetMPSOptimizeSwaps())
@@ -550,35 +550,13 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
-    std::vector<bool> ExecuteSharedPrefix(Circuits::OperationState &state, size_t *maxBond) const
+    bool HasTerminalMeasurements() const
     {
-        const Simulators::ShotPrefixPolicy byWire{false, false};
-        return dcirc->ExecuteNonMeasurements(optSim, state, maxBond, false, false, shareResetWires ? &byWire : nullptr);
-    }
-
-    bool HasTerminalMeasurements()
-    {
-        // A serial job can receive a smaller template register which it will resize and configure.
-        // Whether a bond cap can truncate depends on the width that actually executes the circuit.
+        // A serial job can resize its template register before applying the configured Pauli weight limit.
         const auto policy = optSim && optSim->GetNumberOfQubits() == nrQubits
                                 ? optSim->GetShotPrefixPolicy()
                                 : Simulators::ShotPrefixPolicy::FromConfiguration(simType, method, config.GetConfigMap(), {}, nrQubits);
-        if (!dcirc->HasOpsAfterMeasurementsOn(policy))
-            return true;
-        // The network plans before dispatch. A standalone job can also do so
-        // when its initial register is known to be fresh and no prefix ran.
-        if (policy.contiguous && method == Simulators::SimulationType::kMatrixProductState && curCnt > 1 && optimiseMultipleShotsExecution &&
-            !network->GetOptimizeSimulator() && (!optSim || startsFromZero) && !independentShotStreams &&
-            std::none_of(executedGates.begin(), executedGates.end(), [](bool ran) { return ran; }))
-        {
-            auto terminal = Circuits::IsolatedMpsTerminalOrder(dcirc, nrQubits, simType);
-            if (terminal != dcirc)
-            {
-                dcirc = std::move(terminal);
-                return true;
-            }
-        }
-        return false;
+        return !dcirc->HasOpsAfterMeasurementsOn(policy);
     }
 
     // Whether the job's simulator samples reproducibly. Only the dense methods
@@ -747,14 +725,13 @@ template <typename Time = Types::time_type> class ExecuteJob
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
                     // Finalize source ordering before preparing fusion. Routing layers
                     // are only a cost model and must never replace executable operations.
-                    auto ordered = sim->GetShotPrefixPolicy().contiguous ? dcirc : Circuits::Circuit<Time>::LayersToCircuit(layers);
+                    auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
                     // As in the network's copy of this function: qubits that form lines out of index
                     // order are placed along them, which needs no swap (Circuits::ChainLine).
                     const std::vector<long long int> line = network->GetInitialQubitsMapOptimization()
                                                                 ? Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits())
                                                                 : std::vector<long long int>();
-                    if (ordered != dcirc)
-                        dcirc->SetOperations(ordered->GetOperations());
+                    dcirc->SetOperations(ordered->GetOperations());
                     sim->SetUpcomingGates(dcirc->GetOperations());
                     // Measurements and resets enter the model of a backend that reports them (the QCSim chains).
                     const bool tracksDisentangling = sim->GetType() == Simulators::SimulatorType::kQCSim;
@@ -877,8 +854,6 @@ template <typename Time = Types::time_type> class ExecuteJob
     std::mutex &resultsMutex;
 
     bool optimiseMultipleShotsExecution = true;
-    bool startsFromZero = false;  // The network explicitly reset the supplied simulator before this job.
-    bool shareResetWires = false; // Fresh QCSim MPS with a layout searched before scheduling unobserved resets.
     bool allowInternalMultithreading = false;
     // Zero leaves the caller's OpenMP settings untouched (ordinary jobs).
     int internalThreads = 0;

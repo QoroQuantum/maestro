@@ -107,43 +107,25 @@ Dynamic raw sampling reuses deterministic prefixes while retaining the complete
 per-shot measurement history. Nested circuits are inlined first, so one that
 ends in measurements counts as terminal.
 
-On MPS and MPO, a bond cap below the register's maximum Schmidt rank or a
-singular-value cutoff above the numerical default can make the result depend on
-operation order. Shot preparation normally stops at the first deferred operation.
-Fresh runs on a fixed QCSim or Aer MPS can use bulk terminal sampling even when a measurement
-appears early. The measured qubit must have had only one-qubit gates, and no
-later gate may use it. When the circuit otherwise contains only gates and
-measurements, the planner can move those independent readouts to the end before
-choosing the layout. It preserves the order of classical writes. A measurement
-of an entangled qubit or one used for feedback still needs its dependency checks.
-Bulk readout samples the prepared MPS. At a large cutoff, collapsing the other
-qubits one at a time can truncate them again and change the distribution.
+MPS and MPO use quantum-wire and classical-bit dependencies to share gates
+across shots. An early measurement can be part of a joint terminal readout
+even if its qubit was entangled. Later gates must leave that qubit alone, and
+feedback that reads its result must wait for the measurement. A sampled
+channel or a reset on an entangled pure-state qubit draws a branch per shot.
+Independent gates on other wires can still share a preparation.
 
-For a fresh QCSim MPS circuit consisting of gates, unconditional resets and
-terminal readout, the initial layout planner can also arrange work in layers
-and prepare independent gates once for the shots. Each qubit keeps its own
-gate and reset order, and terminal measurements keep their classical write
-order. Reset outcomes are discarded. With a restrictive bond cap or cutoff,
-moving a gate on another wire across an entangled reset can change the
-approximation. Runs that keep a fixed layout retain the reset boundary.
+A finite bond dimension or singular-value cutoff can make the approximation
+depend on the gate, channel and measurement order chosen by the planner.
+For example, moving a gate before a measurement on another qubit can
+temporarily increase the bond dimension needed to represent the state.
+If the cap discards terms there, the two schedules can yield different
+probabilities. Increasing the cap or decreasing the cutoff lets you check
+convergence. In exact arithmetic the two legal schedules give the same
+distribution. Their seeded shot sequences can still differ.
 
-With a bond cap and a numerical-default cutoff, Maestro can also check the
-circuit against each physical bond. For example, four neighboring CNOTs
-crossing the same cut can raise its rank from one to at most 16. A one-qubit
-noise branch cannot raise it further. When every cut fits and the layout is
-known, independent gates can share a preparation. A circuit with explicit channel
-instructions retains their draw order on this path. For fresh QCSim MPS shots
-with only model-injected errors on a nearest-neighbor chain, the planner can
-schedule local updates together even when the cap can be reached. It preserves
-dependencies on each wire and stops at measurements, resets, and classical control.
-The configured truncation can affect the resulting approximation. Checkpoint
-suffixes start from an existing state and use their own ordering rules.
-
-Gate fusion can combine independent unitary work between stochastic operations.
-This can reduce the peak bond dimension, including on circuits with routing
-disabled. The QCSim Pauli propagator also preserves measurement order when a
-positive coefficient threshold or a weight limit below the register width
-can discard Pauli terms. Terminal measurements can still share one preparation.
+The QCSim Pauli propagator preserves measurement order when a positive
+coefficient threshold or a Pauli weight limit below the register width can
+discard terms. Terminal measurements can still share one preparation.
 
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames

@@ -462,8 +462,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             const auto result = SampleCircuit(circuit, config, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
-            // The network may have shared a rank-bounded prefix or split the
-            // circuit into components. Report the plan it actually executed.
+            // Different components can use different samplers. Report the plans that ran.
             records.sampling_strategy = result.sampling_strategy;
             if (result.network_terminal && result.network_trajectory)
                 records.sampling_strategy = "mixed_v1";
@@ -537,11 +536,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (exact && SamplesQuantumChannels(config))
         throw std::invalid_argument("Exact noise requires a density-matrix or MPO backend, or the QCSim Pauli propagator: this backend takes a "
                                     "channel as one sampled trajectory");
-    const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
-    const QubitCompaction compaction(*circuit);
-    // Outside spectators receive only Rz on |0>. They do not increase the
-    // maximum Schmidt rank of the circuit's active qubits.
-    auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact, true, true, compaction.Width());
+    auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact);
     // A backend that samples channels draws all the noise as each shot runs
     // (ResolveRuntimeNoise): every shot is then a realization of its own.
     std::unique_ptr<noise::NoiseInjectionPlan> plan;
@@ -558,6 +553,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     const size_t base_batch = shots / batches;
     const size_t leftover = shots % batches;
 
+    const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
     const size_t width = ClassicalWidth(*circuit);
     // Independent one-shot realizations may skip per-realization network setup;
     // shared-realization counts keep their existing executor. So do
@@ -579,6 +575,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // direct counts pad theirs the same way. It compacts each realization to
     // the circuit's qubits plus the untouched spectators, which is what its
     // workers' memory budget counts.
+    const QubitCompaction compaction(*circuit);
     bool trim_spectators = false;
     size_t host_qubits = qubits, untouched_spectators = 0;
     if (noise_model.has_crosstalk())

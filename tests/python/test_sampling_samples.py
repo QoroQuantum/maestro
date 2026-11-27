@@ -299,6 +299,50 @@ def test_isolated_mps_readout_before_routed_gates(backend, width, cap):
     np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=769, return_samples=True)["samples"])
 
 
+@pytest.mark.parametrize("algorithm,readout", [
+    ("apply_measure", "full"), ("probabilities", "subset"), ("probabilities", "overwritten"),
+])
+def test_aer_mps_native_terminal_sampling_replays_across_workers(algorithm, readout):
+    aer = getattr(maestro.SimulatorType, "QiskitAer", None)
+    if aer is None:
+        pytest.skip("Aer is not compiled in")
+    circuit = QuantumCircuit()
+    circuit.ry(0, 1.13)
+    for q in range(5):
+        circuit.cx(q, q + 1)
+    circuit.x(3)
+    if readout == "subset":
+        # Aer samples a subset per shot even with the probabilities setting.
+        # The omitted sites, including q0 and q1, control the measured sites.
+        destinations = [(5, 5), (3, 1), (2, 4)]
+        excited = "000011"
+    else:
+        if readout == "overwritten":
+            # All six sites are measured and all six bits are written. Q3
+            # overwrites q0's only destination, so just five sites survive.
+            circuit.measure([(0, 1), (2, 2)])
+        else:
+            circuit.measure([(0, 2)])
+        destinations = [(1, 0), (2, 4), (3, 1), (4, 3), (5, 5)]
+        excited = "101111"
+    circuit.measure(destinations)
+    cfg = maestro.SimulatorConfig(simulator_type=aer, simulation_type=maestro.SimulationType.MatrixProductState,
+                                  fixed_backend=True, seed=73, max_simulators=1, mps_sampling=algorithm)
+    shots = 1025  # Four complete logical batches and a one-shot tail.
+    raw = circuit.execute(config=cfg, shots=shots, return_samples=True)
+    assert raw["sampling_strategy"] == "terminal_v1"
+    rows = _records(raw, shots, 6)
+    counts = circuit.execute(config=cfg, shots=shots)["counts"]
+    for histogram in (counts, Counter("".join(map(str, row)) for row in rows)):
+        assert sum(histogram.values()) == shots
+        assert set(histogram) == {"010000", excited}
+        assert histogram[excited] / shots == pytest.approx(math.sin(1.13 / 2) ** 2, abs=0.06)
+
+    cfg.max_simulators = 4
+    np.testing.assert_array_equal(rows, circuit.execute(config=cfg, shots=shots, return_samples=True)["samples"])
+    assert counts == circuit.execute(config=cfg, shots=shots)["counts"]
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])
 def test_raw_terminal_readout_is_drawn_per_row(method):
     circuit = QuantumCircuit()

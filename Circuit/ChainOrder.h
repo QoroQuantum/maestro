@@ -34,62 +34,6 @@ enum class ChainOrder
     kMixedState       /**< a matrix product operator: any channel */
 };
 
-// Starting from zero, a qubit touched only by local gates up to its last
-// use can be measured together with the terminal readouts. Plan this before
-// layout so the chain is prepared just as if those readouts were written last.
-// Keep their relative order, including repeated qubits and classical writes.
-template <typename Time>
-std::shared_ptr<Circuit<Time>> IsolatedMpsTerminalOrder(const std::shared_ptr<Circuit<Time>> &circuit, size_t width, Simulators::SimulatorType type)
-{
-    if (type != Simulators::SimulatorType::kQCSim
-#ifndef NO_QISKIT_AER
-        && type != Simulators::SimulatorType::kQiskitAer
-#endif
-    )
-        return circuit;
-    const auto &ops = circuit->GetOperations();
-    const auto isMeasurement = [](const auto &op) { return op->GetType() == OperationType::kMeasurement; };
-    const auto lastGate = std::find_if_not(ops.rbegin(), ops.rend(), isMeasurement).base();
-    if (std::none_of(ops.begin(), lastGate, isMeasurement))
-        return circuit;
-
-    std::vector<bool> coupled(width), measured(width);
-    for (auto it = ops.begin(); it != ops.end(); ++it)
-    {
-        const auto &op = *it;
-        if (isMeasurement(op))
-        {
-            if (!dynamic_cast<const MeasurementOperation<Time> *>(op.get()))
-                return circuit;
-            if (it < lastGate)
-                for (const auto q : op->AffectedQubits())
-                {
-                    if (q >= width || coupled[q])
-                        return circuit;
-                    measured[q] = true;
-                }
-            continue;
-        }
-        if (op->GetType() != OperationType::kGate)
-            return circuit;
-        // Opaque operations can change normalization or use classical state.
-        const auto *gate = dynamic_cast<const IQuantumGate<Time> *>(op.get());
-        if (!gate || gate->GetGateType() == QuantumGateType::kNone)
-            return circuit;
-        const auto targets = op->AffectedQubits();
-        for (const auto q : targets)
-        {
-            if (q >= width || measured[q])
-                return circuit;
-            if (targets.size() > 1)
-                coupled[q] = true;
-        }
-    }
-    auto ordered = ops;
-    std::stable_partition(ordered.begin(), ordered.end(), [&](const auto &op) { return !isMeasurement(op); });
-    return std::make_shared<Circuit<Time>>(ordered, circuit->GetGlobalPhase());
-}
-
 /**
  * @brief The circuit with its operations in an order that keeps the work of a tensor chain local.
  *
@@ -127,19 +71,18 @@ std::shared_ptr<Circuit<Time>> IsolatedMpsTerminalOrder(const std::shared_ptr<Ci
  * before it.
  *
  * The result shares the operations of the circuit and describes the same map
- * in exact arithmetic. A seeded MPS trajectory draws branches in the chosen
- * order. If a bond truncates, a different schedule can discard a different
- * subspace. Callers that require written-order truncation select kNone.
+ * in exact arithmetic. Finite bond limits and singular-value truncation may
+ * yield different approximations after reordering. A seeded trajectory draws
+ * its channel branches in the chosen order.
  *
  * @param circuit The circuit.
  * @param chain The kind of chain that runs it.
  * @param positions The position of every qubit on the chain, or null for the index.
- * @param preserveExplicitDraws Keep the relative order of channel draws if the circuit contains explicit channels.
  * @return The reordered circuit, or `circuit` itself.
  */
 template <typename Time = Types::time_type>
 std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>> &circuit, ChainOrder chain = ChainOrder::kSampledChannels,
-                                            const std::vector<long long int> *positions = nullptr, bool preserveExplicitDraws = false)
+                                            const std::vector<long long int> *positions = nullptr)
 {
     using Channel = Simulators::QuantumChannel;
     if (!circuit || chain == ChainOrder::kNone)
@@ -159,7 +102,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
         size_t low = 0, high = 0;
         bool pair = false;
         bool barrier = false;
-        bool channel = false;
         bool reads = false;   // needs the canonical form around its sites: pays for the travel
         bool changes = false; // leaves the chain off that form away from its sites
         bool starts = false;  // takes a canonical chain off its form
@@ -168,7 +110,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
     std::vector<Entry> entries(count);
     size_t width = 0;
     bool anyStart = false;
-    bool preserveChannelOrder = false;
     for (size_t i = 0; i < count; ++i)
     {
         const auto &op = operations[i];
@@ -204,7 +145,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
             entry.reads = entry.changes = entry.pair;
             continue;
         }
-        entry.channel = true;
         if (chain == ChainOrder::kMixedState)
         {
             // Every channel is a map on the operator: one site is updated in place, two are decomposed.
@@ -215,9 +155,7 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
         {
             // Only what is drawn from the state touches the chain as more than a gate: a Pauli part is
             // one-qubit gates, a mixture of unitaries on two qubits one gate.
-            const auto &instruction = static_cast<const QuantumChannelOperation<Time> &>(*op);
-            preserveChannelOrder = preserveChannelOrder || (preserveExplicitDraws && !instruction.IsFromNoiseModel());
-            const auto &channel = instruction.GetChannel();
+            const auto &channel = static_cast<const QuantumChannelOperation<Time> &>(*op).GetChannel();
             Channel::ThermalMixture mixture;
             for (const auto &factor : channel.GetFactors())
                 if (factor.kind == Channel::FactorKind::kKraus ||
@@ -255,13 +193,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
         // the right. Whatever precedes the segment (the start, a measurement, a reset) leaves all of it so,
         // and it stays so until an operation takes it off.
         size_t left = width, right = 0;
-        size_t nextChannel = begin;
-        const auto advanceChannel = [&] {
-            while (nextChannel < end && !entries[nextChannel].channel)
-                ++nextChannel;
-        };
-        if (preserveChannelOrder)
-            advanceChannel();
         bool offForm = false;
         for (size_t placed = begin; placed < end; ++placed)
         {
@@ -272,8 +203,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
                     continue;
                 const size_t index = queues[q][heads[q]];
                 const Entry &entry = entries[index];
-                if (preserveChannelOrder && entry.channel && index != nextChannel)
-                    continue;
                 if (entry.pair && (queues[entry.low][heads[entry.low]] != index || queues[entry.high][heads[entry.high]] != index))
                     continue; // another operation comes first on one of its qubits
                 size_t cost = 0;
@@ -287,11 +216,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
             }
             const Entry &entry = entries[best];
             ordered.push_back(operations[best]);
-            if (preserveChannelOrder && entry.channel)
-            {
-                ++nextChannel;
-                advanceChannel();
-            }
             ++heads[entry.low];
             if (entry.pair)
                 ++heads[entry.high];
@@ -323,182 +247,6 @@ std::shared_ptr<Circuit<Time>> ChainOrdered(const std::shared_ptr<Circuit<Time>>
             ordered.push_back(operations[end]);
         begin = end + 1;
     }
-    return std::make_shared<Circuit<Time>>(ordered, circuit->GetGlobalPhase());
-}
-
-// From a product state, a controlled gate can at most double the Schmidt rank
-// on its bond (its operator is a sum of two tensor products). A one-site
-// unitary, projective measurement or individual Kraus branch cannot increase
-// any rank. Counting all crossings bounds every prefix, including any order
-// preserving each wire's dependencies. Work on the emitted, noise-injected
-// instructions and require physical neighbours so no routing swaps are omitted.
-template <typename Time> bool FitsMpsBondCap(const Circuit<Time> &circuit, size_t qubits, size_t cap, bool fusionMayRelabel)
-{
-    if (!qubits || !cap)
-        return false;
-    std::vector<size_t> ranks(qubits - 1, 1), lastBond;
-    if (fusionMayRelabel)
-        lastBond.assign(qubits, qubits);
-    for (const auto &op : circuit.GetOperations())
-    {
-        const auto targets = op->AffectedQubits();
-        if (std::any_of(targets.begin(), targets.end(), [qubits](auto q) { return q >= qubits; }))
-            return false;
-        if (op->GetType() == OperationType::kMeasurement || op->GetType() == OperationType::kDelay || op->GetType() == OperationType::kNoOp)
-            continue;
-        if (op->GetType() == OperationType::kQuantumChannel)
-        {
-            if (targets.size() != 1 || !dynamic_cast<const QuantumChannelOperation<Time> *>(op.get()))
-                return false;
-            continue;
-        }
-        if (op->GetType() != OperationType::kGate)
-            return false;
-        const auto *gate = dynamic_cast<const IQuantumGate<Time> *>(op.get());
-        if (!gate || gate->GetGateType() == QuantumGateType::kNone)
-            return false;
-        if (targets.size() == 1)
-            continue;
-        if (targets.size() != 2)
-            return false;
-        const size_t low = std::min(targets[0], targets[1]), high = std::max(targets[0], targets[1]);
-        if (high - low != 1)
-            return false;
-        if (!IsControlledTwoQubitGate(gate->GetGateType()))
-            return false; // Includes SWAP, which may relabel the sites.
-        if (fusionMayRelabel)
-        {
-            // A two-site fused block with one controlled gate and local
-            // factors still has rank <= 2 and cannot be SWAP (rank 4).
-            // With repeated crossings in one block its result could relabel
-            // the chain, invalidating all subsequent physical-cut counts.
-            if (lastBond[low] == low && lastBond[high] == low)
-                return false;
-            lastBond[low] = lastBond[high] = low;
-        }
-        const size_t bits = std::min(high, qubits - high);
-        if (bits < std::numeric_limits<size_t>::digits && (size_t{1} << bits) <= cap)
-            continue; // the smaller half of this physical cut fits regardless of gates
-        if (ranks[low] > cap / 2)
-            return false;
-        ranks[low] *= 2;
-    }
-    return true;
-}
-
-// Call only for fresh, fixed-backend shot executions. Ordering the circuit
-// itself keeps the simulator's conservative policy for all other circuits,
-// restored checkpoints and later measurements on an existing state.
-template <typename Time>
-std::shared_ptr<Circuit<Time>> ScheduleMpsShots(const std::shared_ptr<Circuit<Time>> &circuit, size_t qubits, const Simulators::ISimulator &sim,
-                                                const std::unordered_map<std::string, std::string> &options, bool identityLayout,
-                                                bool *shareResetWires = nullptr)
-{
-    using Policy = Simulators::ShotPrefixPolicy;
-    if (shareResetWires)
-        *shareResetWires = false;
-    const auto method = sim.GetSimulationType();
-    const auto type = sim.GetType();
-    const auto cap = options.find("matrix_product_state_max_bond_dimension");
-    if (!circuit || method != Simulators::SimulationType::kMatrixProductState ||
-        (type != Simulators::SimulatorType::kQCSim
-#ifndef NO_QISKIT_AER
-         && type != Simulators::SimulatorType::kQiskitAer
-#endif
-         ) ||
-        !Policy::TruncatesChain(type, method, options, qubits))
-        return circuit;
-    const auto &original = circuit->GetOperations();
-    const auto firstDeferred = std::find_if(original.begin(), original.end(), [](const auto &op) {
-        return op->GetType() == OperationType::kMeasurement || op->GetType() == OperationType::kQuantumChannel || op->GetType() == OperationType::kReset;
-    });
-    if (std::none_of(firstDeferred, original.end(), [](const auto &op) { return op->GetType() == OperationType::kGate; }))
-        return circuit;
-
-    // A reset discards its outcome. With only gates and resets before the terminal
-    // reads, independent wires can use the normal QCSim schedule. As with gate
-    // fusion, the chosen order can affect the approximation at a finite bond cap.
-    auto scheduled = circuit;
-    if (!identityLayout && type == Simulators::SimulatorType::kQCSim && (*firstDeferred)->GetType() == OperationType::kReset)
-    {
-        const auto readout = std::find_if(firstDeferred, original.end(), [](const auto &op) { return op->GetType() == OperationType::kMeasurement; });
-        const bool wireLocalResets =
-            std::all_of(original.begin(), readout,
-                        [](const auto &op) {
-                            if (const auto *reset = dynamic_cast<const Reset<Time> *>(op.get()))
-                                return !reset->GetQubits().empty();
-                            const auto *gate = dynamic_cast<const IQuantumGate<Time> *>(op.get());
-                            return op->GetType() == OperationType::kGate && gate && gate->GetGateType() != QuantumGateType::kNone;
-                        }) &&
-            std::all_of(readout, original.end(), [](const auto &op) { return dynamic_cast<const MeasurementOperation<Time> *>(op.get()); });
-        if (wireLocalResets)
-        {
-            // The layout optimizer normally orders work in layers. Keep terminal
-            // classical writes in sequence, including repeated destinations.
-            Circuit<Time> body(typename Circuit<Time>::OperationsVector(original.begin(), readout), circuit->GetGlobalPhase());
-            body.ConvertForCutting(); // Use the same gate decomposition as the layout and lookahead planners.
-            scheduled = Circuit<Time>::LayersToCircuit(body.ToMultipleQubitsLayersNoClone());
-            for (auto it = readout; it != original.end(); ++it)
-                scheduled->AddOperation(*it);
-            // Choose the layout from these layers. Only then should a worker
-            // lift the shared gates into its prefix and refresh its routing window.
-            if (shareResetWires)
-                *shareResetWires = true;
-            return scheduled;
-        }
-    }
-    const bool rankBounded = identityLayout && cap != options.end() && !Policy::TruncatesChain(type, method, options, qubits, size_t{0}) &&
-                             FitsMpsBondCap(*circuit, qubits, std::stoull(cap->second), sim.SwapGatesRelabelQubits());
-    if (!rankBounded)
-    {
-        // A noise model specifies errors on each gate. Schedule those local updates
-        // along the chain, keeping every wire dependency and measurement barrier.
-        // Truncation can depend on the schedule. Explicit draws retain their
-        // circuit order unless the stronger rank bound above succeeds.
-        if (type == Simulators::SimulatorType::kQCSim && circuit->HasQuantumChannels() && std::all_of(original.begin(), original.end(), [](const auto &op) {
-                if (op->GetType() != OperationType::kQuantumChannel)
-                    return true;
-                const auto *channel = dynamic_cast<const QuantumChannelOperation<Time> *>(op.get());
-                return channel && channel->IsFromNoiseModel();
-            }))
-            return ChainOrdered(circuit, ChainOrder::kSampledChannels);
-        return circuit;
-    }
-
-    // The QCSim gate and trajectory caches merge overlapping supports up to
-    // two sites on MPS. A product of the certified local factors on those
-    // sites obeys the same cut bounds as the individual instructions.
-    if (type == Simulators::SimulatorType::kQCSim && circuit->HasQuantumChannels())
-        scheduled = ChainOrdered(circuit, ChainOrder::kSampledChannels, nullptr, true);
-    OperationState dry;
-    const auto mask = scheduled->PlanNonMeasurements(dry, {false, false});
-    if (std::find(mask.begin(), mask.end(), true) == mask.end())
-        return scheduled;
-    const auto &ops = scheduled->GetOperations();
-    const size_t offset = ops.size() - mask.size();
-    // Even a one-branch channel can consume an RNG word in an adapter. Keep
-    // it behind earlier draws rather than lifting it into the shared head.
-    for (size_t i = 0; i < mask.size(); ++i)
-        if (mask[i] && ops[offset + i]->GetType() == OperationType::kQuantumChannel)
-            return scheduled;
-    if (!scheduled->HasDrawnChannels())
-    {
-        // A terminal sampler may move a proper subset of measured sites
-        // together using swaps. Those cuts were not part of the gate bound.
-        std::vector<bool> measured(qubits);
-        for (const auto &op : ops)
-            if (op->GetType() == OperationType::kMeasurement)
-                for (const auto q : op->AffectedQubits())
-                    measured[q] = true;
-        if (std::find(measured.begin(), measured.end(), false) != measured.end())
-            return circuit;
-    }
-    typename Circuit<Time>::OperationsVector ordered(ops.begin(), ops.begin() + offset);
-    ordered.reserve(ops.size());
-    for (bool shared : {true, false})
-        for (size_t i = 0; i < mask.size(); ++i)
-            if (mask[i] == shared)
-                ordered.push_back(ops[offset + i]);
     return std::make_shared<Circuit<Time>>(ordered, circuit->GetGlobalPhase());
 }
 

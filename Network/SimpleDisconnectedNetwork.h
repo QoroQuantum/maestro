@@ -874,8 +874,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         std::vector<bool> executed;
         const bool release = optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized();
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbitsResults, simType, method, executed, release, release);
-        bool shareResetWires = false;
-        const bool reorderedShots = resetBeforeExecution && !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method, shareResetWires);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -884,13 +882,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionEnabled = false;
         lastDistributedPlacement.clear();
 
-        const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
+        const bool reproducibleSampling = UsesReproducibleSampling(simType, method, terminalSampling);
         usedTerminalSampling = shots > 1 && terminalSampling;
         const bool startsFromZero = resetBeforeExecution || !simulator || simulator->GetType() != simType || simulator->GetSimulationType() != method ||
                                     simulator->GetNumberOfQubits() != nrQubits;
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, startsFromZero, optSim, reorderedShots);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, nrQubits, measuredWidth, startsFromZero, optSim);
         const size_t nrThreads =
             ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, fullTerminalBatch, optSim, executed);
 
@@ -908,7 +906,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbitsResults, simType, method, executed,
                                               nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex,
-                                     logicalTerminal, shareResetWires);
+                                     logicalTerminal);
         }
         else if (nrThreads > 1)
         {
@@ -940,7 +938,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 shots -= curCnt;
 
                 auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType, method, resultsMutex);
-                job->shareResetWires = shareResetWires;
                 job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
                 job->network = BaseClass::getptr();
@@ -981,7 +978,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const size_t curCnt = shots;
 
             auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType, method, resultsMutex);
-            job->shareResetWires = shareResetWires;
             job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
             job->network = BaseClass::getptr();
@@ -1012,7 +1008,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         {
                             optSim->Reset();
                             optSim->SetGatesCounter(0);
-                            job->startsFromZero = true;
                         }
                         job->config.ApplyConfigurationToSimulator(optSim);
                         // An initial mapping is only valid for a freshly reset register.
@@ -1128,9 +1123,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         std::vector<bool> executed;
         auto optSim = ChooseShotSimulator(shots, nrQubits, nrCbits, nrCbits, simType, method, executed, GetOptimizeSimulator() && !distributed, true);
-        // Host execution always starts from zero.
-        bool shareResetWires = false;
-        const bool reorderedShots = !optSim && PlanFreshMpsShots(shots, nrQubits, simType, method, shareResetWires);
 
         lastSimulatorType = simType;
         lastMethod = method;
@@ -1139,11 +1131,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionEnabled = false;
         lastDistributedPlacement.clear();
 
-        const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = HasTerminalMeasurements(simType, method, optSim, nrQubits, measuredWidth);
+        const bool reproducibleSampling = UsesReproducibleSampling(simType, method, terminalSampling);
         usedTerminalSampling = shots > 1 && terminalSampling;
-        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, measuredWidth, true, optSim, reorderedShots);
+        const bool fullTerminalBatch = terminalSampling && UsesFullTerminalBatch(simType, method, shots, nrQubits, measuredWidth, true, optSim);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
         const size_t nrThreads =
@@ -1162,8 +1154,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (logicalTerminal && !optSim)
                 optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrCbits, simType, method, executed,
                                               nrThreads == 1 && simulator && method == saveMethod && simType == saveSimType ? simulator : nullptr);
-            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex, logicalTerminal,
-                                     shareResetWires);
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex,
+                                     logicalTerminal);
         }
         else if (nrThreads > 1)
         {
@@ -1187,7 +1179,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 shots -= curCnt;
 
                 auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
-                job->shareResetWires = shareResetWires;
                 job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
                 job->network = BaseClass::getptr();
@@ -1228,7 +1219,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const size_t curCnt = shots;
 
             auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
-            job->shareResetWires = shareResetWires;
             job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
             job->network = BaseClass::getptr();
@@ -1256,7 +1246,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     // invocation retained its state for an expectation/state query.
                     optSim->Reset();
                     optSim->SetGatesCounter(0);
-                    job->startsFromZero = true;
                     job->config.ApplyConfigurationToSimulator(optSim);
                     OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
                 }
@@ -3302,38 +3291,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             distCirc = std::move(inlined);
     }
 
-    bool PlanFreshMpsShots(size_t shots, size_t qubits, Simulators::SimulatorType type, Simulators::SimulationType method, bool &shareResetWires)
-    {
-        if (method != Simulators::SimulationType::kMatrixProductState || GetOptimizeSimulator() || !simulator || simulator->GetType() != type ||
-            simulator->GetSimulationType() != method)
-            return false;
-        const auto policy = Simulators::ShotPrefixPolicy::FromConfiguration(type, method, configuration.GetConfigMap(), {}, qubits);
-        if (shots > 1 && policy.contiguous)
-        {
-            auto terminal = Circuits::IsolatedMpsTerminalOrder(distCirc, qubits, type);
-            if (terminal != distCirc)
-            {
-                distCirc = std::move(terminal);
-                return true;
-            }
-        }
-        if (!policy.contiguous)
-            return false;
-        const auto cap = configuration.IsSet("matrix_product_state_max_bond_dimension")
-                             ? std::stoull(configuration.GetConfiguration("matrix_product_state_max_bond_dimension"))
-                             : 0;
-        // Below the layout search threshold only off-index paths may get a new
-        // layout. The rank proof itself requires every pair to be adjacent in
-        // index order. Aer starts in index order and does no initial layout search.
-        const bool knownLayout = !simulator->SupportsMPSSwapOptimization() || !optimizeInitialQubitsMap || qubits < mpsOptimizationQubitsNumberThreshold ||
-                                 (cap && cap < mpsOptimizationBondDimensionThreshold);
-        auto planned = Circuits::ScheduleMpsShots(distCirc, qubits, *simulator, configuration.GetConfigMap(), knownLayout, &shareResetWires);
-        if (planned == distCirc)
-            return false;
-        distCirc = std::move(planned);
-        return true;
-    }
-
     // The stabilizer backend automatic selection may move a Clifford circuit
     // to: the current backend's own (a composite maps to its plain backend)
     // when the candidate set lists it, else another listed stabilizer backend;
@@ -3371,14 +3328,28 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // Keep adaptive terminal samplers on the full request: splitting it could
     // put every block below the crossover. This decision must not depend on
     // the requested worker count, since it also selects the logical RNG layout.
-    bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t measuredWidth, bool startsFromZero,
-                               const std::shared_ptr<Simulators::ISimulator> &prepared, bool reorderedShots = false) const
+    bool UsesFullTerminalBatch(Simulators::SimulatorType type, Simulators::SimulationType method, size_t shots, size_t qubits, size_t measuredWidth,
+                               bool startsFromZero, const std::shared_ptr<Simulators::ISimulator> &prepared) const
     {
 #ifndef NO_QISKIT_AER
-        // Newly certified Aer terminal circuits use one stream regardless of
-        // the worker budget. The ordinary Aer sampler seeds each physical job.
-        if (reorderedShots && type == Simulators::SimulatorType::kQiskitAer && configuration.IsSet("seed"))
-            return true;
+        if (type == Simulators::SimulatorType::kQiskitAer && method == Simulators::SimulationType::kMatrixProductState)
+        {
+            // Aer uses its probabilities sampler only for a full-register readout.
+            // Copy-and-collapse sampling can distribute its independent shots.
+            if (measuredWidth != qubits || configuration.GetConfiguration("sampling_policy") == "legacy" ||
+                (configuration.IsSet("mps_sample_measure_algorithm") && configuration.GetConfiguration("mps_sample_measure_algorithm") != "mps_probabilities"))
+                return false;
+            // Width above includes every measured wire. The terminal sampler only
+            // sees surviving classical writes, and deduplicates repeated qubits.
+            const auto readout = distCirc->GetLastMeasurements(std::vector<bool>(distCirc->size(), false));
+            size_t next = 0;
+            for (const auto site : readout->GetQubits()) // sorted by GetLastMeasurements
+                if (site == next)
+                    ++next;
+            return next == qubits;
+        }
+#else
+        (void)qubits;
 #endif
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
             method == Simulators::SimulationType::kDensityMatrix)
@@ -3433,11 +3404,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
 #ifndef NO_QISKIT_AER
-        // The CPU Aer statevector and matrix product state run their shots on
-        // these workers, one state each with its saved copy, and not on the
-        // logical shot blocks, which only QCSim reaches: the trajectory memory
-        // budget is applied to them here. A prepared simulator, which the
-        // workers clone, and its saved copy are reserved out of the budget. A
+        // CPU Aer shot workers hold a state and its saved copy. Apply the
+        // trajectory memory budget before choosing the batching strategy.
+        // Reserve space for the prepared simulator and its saved copy. A
         // matrix product state without a bond limit has no known size, and one
         // whose size estimate no size_t holds is as good as unbounded: under an
         // explicit budget they keep one worker, as realization workers do;
@@ -3573,15 +3542,25 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return 1024;
     }
 
-    bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
+    bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method, bool terminal) const
     {
-        return configuration.GetConfiguration("sampling_policy") != "legacy" && ExecuteJob<Time>::ReproducibleMethod(type, method);
+        if (configuration.GetConfiguration("sampling_policy") == "legacy")
+            return false;
+#ifndef NO_QISKIT_AER
+        // Aer's destructive trajectories use its own worker streams. Terminal
+        // samples can use the same fixed, seeded batches as other read-only jobs.
+        if (terminal && type == Simulators::SimulatorType::kQiskitAer && method == Simulators::SimulationType::kMatrixProductState)
+            return configuration.IsSet("seed"); // A truly unseeded Aer execution keeps its own streams.
+#else
+        (void)terminal;
+#endif
+        return ExecuteJob<Time>::ReproducibleMethod(type, method);
     }
 
     void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers, size_t qubits,
                                   size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
                                   const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex,
-                                  bool terminalSampling = false, bool shareResetWires = false)
+                                  bool terminalSampling = false)
     {
         // Terminal native samplers consume one stream per batch. Fixed logical
         // batches preserve those streams across worker counts without replaying
@@ -3677,13 +3656,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             prepared->SetMultithreading(false);
         if (simulator && simulator != prepared && !continueExecution)
             simulator->Clear();
-        // Terminal batches sample without collapsing, and a sampler prepares its
-        // state once: an MPS moves the measured sites to the head of the chain, an
-        // MPO traces its suffixes, a tableau solves its distribution. The first
-        // batch therefore samples the prepared state itself, and only then do the
-        // others copy it, with that work done. One worker keeps sampling the
-        // prepared state, reseeded for each batch, and needs no copy at all.
+        // QCSim terminal samplers can prepare a marginal on their first call: an
+        // MPS moves measured sites, an MPO traces suffixes, and a tableau solves
+        // its distribution. Prime those caches on the source before cloning it.
+        // Aer's copy-and-collapse sampler works on private tensors on every shot,
+        // so all workers can start immediately with single-threaded native clones.
         const bool sampleSource = terminalSampling && prepared;
+        const bool primeSource = sampleSource && type == Simulators::SimulatorType::kQCSim;
         // Such a batch only reads what the evolution deferred, the measurements:
         // each job gets those instead of the whole circuit to scan and copy.
         auto jobCircuit = circuit;
@@ -3693,11 +3672,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // Every job runs the same configuration, apart from its seed.
         const auto jobConfiguration = ExecutionConfiguration(type, qubits, method);
         const size_t blocks = shots / blockSize + (shots % blockSize != 0);
-        workers = std::max<size_t>(1, std::min(workers, sampleSource && blocks > 1 ? blocks - 1 : blocks));
+        workers = std::max<size_t>(1, std::min(workers, primeSource && blocks > 1 ? blocks - 1 : blocks));
         if (workers > 1)
         {
             threadsPool.Resize(workers);
-            threadsPool.SetFinishLimit(sampleSource ? shots - std::min(blockSize, shots) : shots);
+            threadsPool.SetFinishLimit(primeSource ? shots - std::min(blockSize, shots) : shots);
         }
         // The caller's OpenMP limit is a budget shared by concurrent shot jobs.
         // std::thread workers do not inherit the caller's OpenMP ICV, so pass
@@ -3717,7 +3696,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         {
             const size_t count = std::min(blockSize, shots - begin);
             auto job = std::make_shared<ExecuteJob<Time>>(jobCircuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
-            job->shareResetWires = shareResetWires;
             // Even a one-shot tail must remove the same deterministic prefix:
             // classical instruction positions are part of shot_v1 stream IDs.
             job->optimiseMultipleShotsExecution = independentShots || terminalSampling || count > 1 || GetOptimizeSimulator();
@@ -3745,7 +3723,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->independentShotStreams = independentShots;
             job->trajectorySeed = Simulators::IState::DeriveSeed(seed, 0x53484f545f5631ULL);
             job->firstShot = begin;
-            const bool onSource = sampleSource && (block == 0 || workers == 1);
+            const bool onSource = sampleSource && (workers == 1 || (primeSource && block == 0));
             if (onSource)
             {
                 // The streams a copy made for this batch would get.
@@ -3846,8 +3824,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
     // Returns whether the planner prepared a gate window for this circuit.
-    // A searched layout must beat index order by minLayoutGain. A device
-    // line placed directly on the chain needs no search.
+    // minLayoutGain: above zero, the predicted gain a searched layout needs to replace index order
+    // (a line placed along the chain needs none: it is exact).
     bool OptimizeMPSInitialQubitsMap(const std::shared_ptr<Simulators::ISimulator> &sim, const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
                                      bool freshRegister = true, double minLayoutGain = 0.) const
     {
@@ -3875,22 +3853,18 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     std::vector<long long int> line;
                     if (freshRegister)
                     {
-                        // Layers still guide the initial layout. They can become the
-                        // execution order only when commuting gates preserves the result.
-                        const bool preserveOrder = sim->GetShotPrefixPolicy().contiguous;
-                        auto ordered = preserveOrder ? dcirc : Circuits::Circuit<Time>::LayersToCircuit(layers);
+                        auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
                         // Place a path along the chain when this avoids all swaps.
                         if (placeQubits)
                             line = Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits());
-                        if (!preserveOrder && sim->GetType() == Simulators::SimulatorType::kQCSim)
+                        if (sim->GetType() == Simulators::SimulatorType::kQCSim)
                             ordered = Circuits::ChainOrdered(ordered,
                                                              sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
                                                                  ? Circuits::ChainOrder::kMixedState
                                                              : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
                                                                                              : Circuits::ChainOrder::kNone,
                                                              line.empty() ? nullptr : &line);
-                        if (ordered != dcirc)
-                            dcirc->SetOperations(ordered->GetOperations());
+                        dcirc->SetOperations(ordered->GetOperations());
                     }
                     // A suffix keeps its source order. The sampler installs the
                     // executed window after restore; only fusion needs a view now.
@@ -4005,7 +3979,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 if (!line.empty())
                 {
                     sim->SetInitialQubitsMap(line);
-                    if (sim->GetType() == Simulators::SimulatorType::kQCSim && !sim->GetShotPrefixPolicy().contiguous)
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
                     {
                         const auto ordered = Circuits::ChainOrdered(dcirc,
                                                                     sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator

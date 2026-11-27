@@ -1,5 +1,4 @@
 // Numerical contract tests through the public request API, without Python/GPU.
-#include "../Circuit/ChainOrder.h"
 #include "../Execution/NoisyEstimation.h"
 #include "../Simulators/Core/Factory.h"
 #include "../maestrolib/Interface.h"
@@ -488,150 +487,116 @@ void TestTruncatedPauliShotOrder()
     }
 }
 
-void TestIsolatedMeasurementShotOrder()
+void TestEntangledChainReadout()
 {
-    using namespace Circuits;
-    const auto read = std::make_shared<MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}});
-    const auto pair = std::make_shared<CXGate<>>(1, 2);
-    const auto plan = [](const std::shared_ptr<Circuit<>> &source) { return IsolatedMpsTerminalOrder(source, 4, Simulators::SimulatorType::kQCSim); };
-    const auto prepare = std::make_shared<HadamardGate<>>(0);
-    const auto routed = std::make_shared<CXGate<>>(1, 3);
-    const auto source = std::make_shared<Circuit<>>(Circuit<>({prepare, read, pair, routed}));
-    const auto terminal = plan(source);
-    Check(terminal != source && terminal->GetOperations() == Circuit<>({prepare, pair, routed, read}).GetOperations() && source->GetOperations()[1] == read,
-          "Did not move just the isolated readout ahead of layout");
-    const auto rejected = [&](const Circuit<> &circuit) {
-        const auto original = std::make_shared<Circuit<>>(circuit);
-        return plan(original) == original;
+    const j::object bell{{"format", "instructions"},
+                         {"num_qubits", 6},
+                         {"num_clbits", 6},
+                         {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}}}}};
+    const j::array wires{0, 1, 2, 3, 4, 5}, rest{1, 2, 3, 4, 5};
+    const auto check = [&](const char *backend, const char *method, std::string_view operation, const j::object &options) {
+        const bool measured = operation == "measure";
+        j::object first{{"name", std::string(operation)}, {"qubits", j::array{0}}};
+        if (measured)
+            first["clbits"] = j::array{0};
+        else if (operation == "kraus")
+        {
+            const double keep = std::sqrt(.4), decay = std::sqrt(.6);
+            first["operators"] = j::array{j::array{1, 0, 0, keep}, j::array{0, decay, 0, 0}};
+        }
+        // Qubit 0 is entangled with 1. The rest of the chain copies the Bell
+        // bit after the measurement, damping or reset on 0. Even when these
+        // gates are prepared first, the state needs only rank two (four for MPO).
+        j::array suffix{first};
+        for (size_t q = 1; q < 5; ++q)
+            suffix.push_back(j::object{{"name", "cx"}, {"qubits", j::array{q, q + 1}}});
+        const auto &read = measured ? rest : wires;
+        suffix.push_back(j::object{{"name", "measure"}, {"qubits", read}, {"clbits", read}});
+        std::map<std::string, double> expected{{"000000", .5}};
+        if (measured)
+            expected["111111"] = .5;
+        else if (operation == "reset")
+            expected["011111"] = .5;
+        else
+        {
+            expected["111111"] = .2;
+            expected["011111"] = .3;
+        }
+        for (bool checkpoint : {false, true})
+        {
+            auto request = Request(checkpoint ? "checkpoint_batch" : "execute", 6, "", method);
+            auto &sim = request["simulator"].as_object();
+            sim["backend"] = backend;
+            sim["options"] = options;
+            auto circuit = bell;
+            if (checkpoint)
+            {
+                auto tail = bell;
+                tail["source"] = suffix;
+                request["suffixes"] = j::array{tail};
+            }
+            else
+                for (const auto &op : suffix)
+                    circuit.at("source").as_array().push_back(op);
+            request["circuit"] = circuit;
+            auto &execution = request["execution"].as_object();
+            execution["shots"] = 512;
+            execution["seed"] = 37;
+            for (bool rows : {false, true})
+            {
+                if (rows && checkpoint)
+                    break; // checkpoint_batch exposes suffix counts
+                if (rows)
+                    execution["return_samples"] = true;
+                const auto output = Call(request);
+                const auto &result = checkpoint ? output.at("results").as_array()[0].as_object() : output;
+                std::map<std::string, size_t> counts;
+                if (rows)
+                {
+                    if (measured)
+                        Check(result.at("execution_metadata").at("sampling_strategy") == "terminal_v1", "An entangled terminal readout replayed shots");
+                    for (const auto &row : result.at("samples").as_array())
+                        ++counts[std::string(row.as_string())];
+                }
+                else
+                    for (const auto &entry : result.at("counts").as_object())
+                        counts[std::string(entry.key())] = entry.value().to_number<size_t>();
+                Check(counts.size() == expected.size(), "Entangled chain lost a branch or produced an impossible bit string");
+                for (const auto &[bits, probability] : expected)
+                    Check(std::abs(static_cast<double>(counts.at(bits)) / 512 - probability) < .10, "Entangled readout failed its joint probability");
+                if (!checkpoint && std::string_view(method) == "matrix_product_state")
+                {
+                    const auto key = rows ? "samples" : "counts";
+                    Check(Call(request).at(key) == result.at(key), "An entangled MPS readout failed seeded replay");
+                }
+            }
+        }
     };
-    Check(rejected(Circuit<>({std::make_shared<CXGate<>>(0, 1), read, pair})), "Moved a coupled measured site");
-    Check(rejected(Circuit<>({read, std::make_shared<XGate<>>(0), pair})), "Moved a readout past reuse of its site");
-
-    const auto condition = std::make_shared<EqualCondition>(std::vector<size_t>{1}, std::vector<bool>{true});
-    Check(rejected(Circuit<>({read, std::make_shared<ConditionalGate<>>(pair, condition)})), "Moved a measurement past a classical reader");
-    Check(rejected(Circuit<>({read, std::make_shared<Reset<>>(Types::qubits_vector{2}), pair})), "Moved a measurement across a reset");
-    const auto noise = std::make_shared<QuantumChannelOperation<>>(Types::qubits_vector{1}, Simulators::QuantumChannel::AmplitudeDamping(.3));
-    Check(rejected(Circuit<>({read, noise, pair})), "Moved a measurement across a channel draw");
-
-    struct UnnamedGate : XGate<>
-    {
-        UnnamedGate() : XGate<>(1)
-        {
-        }
-
-        QuantumGateType GetGateType() const override
-        {
-            return QuantumGateType::kNone;
-        }
-
-        Eigen::MatrixXcd GetMatrix() const override
-        {
-            return Eigen::Matrix2cd::Zero();
-        }
-    };
-
-    Check(rejected(Circuit<>({read, std::make_shared<UnnamedGate>()})), "Moved an opaque gate across a measurement");
-
     for (const char *backend : {"qcsim"
 #ifndef NO_QISKIT_AER
                                 ,
                                 "aer"
 #endif
          })
-    {
-        // The rest of the register can truncate appreciably. Require the same
-        // joint readout, including repeated classical writes, as explicitly
-        // placing the isolated measurement first among the terminal reads.
-        const std::string local = "ry(1.1) q[0]; ", early = "measure q[0] -> c[1]; ";
-        const std::string gates = "h q[1]; cx q[1],q[2]; h q[3]; cx q[3],q[4]; cx q[2],q[3]; cx q[3],q[2]; ";
-        const std::string tail = "measure q[2] -> c[2]; measure q[4] -> c[0]; measure q[1] -> c[3]; measure q[3] -> c[0];";
-        for (bool rows : {false, true})
+        for (const auto &options : {j::object{{"max_bond_dimension", 2}}, j::object{{"singular_value_threshold", 1e-10}}})
         {
-            const auto run = [&](const std::string &body) {
-                auto request = Request("execute", 5, body, "matrix_product_state", 4);
-                request["simulator"].as_object()["backend"] = backend;
-                request["simulator"].as_object()["options"] = j::object{{"singular_value_threshold", 0.4}, {"max_simulators", 1}};
-                auto &execution = request["execution"].as_object();
-                execution["shots"] = 256;
-                execution["return_samples"] = rows;
-                auto result = Call(request);
-                if (rows)
-                    Check(result.at("execution_metadata").at("sampling_strategy") == "terminal_v1", "Isolated MPS readout replayed individual shots");
-                return result.at(rows ? "samples" : "counts");
-            };
-            Check(run(local + early + gates + tail) == run(local + gates + early + tail), "Isolated MPS readout differs from terminal sampling");
+            check(backend, "matrix_product_state", "measure", options);
+            check(backend, "matrix_product_state", "kraus", options);
         }
-    }
-}
-
-void TestTruncatedChainShotOrder()
-{
-    const j::object bell{{"format", "instructions"},
-                         {"num_qubits", 4},
-                         {"num_clbits", 4},
-                         {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
-                                             j::object{{"name", "h"}, {"qubits", j::array{2}}}, j::object{{"name", "cx"}, {"qubits", j::array{2, 3}}}}}};
-    const auto check = [&](const char *backend, const char *method, std::string_view collapse, j::object options) {
-        const bool measurement = collapse == "measure";
-        j::object collapseOp{{"name", std::string(collapse)}, {"qubits", j::array{0}}};
-        if (measurement)
-            collapseOp["clbits"] = j::array{0};
-        else if (collapse == "kraus")
-            collapseOp["operators"] = j::array{j::array{1, 0, 0, 0}, j::array{0, 1, 0, 0}};
-        const j::array all{0, 1, 2, 3}, rest{1, 2, 3};
-        const auto &measured = measurement ? rest : all;
-        const j::array tail{collapseOp, j::object{{"name", "cx"}, {"qubits", j::array{1, 2}}}, j::object{{"name", "cx"}, {"qubits", j::array{2, 1}}},
-                            j::object{{"name", "measure"}, {"qubits", measured}, {"clbits", measured}}};
-        for (bool checkpoint : {false, true})
-        {
-            auto request = Request(checkpoint ? "checkpoint_batch" : "execute", 4, "", method);
-            request["simulator"].as_object()["backend"] = backend;
-            request["simulator"].as_object()["options"] = options;
-            request["execution"].as_object()["shots"] = 512;
-            auto circuit = bell;
-            if (checkpoint)
-            {
-                auto suffix = bell;
-                suffix["source"] = tail;
-                request["suffixes"] = j::array{suffix};
-            }
-            else
-                for (const auto &op : tail)
-                    circuit.at("source").as_array().push_back(op);
-            request["circuit"] = circuit;
-            for (bool rows : {false, true})
-            {
-                if (rows && checkpoint)
-                    break; // checkpoint_batch exposes suffix counts
-                if (rows)
-                    request["execution"].as_object()["return_samples"] = true;
-                const auto output = Call(request);
-                const auto &result = checkpoint ? output.at("results").as_array()[0].as_object() : output;
-                std::map<std::string, size_t> counts;
-                if (rows)
-                    for (const auto &row : result.at("samples").as_array())
-                        ++counts[std::string(row.as_string())];
-                else
-                    for (const auto &entry : result.at("counts").as_object())
-                        counts[std::string(entry.key())] = entry.value().to_number<size_t>();
-                // In circuit order the collapse separates the Bell pair before the two CNOTs,
-                // so all four branches survive the configured truncation.
-                for (const auto *bits : {"0000", "0111", measurement ? "1010" : "0010", measurement ? "1101" : "0101"})
-                    Check(std::abs(static_cast<double>(counts[bits]) / 512 - .25) < .10, "Truncated chain changed the distribution across a collapse");
-                Check(counts.size() == 4, "Truncated chain produced an unexpected outcome");
-            }
-        }
-    };
-    check("qcsim", "matrix_product_state", "kraus", {{"max_bond_dimension", 2}});
-    check("qcsim", "matrix_product_state", "measure", {{"max_bond_dimension", 2}});
     check("qcsim", "matrix_product_state", "reset", {{"max_bond_dimension", 2}});
-    check("qcsim", "matrix_product_state", "kraus", {{"singular_value_threshold", .4}});
     check("qcsim", "matrix_product_operator", "measure", {{"max_bond_dimension", 4}});
-#ifndef NO_QISKIT_AER
-    check("aer", "matrix_product_state", "kraus", {{"max_bond_dimension", 2}});
-    check("aer", "matrix_product_state", "measure", {{"max_bond_dimension", 2}});
-    check("aer", "matrix_product_state", "kraus", {{"singular_value_threshold", .4}});
-#endif
+
+    // The earlier classical bit controls q2 and the later X on q0 changes its
+    // second read. Both dependencies must survive preparation and shot replay.
+    auto feedback = Request("execute", 3,
+                            "h q[0]; cx q[0],q[1]; measure q[0] -> c[0]; if(c==1) x q[2]; x q[0]; "
+                            "measure q[1] -> c[1]; measure q[2] -> c[2]; measure q[0] -> c[3];",
+                            "matrix_product_state", 4);
+    feedback["simulator"].as_object()["options"] = j::object{{"singular_value_threshold", 1e-10}};
+    feedback["execution"].as_object()["shots"] = 512;
+    const auto counts = Call(feedback).at("counts").as_object();
+    Check(counts.size() == 2 && counts.contains("0001") && counts.contains("1110") && std::abs(Real(counts.at("1110")) / 512 - .5) < .10,
+          "Chain scheduling changed a classical control or reused a qubit before it was measured");
 }
 
 // Model channels and explicit instructions follow the same Kraus trajectory rules.
@@ -2985,8 +2950,7 @@ void TestRequestNoiseAndOptions()
     TestPathIntegralNoisyProbability();
     TestBackendNoisyProbability();
     TestSingleNoisyState();
-    TestIsolatedMeasurementShotOrder();
-    TestTruncatedChainShotOrder();
+    TestEntangledChainReadout();
     TestTruncatedPauliShotOrder();
     TestSampledChannelRequests();
     TestRuntimeNoiseSeeds();

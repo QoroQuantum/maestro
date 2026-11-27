@@ -1,7 +1,6 @@
 #include "Simulators/Core/Factory.h"
 #define INCLUDED_BY_FACTORY
 #include "Network/SimpleDisconnectedNetwork.h"
-#include "Noise/NoiseModel.h"
 #include "Simulators/Fusion/FusionSimulator.h"
 #include "Simulators/Gpu/GpuMPOSimulator.h"
 #include "Simulators/Gpu/GpuMPSSimulator.h"
@@ -138,78 +137,6 @@ struct Observer : ISimulatorObserver
     }
 };
 
-static void TruncatedMpoChannelFusion()
-{
-    for (auto cap : {"4", "16"})
-        for (bool fusion : {false, true})
-        {
-            auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductOperator);
-            sim->Configure("matrix_product_operator_max_bond_dimension", cap);
-            sim->Configure("gate_fusion", fusion ? "true" : "false");
-            sim->AllocateQubits(4);
-            sim->Initialize();
-            sim->ApplyH(0);
-            sim->ApplyCX(0, 1);
-            sim->ApplyH(2);
-            sim->ApplyCX(2, 3);
-            sim->Flush();
-            const auto before = sim->GetGateFusionStatistics().backendGates;
-            // Damping disentangles the first Bell pair before the CX gates act across the middle bond.
-            sim->ApplyZ(0);
-            sim->ApplyQuantumChannel({0}, QuantumChannel::AmplitudeDamping(1.));
-            sim->ApplyCX(1, 2);
-            sim->ApplyCX(2, 1);
-            for (size_t i = 0; i < 16; ++i)
-            {
-                const double expected = i == 0 || i == 4 || i == 10 || i == 14 ? .25 : 0.;
-                Check(std::abs(sim->Probability(i) - expected) < 1e-10, "MPO fusion moved a disjoint gate across a channel before truncation");
-            }
-            if (fusion)
-                Check(sim->GetGateFusionStatistics().backendGates == before + 2, "MPO stopped fusing adjacent operations");
-        }
-}
-
-static void TruncatedChainGateFusion()
-{
-    for (const auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
-        for (const auto cap : {method == SimulationType::kMatrixProductState ? 2 : 4, method == SimulationType::kMatrixProductState ? 4 : 16})
-        {
-            const auto distribution = [&](bool fusion, bool forceOrder) {
-                auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
-                sim->Configure("matrix_product_state_max_bond_dimension", std::to_string(cap).c_str());
-                sim->Configure("gate_fusion", fusion ? "true" : "false");
-                sim->AllocateQubits(5);
-                sim->Initialize();
-                sim->ApplyH(0);
-                sim->ApplyCX(0, 1);
-                sim->ApplyH(2);
-                sim->ApplyCX(2, 3);
-                sim->Flush();
-                const auto before = sim->GetGateFusionStatistics().backendGates;
-                sim->ApplyCX(0, 2);
-                if (forceOrder)
-                    sim->Flush();
-                sim->ApplyCX(3, 1);
-                sim->ApplyCX(1, 4);
-                sim->Flush();
-                if (fusion)
-                    Check(sim->GetGateFusionStatistics().backendGates == before + 3, "Gate-order fixture unexpectedly fused distinct CX gates");
-                return sim->AllProbabilities();
-            };
-            const auto written = distribution(true, true);
-            const auto immediate = distribution(false, false);
-            const auto optimized = distribution(true, false);
-            for (size_t i = 0; i < written.size(); ++i)
-            {
-                Check(std::abs(immediate.at(i) - written[i]) < 1e-10, "An explicit fusion boundary lost the written gate order");
-                // Independent unitaries can be reordered between channel or measurement boundaries.
-                // At full rank the optimized and written orders must still agree.
-                if (cap == (method == SimulationType::kMatrixProductState ? 4 : 16))
-                    Check(std::abs(optimized.at(i) - written[i]) < 1e-10, "Unitary fusion changed an exact chain probability");
-            }
-        }
-}
-
 static void BoundaryPlanning()
 {
     for (bool fusion : {false, true})
@@ -253,40 +180,37 @@ static void BoundaryPlanning()
             }
 }
 
-static void IsolatedMeasurementWorkerPrefix()
+// The shared prefix follows wire and classical dependencies at every chain
+// setting. Disjoint gates can run once even after a draw on an entangled wire.
+static void ChainPrefixDependencies()
 {
-    constexpr size_t width = 12;
-    std::vector<Op> ops{CF::CreateGate(Kind::kHadamardGateType, 0), CF::CreateMeasurement({{0, 0}})};
-    for (size_t layer = 0; layer < 6; ++layer)
+    for (const auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
     {
-        for (size_t q = 1; q < width; ++q)
+        auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
+        sim->AllocateQubits(6);
+        for (const char *cutoff : {"1e-10", "0.4"})
         {
-            ops.push_back(CF::CreateGate(Kind::kRyGateType, q, 0, 0, .15 * (layer + q)));
-            ops.push_back(CF::CreateGate(Kind::kRzGateType, q, 0, 0, .09 * (layer + q)));
+            const bool mpo = method == SimulationType::kMatrixProductOperator;
+            sim->Configure(mpo ? "matrix_product_operator_max_bond_dimension" : "matrix_product_state_max_bond_dimension", "2");
+            sim->Configure(mpo ? "matrix_product_operator_truncation_threshold" : "matrix_product_state_truncation_threshold", cutoff);
+            const auto policy = sim->GetShotPrefixPolicy();
+            const auto h = CF::CreateGate(Kind::kHadamardGateType, 0), bell = CF::CreateGate(Kind::kCXGateType, 0, 1);
+            const auto independent = CF::CreateGate(Kind::kCXGateType, 1, 2), reuse = CF::CreateGate(Kind::kXGateType, 0);
+            const auto read = CF::CreateMeasurement({{0, 0}});
+            const auto feedback = CF::CreateConditionalGate(CF::CreateGate(Kind::kXGateType, 3), CF::CreateEqualCondition({0}, {true}));
+            Circuits::OperationState state;
+            const auto measurement = CF::CreateCircuit({h, bell, read, independent, reuse, feedback});
+            // PlanNonMeasurements omits its leading shared operations. The
+            // returned mask begins with the first operation deferred to a shot.
+            Check(measurement->PlanNonMeasurements(state, policy) == std::vector<bool>({false, true, false, false}),
+                  "A chain prefix missed independent gates or crossed a measured wire or feedback bit");
+            const Op damping = std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, QuantumChannel::AmplitudeDamping(.5));
+            const auto channel = CF::CreateCircuit({h, bell, damping, independent, reuse});
+            Circuits::OperationState channelState;
+            const std::vector<bool> deferred = mpo ? std::vector<bool>{} : std::vector<bool>{false, true, false};
+            Check(channel->PlanNonMeasurements(channelState, policy) == deferred, "A chain prefix lost independent work or shared a trajectory branch");
         }
-        for (size_t q = layer % 2 ? 1 : 2; q + 1 < width; q += 2)
-            ops.push_back(CF::CreateGate(Kind::kCXGateType, q, q + 1));
     }
-    for (size_t q = 1; q < width; ++q)
-        ops.push_back(CF::CreateMeasurement({{q, q}}));
-
-    auto circuit = CF::CreateCircuit(ops);
-    circuit->Optimize();
-    Circuits::Circuit<>::ExecuteResults results;
-    std::mutex mutex;
-    Network::ExecuteJob<> job(circuit, results, 3, width, width, width, SimulatorType::kQCSim, SimulationType::kMatrixProductState, mutex);
-    job.network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{width}, std::vector<size_t>{width});
-    job.network->SetOptimizeSimulator(false);
-    job.config.SetConfiguration("matrix_product_state_truncation_threshold", "1e-10");
-    job.config.SetConfiguration("reproducible_trajectory", "true");
-    job.config.SetConfiguration("seed", "1");
-    job.DoWork();
-    // The worker planned a fresh twelve-site register before layout. Only
-    // measurements remain after preparing the state for the terminal sampler.
-    const auto &suffix = job.dcirc->GetOperations();
-    Check(suffix.size() == width &&
-              std::all_of(suffix.begin(), suffix.end(), [](const auto &op) { return op->GetType() == Circuits::OperationType::kMeasurement; }),
-          "Multi-shot QCSim worker replayed gates across an isolated measurement");
 }
 
 static void MultishotNetwork()
@@ -1934,196 +1858,6 @@ struct AutomaticFusionInspection : Private::FusionState
     }
 };
 
-// Both the layered layout pass and the small-bond device-line shortcut can
-// install a useful initial placement without changing the order of the gates.
-template <class Backend> static void TruncatedDeviceLineOrder(size_t n)
-{
-    const auto at = DeviceLine(n, 5);
-    const auto given = LineOperations(at, true);
-    std::vector<long long> along(n);
-    for (size_t i = 0; i < n; ++i)
-        along[at[i]] = static_cast<long long>(i);
-    for (const char *cap : {"16", "32", "64"})
-    {
-        auto sim = std::make_shared<AutomaticRoutingProbe<Backend>>();
-        ConfigureExactAutomatic(*sim, n);
-        AutomaticNetworkProbe net(Types::qubits_vector{n}, std::vector<size_t>{n});
-        for (const auto *key : {"matrix_product_state_max_bond_dimension", "matrix_product_operator_max_bond_dimension"})
-        {
-            sim->Configure(key, cap);
-            net.Configure(key, cap);
-        }
-        net.SetInitialQubitsMapOptimization(true);
-        net.SetMPSOptimizeSwaps(true);
-        auto circuit = CF::CreateCircuit(given);
-        net.OptimizeMPSInitialQubitsMap(sim, circuit, n);
-        Check(!sim->initialMaps.empty() && sim->initialMaps.back() == along, "Truncation lost the device-line placement");
-        // Both test registers have maximum central rank 64. Only the last cap
-        // can never truncate, so the centre-travel optimization still applies.
-        Check((circuit->GetOperations() == given) == (std::string_view(cap) != "64"), "Initial layout selected the wrong execution order");
-    }
-}
-
-static void UnobservedMpsResetOrder()
-{
-    auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
-    const std::unordered_map<std::string, std::string> options{{"matrix_product_state_max_bond_dimension", "2"}};
-    const auto reset = CF::CreateReset({0});
-    const auto local = CF::CreateGate(Kind::kXGateType, 2), after = CF::CreateGate(Kind::kCXGateType, 0, 3);
-    const auto bell = CF::CreateGate(Kind::kCXGateType, 0, 1);
-    const std::vector<Op> gates{CF::CreateGate(Kind::kHadamardGateType, 0), bell, reset, local, after};
-    auto circuit = CF::CreateCircuit(gates);
-    circuit->SetGlobalPhase(.25);
-    bool shareResetWires = false;
-    Check(Circuits::ScheduleMpsShots(circuit, 6, *sim, options, true, &shareResetWires) == circuit && !shareResetWires,
-          "Fixed-layout MPS moved gates across a reset");
-    const auto plan = Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false, &shareResetWires);
-    const auto &ordered = plan->GetOperations();
-    const auto pos = [&](const auto &op) { return std::find(ordered.begin(), ordered.end(), op); };
-    Check(shareResetWires && ordered.size() == gates.size() && pos(bell) < pos(reset) && pos(reset) < pos(after) && pos(reset) < pos(local) &&
-              plan->GetGlobalPhase() == .25,
-          "A QCSim MPS reset lost a wire dependency or the shared head was hoisted before layout");
-    const auto probabilities = [&](const auto &run, bool share) {
-        auto state = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
-        state->Configure("matrix_product_state_max_bond_dimension", "2"); // The circuit has just one entangled pair.
-        state->AllocateQubits(6);
-        state->Initialize();
-        state->SeedForExecution(42);
-        Circuits::OperationState classical;
-        if (share)
-        {
-            const ShotPrefixPolicy byWire{false, false};
-            const auto mask = run->ExecuteNonMeasurements(state, classical, nullptr, false, false, &byWire);
-            Check(mask == std::vector<bool>({false, true, false}), "The reset's independent gate failed to share the prepared state");
-            run->ExecuteMeasurements(state, classical, mask);
-        }
-        else
-            run->Execute(state, classical);
-        return state->AllProbabilities();
-    };
-    const auto written = probabilities(circuit, false), shared = probabilities(plan, shareResetWires);
-    for (size_t i = 0; i < written.size(); ++i)
-        Check(std::abs(written[i] - shared[i]) < 1e-12, "Per-wire reset scheduling changed an exact-rank trajectory");
-    const auto first = CF::CreateMeasurement({{1, 0}}), last = CF::CreateMeasurement({{2, 0}});
-    circuit->AddOperation(first);
-    circuit->AddOperation(last);
-    const auto recorded = Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false);
-    const auto &ops = recorded->GetOperations();
-    Check(ops[ops.size() - 2] == first && ops.back() == last, "Reset scheduling changed the order of terminal classical writes");
-    circuit->AddOperation(local);
-    Check(Circuits::ScheduleMpsShots(circuit, 6, *sim, options, false) == circuit, "Reset scheduling crossed an observable measurement");
-    auto withChannel = CF::CreateCircuit(gates);
-    withChannel->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2}, QuantumChannel::AmplitudeDamping(.5)));
-    Check(Circuits::ScheduleMpsShots(withChannel, 6, *sim, options, false) == withChannel, "Reset scheduling crossed an explicit quantum channel");
-    auto threeSite = CF::CreateCircuit({bell, reset, CF::CreateGate(Kind::kCCXGateType, 1, 2, 3), local});
-    const auto decomposed = Circuits::ScheduleMpsShots(threeSite, 6, *sim, options, false);
-    const auto &primitives = decomposed->GetOperations();
-    Check(primitives.size() > threeSite->size() &&
-              std::all_of(primitives.begin(), primitives.end(), [](const auto &op) { return op->AffectedQubits().size() <= 2; }),
-          "Unobserved reset layers were planned before the router's three-qubit gate decomposition");
-}
-
-static void RankBoundedMpsShots()
-{
-    const auto damping = [](size_t q) {
-        return std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q}, QuantumChannel::AmplitudeDamping(.35));
-    };
-    std::vector<Op> brick;
-    for (size_t layer = 0; layer < 8; ++layer)
-    {
-        for (size_t q = 0; q < 20; ++q)
-        {
-            brick.push_back(CF::CreateGate(Kind::kRyGateType, q, 0, 0, .3));
-            brick.push_back(CF::CreateGate(Kind::kRzGateType, q, 0, 0, .7));
-        }
-        for (size_t q = layer % 2; q + 1 < 20; q += 2)
-            brick.push_back(CF::CreateGate(Kind::kCXGateType, q, q + 1));
-    }
-    noise::NoiseModel model;
-    for (int q = 0; q < 20; ++q)
-    {
-        model.set_depolarizing(q, .01);
-        model.set_t1(q, .02);
-    }
-    std::mt19937 rng(9);
-    const noise::NoiseInjectionPlan injection(CF::CreateCircuit(brick), model, true);
-    const auto noisy = injection.Combined(rng, true);
-    const auto cloned = std::static_pointer_cast<Circuits::Circuit<>>(noisy->Clone());
-    Circuits::Circuit<>::BitMapping physical, classical;
-    size_t width = 0, bits = 0;
-    auto circuit = cloned->RemapToContinuous(physical, classical, width, bits);
-    Check(Circuits::FitsMpsBondCap(*circuit, 20, 16, true), "four controlled crossings per physical cut must fit cap 16");
-    Check(!Circuits::FitsMpsBondCap(*circuit, 20, 8, true), "cap 8 accepted four controlled crossings");
-    for (const auto &extra :
-         std::vector<Op>{CF::CreateGate(Kind::kCXGateType, 0, 2), CF::CreateGate(Kind::kSwapGateType, 4, 5),
-                         std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{2, 3}, QuantumChannel::TwoQubitDepolarizing(.1))})
-    {
-        auto withExtra = CF::CreateCircuit(brick);
-        withExtra->AddOperation(extra);
-        Check(!Circuits::FitsMpsBondCap(*withExtra, 20, 16, true), "rank proof accepted routing, a relabel, or unbounded noise");
-    }
-    auto fusedSwap =
-        CF::CreateCircuit({CF::CreateGate(Kind::kCXGateType, 0, 1), CF::CreateGate(Kind::kCXGateType, 1, 0), CF::CreateGate(Kind::kCXGateType, 0, 1)});
-    Check(!Circuits::FitsMpsBondCap(*fusedSwap, 20, 16, true), "a fused SWAP could change the physical layout");
-
-    auto simulator = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
-    const auto channels = [](const auto &plan) {
-        std::vector<Op> draws;
-        for (const auto &op : plan->GetOperations())
-            if (op->GetType() == Circuits::OperationType::kQuantumChannel)
-                draws.push_back(op);
-        return draws;
-    };
-    simulator->Configure("matrix_product_state_max_bond_dimension", "16");
-    auto scheduled = Circuits::ScheduleMpsShots(circuit, width, *simulator, simulator->GetExplicitConfigMap(), true);
-    Check(channels(scheduled) != channels(circuit) && channels(scheduled) == channels(Circuits::ChainOrdered(circuit)),
-          "certified model errors lost chain-local scheduling after cloning and host remapping");
-    // Model errors keep their per-wire dependencies even when the bond cap is
-    // exceeded or a nondefault cutoff prevents proving that every rank fits.
-    auto truncated = simulator->GetExplicitConfigMap();
-    truncated["matrix_product_state_max_bond_dimension"] = "8";
-    const auto local = Circuits::ChainOrdered(circuit);
-    Check(Circuits::ScheduleMpsShots(circuit, width, *simulator, truncated, true)->GetOperations() == local->GetOperations(),
-          "a small bond cap disabled local scheduling of model errors");
-    truncated.erase("matrix_product_state_max_bond_dimension");
-    truncated["matrix_product_state_truncation_threshold"] = "1e-10";
-    Check(Circuits::ScheduleMpsShots(circuit, width, *simulator, truncated, false)->GetOperations() == local->GetOperations(),
-          "a cutoff disabled local scheduling of model errors");
-    const auto explicitAndModel = CF::CreateCircuit(circuit->GetOperations());
-    explicitAndModel->AddOperation(damping(0));
-    Check(Circuits::ScheduleMpsShots(explicitAndModel, width, *simulator, truncated, false) == explicitAndModel,
-          "model scheduling reordered a circuit with an explicit Kraus draw");
-    simulator->Configure("matrix_product_state_max_bond_dimension", "2");
-    auto options = simulator->GetExplicitConfigMap();
-    circuit = CF::CreateCircuit({CF::CreateGate(Kind::kRyGateType, 0, 0, 0, .93), damping(0), CF::CreateGate(Kind::kHadamardGateType, 1),
-                                 CF::CreateGate(Kind::kCXGateType, 1, 2), damping(1), CF::CreateGate(Kind::kHadamardGateType, 4), damping(4)});
-    circuit->SetGlobalPhase(.6);
-    auto ordered = Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, true);
-    Check(ordered->GetOperations() != circuit->GetOperations() && ordered->GetGlobalPhase() == .6,
-          "a certified circuit failed to share independent gates or lost its phase");
-    Check(channels(circuit) == channels(ordered), "rank-bounded schedule changed the order of stochastic channel draws");
-    Check(Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, false) == circuit, "unknown physical layout accepted");
-    options["matrix_product_state_truncation_threshold"] = "1e-10";
-    Check(Circuits::ScheduleMpsShots(circuit, 6, *simulator, options, true) == circuit, "rank proof bypassed an active cutoff");
-
-    const auto probabilities = [&](const auto &plan, size_t seed) {
-        auto state = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
-        state->Configure("matrix_product_state_max_bond_dimension", "2");
-        state->AllocateQubits(6);
-        state->Initialize();
-        state->SeedForExecution(seed);
-        Circuits::OperationState classical;
-        plan->Execute(state, classical);
-        return state->AllProbabilities();
-    };
-    for (size_t seed = 0; seed < 8; ++seed)
-    {
-        const auto written = probabilities(circuit, seed), shared = probabilities(ordered, seed);
-        for (size_t i = 0; i < written.size(); ++i)
-            Check(std::abs(written[i] - shared[i]) < 3e-12, "rank-bounded schedule changed a seeded trajectory's probabilities");
-    }
-}
-
 static void AutomaticNetworkJobs()
 {
     std::map<std::pair<bool, bool>, std::vector<long long>> initialMaps;
@@ -2612,8 +2346,6 @@ int main(int argc, char **argv)
         }
 #endif
         BoundaryPlanning();
-        TruncatedMpoChannelFusion();
-        TruncatedChainGateFusion();
         LazyBoundedRoutingAndSharing<Private::QCSimMPSSimulator>(12);
         LazyBoundedRoutingAndSharing<Private::QCSimMPOSimulator>(6);
         InactiveRoutingViewLifetime<Private::QCSimMPSSimulator>(12);
@@ -2643,14 +2375,12 @@ int main(int argc, char **argv)
         AutomaticNetworkLayoutParity<Private::QCSimMPOSimulator>(6);
         DeviceLineLayout<Private::QCSimMPSSimulator>(12, false);
         DeviceLineLayout<Private::QCSimMPOSimulator>(6, true);
-        TruncatedDeviceLineOrder<Private::QCSimMPSSimulator>(12);
-        TruncatedDeviceLineOrder<Private::QCSimMPOSimulator>(6);
         DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(12, 5, "16", true, Circuits::ChainOrder::kSampledChannels);
         DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(6, 5, "16", true, Circuits::ChainOrder::kMixedState);
         DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(8, 5, "64", false, Circuits::ChainOrder::kSampledChannels);
         DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(4, 3, "64", false, Circuits::ChainOrder::kMixedState);
         AutomaticNetworkJobs();
-        IsolatedMeasurementWorkerPrefix();
+        ChainPrefixDependencies();
         MultishotNetwork();
         FlushScopeAndRoutingSettings();
         FusedBoundariesDoNotWait();
@@ -2668,8 +2398,6 @@ int main(int argc, char **argv)
         RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
         RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
         DecompositionAndFusionRanks();
-        UnobservedMpsResetOrder();
-        RankBoundedMpsShots();
         for (auto representation : {SwapRepresentation::Named, SwapRepresentation::Matrix})
         {
             LogicalSwapHistory<Private::QCSimMPSSimulator>("2", representation);

@@ -2359,18 +2359,16 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @param curMaxBondDim Pointer to the current maximum bond dimension, if
      * applicable.
      * @param contiguousPrefix Stop at the first deferred operation during a dry run.
-     * @param policyOverride Execution policy chosen by the planner for this circuit.
      * @return A bool vector with the executed operations marked.
      * @sa ISimulator
      * @sa OperationState
      */
     std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr,
-                                             bool exactChannels = false, bool contiguousPrefix = false,
-                                             const Simulators::ShotPrefixPolicy *policyOverride = nullptr) const
+                                             bool exactChannels = false, bool contiguousPrefix = false) const
     {
         if (sim)
         {
-            const auto policy = policyOverride ? *policyOverride : sim->GetShotPrefixPolicy();
+            const auto policy = sim->GetShotPrefixPolicy();
             exactChannels = policy.exactChannels;
             contiguousPrefix = RequiresContiguousPrefix(policy);
         }

@@ -1237,8 +1237,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     const auto resolveNoisePolicy = [&] {
         const auto layer = noise.Layer();
         const bool estimator = operation == "estimate" || operation == "noisy_fidelity" || noisyProbability;
-        noise.policy = ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact,
-                                                true, true, input.qubits);
+        noise.policy =
+            ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact);
         noise.realizations = noise.mode == "analytical" ? 1 : noise.policy.realizations;
         if (noise.policy.stochastic_noise && noise.mode != "analytical")
             AddApproximation(noise, "finite_noise_realizations");

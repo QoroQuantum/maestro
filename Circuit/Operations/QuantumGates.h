@@ -62,27 +62,6 @@ enum class QuantumGateType : int
     kNone
 };
 
-inline bool IsControlledTwoQubitGate(QuantumGateType type)
-{
-    switch (type)
-    {
-    case QuantumGateType::kCXGateType:
-    case QuantumGateType::kCYGateType:
-    case QuantumGateType::kCZGateType:
-    case QuantumGateType::kCPGateType:
-    case QuantumGateType::kCRxGateType:
-    case QuantumGateType::kCRyGateType:
-    case QuantumGateType::kCRzGateType:
-    case QuantumGateType::kCHGateType:
-    case QuantumGateType::kCSxGateType:
-    case QuantumGateType::kCSxDagGateType:
-    case QuantumGateType::kCUGateType:
-        return true;
-    default:
-        return false;
-    }
-}
-
 /**
  * @class IQuantumGate
  * @brief The interface for quantum gates.
