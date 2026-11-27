@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 namespace j = boost::json;
 extern "C" int maestro_request_c_header_test(void);
 static unsigned checks = 0;
@@ -847,7 +848,39 @@ void TestStabilizerNonClifford()
     // A gate outside the measured cone never reaches a disjoint sampler.
     auto disjoint = Request("execute", 2, "t q[1]; h q[0]; measure q[0] -> c[0];", "stabilizer", 1);
     disjoint["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
-    Check(Call(disjoint).at("shots").to_number<size_t>() == 80, "Disjoint sampling rejected a T gate outside the measured cone");
+    std::vector<const char *> backends{"qcsim"};
+#ifndef NO_QISKIT_AER
+    backends.push_back("aer");
+#endif
+    for (const auto *backend : backends)
+        for (bool rows : {false, true})
+        {
+            auto request = disjoint;
+            request["simulator"].as_object()["backend"] = backend;
+            request["execution"].as_object()["return_samples"] = rows;
+            Check(Call(request, true, true).at("valid").as_bool() && Call(request).at("shots").to_number<size_t>() == 80,
+                  "Disjoint sampling rejected a T gate outside the measured cone");
+            auto &options = request["simulator"].as_object().at("options").as_object();
+            options["measurement_order"] = "written";
+            rejected(request, "Written-order stabilizer execution accepted a T gate outside the measured cone");
+            options.erase("enable_sampling_reduction");
+            rejected(request, "The fixed stabilizer dropped an unmeasured T gate with sampling reduction omitted");
+        }
+    auto candidates = disjoint;
+    auto &selection = candidates["simulator"].as_object();
+    selection["selection"] = "automatic";
+    selection["method"] = "statevector";
+    j::array stabilizers;
+    for (const auto *backend : backends)
+        stabilizers.emplace_back(j::object{{"backend", backend}, {"method", "stabilizer"}});
+    selection["candidates"] = stabilizers;
+    Check(Call(candidates, true, true).at("valid").as_bool() && Call(candidates).at("shots").to_number<size_t>() == 80,
+          "A stabilizer candidate could not run a reduced Clifford cone");
+    selection.at("options").as_object()["measurement_order"] = "written";
+    rejected(candidates, "A stabilizer-only candidate list accepted an unmeasured T gate in written order");
+    selection["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, stabilizers.front()};
+    Check(Call(candidates, true, true).at("valid").as_bool() && Call(candidates).at("execution_metadata").at("method") == "statevector",
+          "A mixed candidate list could not run a non-Clifford circuit on its statevector candidate");
     // Inside the cone the simulator rejects the gate on shot workers: an error
     // result, not a terminated process.
     disjoint["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[1];\nh q[0]; t q[0]; measure q[0] -> c[0];";

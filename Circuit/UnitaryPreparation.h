@@ -59,7 +59,6 @@ void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::st
             measured.insert(qubits.begin(), qubits.end());
             break;
         }
-        case OperationType::kDelay:
         case OperationType::kNoOp:
             break;
         case OperationType::kReset:
@@ -75,17 +74,20 @@ void ForEachUnitaryGate(const std::shared_ptr<Circuit<>> &circuit, const std::st
         case OperationType::kComposite:
             throw std::invalid_argument(query + " does not support composite operations. Pass the constituent operations directly.");
         case OperationType::kQuantumChannel:
-            if (kind == UnitaryPreparationQuery::NoisyProbability)
-            {
-                for (const auto q : op->AffectedQubits())
-                    if (measured.count(q))
-                        throw nonunitaryOperation("mid-circuit measurement on qubit " + std::to_string(q));
-                break;
-            }
             if (kind == UnitaryPreparationQuery::Amplitude)
                 throw std::invalid_argument(query + " does not support quantum channels. Use noisy_prob() for an ensemble probability, or execute() and "
                                                     "estimate() with SimulationType.PathIntegral for counts and observable expectations.");
-            throw nonunitaryOperation("quantum channels");
+            if (kind == UnitaryPreparationQuery::Overlap)
+                throw nonunitaryOperation("quantum channels");
+            [[fallthrough]];
+        case OperationType::kDelay:
+            // Delays are identities in ideal preparation, but can inject
+            // idle channels on their wires in a noisy probability query.
+            if (kind == UnitaryPreparationQuery::NoisyProbability && !measured.empty())
+                for (const auto q : op->AffectedQubits())
+                    if (measured.count(q))
+                        throw nonunitaryOperation("mid-circuit measurement on qubit " + std::to_string(q));
+            break;
         default:
             throw std::invalid_argument(query + " encountered an unknown operation type.");
         }

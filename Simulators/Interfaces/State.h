@@ -183,10 +183,10 @@ inline bool IsWrittenMeasurementOrder(std::string_view value)
 
 inline bool UsesWrittenMeasurementOrder(const std::unordered_map<std::string, std::string> &options, const std::optional<std::string> &order = {})
 {
-    if (order)
-        return IsWrittenMeasurementOrder(*order);
     const auto it = options.find(kMeasurementOrderOption);
-    return it != options.end() && IsWrittenMeasurementOrder(it->second);
+    if (it != options.end())
+        return IsWrittenMeasurementOrder(it->second);
+    return order && IsWrittenMeasurementOrder(*order);
 }
 
 // A shot planner can run before the selected simulator has allocated a register.

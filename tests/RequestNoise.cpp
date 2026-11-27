@@ -253,6 +253,15 @@ void TestPathIntegralNoisyProbability()
     Near(Real(seeded.at("std_error")), *direct.std_error);
     Check(direct.realizations_evaluated == 71 && std::string_view(direct.EstimateEvaluation()) == "trajectory_average",
           "Direct noisy probability did not report the evaluated trajectories");
+    // Noisy probability follows circuit order even on chains whose
+    // shot and expectation planners can reorder injected channels.
+    for (const auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        auto chain = config;
+        chain.simulation_type = method;
+        const auto probability = MaestroExecution::NoisyStateProbability(circuit, {true}, model, 1, chain, 0);
+        Check(probability.policy.chain_order == Circuits::ChainOrder::kNone, "Noisy probability advertised unused chain scheduling");
+    }
     auto embedded = request;
     embedded["circuit"] = j::object{{"format", "instructions"},
                                     {"num_qubits", 1},
@@ -394,6 +403,32 @@ void TestBackendNoisyProbability()
     tooWide["target_state"] = std::string(64, '0') + "1";
     Call(tooWide, false, true);
 #endif
+}
+
+void TestNoisyProbabilityDelayOrder()
+{
+    const auto x = [](int q) { return j::object{{"name", "x"}, {"qubits", j::array{q}}}; };
+    const auto measure = [](int q) { return j::object{{"name", "measure"}, {"qubits", j::array{q}}, {"clbits", j::array{q}}}; };
+    const auto delay = [](int q) { return j::object{{"name", "delay"}, {"qubits", j::array{q}}, {"duration", 1.}}; };
+    auto query = Request("noisy_prob", 2, "", "density_matrix");
+    query["noise"] = j::object{{"channels", j::array{Channel("idle", {{"t1", 1.}, {"t2", 1.}}, {0, 1})}}};
+    query["target_state"] = "11";
+    query["circuit"] =
+        j::object{{"format", "instructions"}, {"num_qubits", 2}, {"num_clbits", 2}, {"source", j::array{x(0), x(1), measure(0), delay(0), measure(1)}}};
+    for (bool validate : {false, true})
+    {
+        const auto error = Call(query, false, validate).at("error").as_object();
+        Check(error.at("code") == "invalid_input" && error.at("message").as_string().find("mid-circuit measurement on qubit 0") != j::string::npos,
+              "Noisy probability accepted idle evolution after readout of the same wire");
+    }
+    // Moving the delay before readout, or delaying the other wire after
+    // readout, applies one T1 of relaxation to exactly one excited qubit.
+    for (const auto &source : {j::array{x(0), x(1), delay(0), measure(0), measure(1)}, j::array{x(0), x(1), measure(0), delay(1), measure(1)}})
+    {
+        query["circuit"].as_object()["source"] = source;
+        Call(query, true, true);
+        Near(Real(Call(query).at("probability")), std::exp(-1.));
+    }
 }
 
 void TestSingleNoisyState()
@@ -2930,6 +2965,7 @@ void TestRequestNoiseAndOptions()
     TestThermalApproximation();
     TestPathIntegralNoisyProbability();
     TestBackendNoisyProbability();
+    TestNoisyProbabilityDelayOrder();
     TestSingleNoisyState();
     TestEntangledChainReadout();
     TestPauliMeasurementFeedback();

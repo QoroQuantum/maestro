@@ -1012,6 +1012,9 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyProbabilityResult out;
     out.policy = ResolveNoiseRealizations(requested_realizations, model, config, layer, kMeasurementTrajectories, clean, true, exact);
+    // Keep each realization in circuit order so truncation and Kraus draws
+    // agree with single-trajectory state queries using the same seed.
+    out.policy.chain_order = Circuits::ChainOrder::kNone;
     const bool stochastic = out.policy.stochastic_noise || out.policy.stochastic_execution;
     if (!stochastic)
         out.policy.realizations = requested_realizations.value_or(1);
@@ -1036,7 +1039,7 @@ NoisyProbabilityResult NoisyStateProbability(const RecordCircuitPtr &circuit, co
     }
     else
     {
-        const noise::NoiseInjectionPlan plan(clean, model, out.policy.runtime_channels);
+        const noise::NoiseInjectionPlan plan(clean, model, out.policy.runtime_channels, out.policy.chain_order);
         RecordCircuitPtr shared, first;
         ResolveRuntimeNoise(layer, plan, rng, shared, first);
         RuntimeDraws draws(&plan, shared, first);

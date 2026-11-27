@@ -69,7 +69,7 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
     for (size_t i = first; i < operations.size(); ++i)
     {
         const auto type = operations[i]->GetType();
-        if (!executed[i - first] && type != Circuits::OperationType::kMeasurement && !(policy.writtenMeasurements && type == Circuits::OperationType::kNoOp))
+        if (!executed[i - first] && type != Circuits::OperationType::kMeasurement && type != Circuits::OperationType::kNoOp)
             return false;
     }
     return true;

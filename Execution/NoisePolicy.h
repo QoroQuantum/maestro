@@ -235,14 +235,14 @@ inline RecordCircuitPtr ExecutedCheckpointPrefix(const RecordCircuitPtr &prefix,
         return nullptr;
     if (!UsesWrittenMeasurementOrder(config))
         return inlined->RemoveEndMeasurements();
-    // In written order a measurement before any subsequent operation collapses
-    // the saved branch, even when the later operation uses a different wire.
+    // In written order a measurement before any subsequent physical or classical
+    // operation collapses the saved branch. No-op placeholders have no effect.
     const auto &ops = inlined->GetOperations();
     auto end = ops.end();
     while (end != ops.begin())
     {
         const auto type = (*(end - 1))->GetType();
-        if (type != Circuits::OperationType::kMeasurement && type != Circuits::OperationType::kConditionalMeasurement)
+        if (type != Circuits::OperationType::kMeasurement && type != Circuits::OperationType::kConditionalMeasurement && type != Circuits::OperationType::kNoOp)
             break;
         --end;
     }

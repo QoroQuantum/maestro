@@ -733,6 +733,38 @@ void ArbitraryPureCheckpointReset()
     Check(ones > 400 && ones < 624, "Pure-state checkpoint reused one sampled reset branch for every shot");
 }
 
+void TerminalMeasurementPlaceholders()
+{
+    const auto h = CF::CreateGate(Gate::kHadamardGateType, 0);
+    const auto noop = CF::CreateNoOp();
+    const auto read0 = CF::CreateMeasurement({{0, 0}});
+    const auto read1 = CF::CreateMeasurement({{1, 1}});
+    const auto program = CF::CreateCircuit({h, read0, noop, read1, noop});
+    constexpr size_t shots = 64;
+    for (const char *order : {"auto", "written"})
+    {
+        auto config = Config(Method::kPathIntegral);
+        config.measurement_order = order;
+        config.path_integral_threshold = .01; // Both planners now require a contiguous prefix.
+        const auto direct = MaestroExecution::SampleCircuitRows(program, config, shots);
+        Check(direct.sampling_strategy == "terminal_v1", "No-op in terminal readout disabled bulk shot records");
+
+        // The prefix's H prepares |+0>. Its end measurements are stripped, so
+        // the suffix's H returns the register to |00> for every shot.
+        MaestroExecution::PrefixCheckpoint checkpoint(program, 2, config);
+        for (const bool rows : {false, true})
+        {
+            const auto result = checkpoint.ExecuteSuffix(program, shots, nullptr, std::nullopt, 17, 2, rows);
+            Check(result.sampling_strategy == "terminal_v1", "No-op in terminal checkpoint readout forced trajectory sampling");
+            if (rows)
+                Check(result.rows == std::vector<uint8_t>(shots * 2, 0), "No-op kept a terminal measurement in the saved checkpoint");
+            else
+                Check(result.counts.size() == 1 && result.counts.front().first == std::vector<bool>{false, false} && result.counts.front().second == shots,
+                      "Checkpoint with a terminal no-op did not preserve its prepared state");
+        }
+    }
+}
+
 void PureCheckpointTerminalSampling(Method method)
 {
     // Statevector, stabilizer and MPS samplers leave the save slot alone, so a
@@ -1241,6 +1273,7 @@ void TestMixedStateExecution()
     for (const auto method : {Method::kStatevector, Method::kPauliPropagator, Method::kMatrixProductState, Method::kDensityMatrix})
         PreparedStateContract(method, "written");
     ArbitraryPureCheckpointReset();
+    TerminalMeasurementPlaceholders();
     for (const auto method : {Method::kStatevector, Method::kStabilizer, Method::kMatrixProductState})
         PureCheckpointTerminalSampling(method);
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix})

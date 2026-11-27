@@ -184,8 +184,7 @@ Network::INetwork<double>::ExecuteResults CombineIndependentCounts(const Network
 
 std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const SimulatorConfig &config, size_t shots)
 {
-    if (!circuit || !config.enable_sampling_reduction || UsesWrittenMeasurementOrder(config) || Simulators::IsDistributedGpuSimulator(config.simulator_type) ||
-        !shots)
+    if (!circuit || !shots || !AllowsDisjointSampling(config))
         return std::nullopt;
     config.Validate();
     const auto start = std::chrono::steady_clock::now();

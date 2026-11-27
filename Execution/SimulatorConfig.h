@@ -225,8 +225,8 @@ struct SimulatorConfig
     // Auto averages eligible statevector channels at the final observable or measurement.
     // Trajectories requests branch sampling for those channels too.
     std::string terminal_channel_policy = "auto";
-    // Written replays measurement instructions in circuit order. Unset uses
-    // the native option, or the selected backend's automatic shot planner.
+    // Written preserves measurement boundaries. An explicit native option
+    // overrides this member, as it does for optimize_circuit. The default is auto.
     std::optional<std::string> measurement_order;
 
     // Whether the configuration may run this backend and method. With
@@ -397,6 +397,13 @@ inline size_t ConfiguredBondCap(const SimulatorConfig &config)
 inline bool UsesWrittenMeasurementOrder(const SimulatorConfig &config)
 {
     return Simulators::UsesWrittenMeasurementOrder(config.native_options, config.measurement_order);
+}
+
+// Splitting the circuit into independent measurement cones changes which
+// operations execute. Written order keeps the whole circuit on the backend.
+inline bool AllowsDisjointSampling(const SimulatorConfig &config)
+{
+    return config.enable_sampling_reduction && !UsesWrittenMeasurementOrder(config) && !Simulators::IsDistributedGpuSimulator(config.simulator_type);
 }
 
 inline bool EffectiveOptimizeCircuit(const SimulatorConfig &config)
@@ -826,7 +833,7 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
                 network->RemoveConfiguration(key);
     }
     for (const auto &[key, value] : config.native_options)
-        if (key != "optimize_circuit")
+        if (key != "optimize_circuit" && key != Simulators::kMeasurementOrderOption)
             network->Configure(key.c_str(), value.c_str());
     // Reusing a network also restores automatic order when both forms are unset.
     network->Configure("measurement_order", UsesWrittenMeasurementOrder(config) ? "written" : "auto");

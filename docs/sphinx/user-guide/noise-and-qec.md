@@ -539,7 +539,7 @@ to draw raises `ValueError` there; put those channels in the suffixes. A channel
 with one branch is a gate and may stay in the prefix. Only suffixes are sampled.
 With `measurement_order="auto"`, a prefix drops end measurements on wires whose
 quantum state and recorded bit it no longer uses. With `"written"`, the prefix
-drops only consecutive measurements at its very end. A measurement before a
+drops only its trailing measurements, ignoring barriers and no-op placeholders. A measurement before a
 gate on another wire then collapses the saved state once for all suffix shots.
 Dynamic checkpoint suffixes evolve their deterministic head once per
 realization when all four retained states (the checkpoint's live state and saved
@@ -619,6 +619,10 @@ channels and independent readout error apply in every mode. The optional
 `evaluation` argument accepts `"auto"` (default), `"exact"`, or `"trajectories"`.
 Exact evaluation requires an ensemble backend. With no `config`, both functions
 continue to use QCSim path integral.
+
+In a circuit passed to `noisy_prob`, place an idle delay before the measurement
+of its qubit. A delay on a previously measured qubit is rejected because its
+noise would act after the recorded result. Delays on other qubits can continue.
 
 `noise_realizations` gives the scheduled count and `realizations_evaluated`
 counts the realizations actually evaluated. An ideal or readout-only query

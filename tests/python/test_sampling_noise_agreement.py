@@ -1433,6 +1433,19 @@ def test_noisy_probability_agrees_in_python_and_json(method, name, seed, noise_s
             assert bound[key] == pytest.approx(result[key], abs=1e-14, rel=0)
 
 
+def test_noisy_probability_rejects_delay_after_measurement():
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.measure([(0, 0)])
+    circuit.delay(0, 1.0)
+    model = maestro.NoiseModel()
+    model.set_idle_noise(0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="mid-circuit measurement on qubit 0"):
+        circuit.noisy_prob("1", model)
+    with pytest.raises(ValueError, match="mid-circuit measurement on qubit 0"):
+        maestro.noisy_prob(circuit, "1", model)
+
+
 _SURFACE_FACTORS = [
     {"kind": "depolarizing", "probability": 0.1},
     {"kind": "amplitude_damping", "qubits": [1], "gamma": 0.3},
@@ -1947,7 +1960,7 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
                 assert abs(read / shots - ones) < 0.04, f"{case} on {name}: {label} read 1 in {read} of {shots} shots, expected {ones}"
 
 
-_BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\n'
+_BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\nbarrier q;\n'
 
 
 @pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
@@ -1989,7 +2002,7 @@ def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_reque
     def whole(read):
         return set(read) == {"00", "11"} and sum(read.values()) == shots and abs(read["11"] / shots - 0.5) < 0.1
 
-    # A whole program as the prefix: the pair parsed from OpenQASM, with `measure q -> c;` at its end.
+    # The trailing OpenQASM barrier leaves the Bell measurements terminal.
     parsed = maestro.QasmToCirc().parse_and_translate(_BELL_QASM)
     for label, read in both(parsed, {"format": "openqasm", "num_qubits": 2, "num_clbits": 2, "source": _BELL_QASM}):
         assert whole(read), f"{label} on {name}, a prefix parsed from OpenQASM: {read}"

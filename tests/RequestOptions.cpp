@@ -738,8 +738,14 @@ void TestTypedTrajectoryConfiguration()
             config.trajectory_max_memory_mb = 1;
             config.max_simulators = 2;
         }
+        config.measurement_order = typed ? "auto" : "written";
+        config.native_options["measurement_order"] = typed ? "written" : "auto";
+        config.optimize_circuit = !typed;
+        config.native_options["optimize_circuit"] = typed ? "true" : "false";
         const auto network = ConfigureNetwork(owner.handle, config);
         Check(bool(network), "Cannot configure trajectory network");
+        Check(network->GetSimulator()->GetShotPrefixPolicy().writtenMeasurements == typed && network->GetController()->GetOptimizeCircuit() == typed,
+              "The network did not apply native measurement_order and optimize_circuit overrides");
         // The network caps the limit at the hardware thread count.
         const size_t expectedWorkers = std::min<size_t>(typed ? 2 : 1, QC::QubitRegisterCalculator<>::GetNumberOfThreads());
         Check(network->GetMaxSimulators() == expectedWorkers, "Typed worker limit was ignored");

@@ -132,6 +132,7 @@ saved, by the rules of the prefix of Python's `PrefixCheckpointedSimulator`.
 Only suffixes are sampled. With `measurement_order: "auto"`, the prefix drops
 end measurements on wires whose quantum state and recorded bit it no longer uses.
 With `"written"`, it drops only the consecutive measurements at the very end.
+OpenQASM barriers and native no-op placeholders leave those measurements terminal.
 For example, measuring q0 before a gate on q1 collapses q0 once in written
 order. Every suffix shot then starts from that same branch. A pure-state
 reset can also collapse the prefix once. Plain `execute` keeps
@@ -285,6 +286,9 @@ over independent trajectories (100 by default). Density matrices, MPOs, and the 
 Pauli propagator apply ensemble channels directly. Coherent disorder still needs
 independent realizations. `noise.evaluation` selects automatic, exact, or trajectory
 evaluation using the same spellings as `estimate`.
+Measurements in a `noisy_prob` circuit must be terminal on their own wires.
+Place a modeled idle delay before the measurement to include its noise in
+the probability. A delay after a measurement is allowed on other wires.
 `noise.mode` selects the permitted external gate noise. The default `combined` accepts all families.
 `pauli` accepts per-qubit Pauli probabilities (also `depolarizing`, `dephasing` and `bit_flip`).
 `coherent` accepts coherent rotations and their `coherent_*` shorthands.
@@ -604,10 +608,10 @@ to option names, conversion or semantics must account for both paths; the typed
 fields are not dead code. The native parser avoids populating duplicate
 representations of the same setting.
 
-In C++, a supplied `native_options["optimize_circuit"]` overrides the
-`optimize_circuit` member. A supplied `measurement_order` member takes
-precedence over its native option. Python and JSON each expose one setting
-for each control.
+For the C++ shot-planning controls `optimize_circuit` and `measurement_order`,
+an entry in `native_options` overrides the corresponding typed member.
+Omitting the entry uses the typed setting. Python and JSON each expose one
+setting for each control.
 
 ## Noise models
 

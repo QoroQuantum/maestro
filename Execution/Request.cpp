@@ -698,13 +698,17 @@ bool RunsOnStabilizer(const std::shared_ptr<Circuits::IOperation<>> &op)
     return op->IsClifford();
 }
 
-// A fixed stabilizer applies Clifford gates only; another gate would fail while
-// the shots run. Check the circuit as it runs: the network optimizes a copy
-// first unless optimize_circuit is off (T;T becomes S), while direct
-// operations apply the circuit as given.
+// When every selectable method is a stabilizer, check the gates it will run.
+// The network optimizes a copy first unless optimize_circuit is off (T;T
+// becomes S), while direct operations apply the circuit as given.
 void CheckStabilizerGates(const CircuitPtr &circuit, const SimulatorConfig &config, bool networkExecuted)
 {
-    if (!config.fixed_backend || config.simulation_type != Simulators::SimulationType::kStabilizer)
+    const bool stabilizersOnly = config.fixed_backend
+                                     ? config.simulation_type == Simulators::SimulationType::kStabilizer
+                                     : networkExecuted && HasCandidateList(config) &&
+                                           std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                                                       [](const auto &candidate) { return candidate.second == Simulators::SimulationType::kStabilizer; });
+    if (!stabilizersOnly)
         return;
     auto executed = circuit;
     if (networkExecuted && EffectiveOptimizeCircuit(config))
@@ -1213,7 +1217,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
     // never reaches the stabilizer; the simulator's own error covers the rest.
-    const bool checkStabilizer = operation != "validate" && operation != "estimate" && !(operation == "execute" && config.enable_sampling_reduction);
+    const bool checkStabilizer = operation != "validate" && operation != "estimate" && !(operation == "execute" && AllowsDisjointSampling(config));
     if (checkStabilizer)
         CheckStabilizerGates(input.circuit, config, operation == "execute");
     const auto observables = Observables(request, input.qubits);
@@ -1374,6 +1378,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
     const bool singleTrajectory =
         oneState && noise.enabled && !noise.automatic && !noise.exact && noise.requested_realizations == 1 && SamplesQuantumChannels(config);
+    if (singleTrajectory)
+        noise.policy.chain_order = Circuits::ChainOrder::kNone; // Match noisy_prob's circuit-order realizations.
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
                   ((oneState || MixedStateQuery(operation)) && noise.exact && noise.realizations == 1) || singleTrajectory || operation == "noisy_fidelity" ||
                   operation == "checkpoint_batch" || noisyProbability,
@@ -2110,8 +2116,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     std::mt19937 rng(noise.seed);
     // On a backend that samples channels from its state, sampled realizations
     // keep the channels no draw replaces: each execution draws their branches.
-    const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels,
-                                         singleTrajectory ? Circuits::ChainOrder::kNone : noise.policy.chain_order);
+    const noise::NoiseInjectionPlan plan(circuit, noise.model, noise.policy.runtime_channels, noise.policy.chain_order);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
     bool frame_suffixes = false;

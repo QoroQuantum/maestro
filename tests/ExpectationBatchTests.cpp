@@ -117,10 +117,16 @@ void PauliMeasurementPrefix()
     config.native_options["measurement_order"] = "written";
     simulator->Configure("measurement_order", "written");
     check(true);
-    // A typed order overrides the native option map when configuring a network.
+    // The native setting overrides a conflicting typed value in both directions.
     config.measurement_order = "auto";
+    check(true);
+    config.measurement_order = "written";
+    config.native_options["measurement_order"] = "auto";
     simulator->Configure("measurement_order", "auto");
     check(false);
+    config.native_options.erase("measurement_order");
+    simulator->Configure("measurement_order", "written");
+    check(true);
 
     for (const auto &[value, enabled] : {std::pair{"false", false}, std::pair{"0", false}, std::pair{"true", true}, std::pair{"1", true}})
     {
