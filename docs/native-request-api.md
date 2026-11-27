@@ -72,13 +72,19 @@ ideal execute/estimate. Results identify the backend/method actually used, which
 is always one of the listed candidates: without a cost model the first listed
 candidate that can hold the register runs (a 40-qubit density matrix yields to a
 listed MPO), and Clifford circuits move to a stabilizer only as a listed
-backend/method pair. A listed stabilizer never runs a non-Clifford circuit. When
-no listed candidate can be created, the request fails instead of running an
-unlisted backend; this includes a one-entry list. When candidates can be created
-but none can run the circuit, the request fails with the first one's error: for
-a stabilizer asked to run a non-Clifford circuit that is `native_failure`, as
-when the stabilizer itself rejects the gate; for a register too large for a
-backend it is that backend's own error.
+backend/method pair. When no listed candidate can be created, the request
+fails, including for a one-entry list. A fixed stabilizer or an explicit list
+containing only stabilizers checks whole-circuit execution before sampling.
+In an ideal circuit, a non-Clifford gate that survives simplification returns
+`unsupported_capability`. For sampled gate noise, an error between two gates
+can prevent their simplification and cause that realization to fail at runtime.
+Disjoint sampling can exclude gates outside the measured cones when enabled
+in automatic measurement order.
+
+QCSim and Aer stabilizers support `p(angle)` at the four Clifford phases
+(identity, S, Z and S†), using a tolerance of `1e-10`. If two individually
+supported angles would sum to an unsupported angle, circuit simplification
+keeps both gates. A statevector still applies their full angles.
 
 Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
 execution job and sample repeatedly. Circuits with intermediate measurements,

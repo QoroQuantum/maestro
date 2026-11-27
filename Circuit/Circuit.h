@@ -1187,6 +1187,22 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
         // first stage, take out duplicates of H, X, Y, Z
 
+        // All combinable rotations are periodic in 4*pi, including controlled
+        // rotations. A large angle can absorb a second rotation in floating point.
+        // Keep small sums and exact additions; otherwise combine equivalent,
+        // bounded angles. Reducing each half-angle via libm also works when a
+        // double-precision remainder against 4*pi would lose the phase.
+        const auto sumAngles = [](double a, double b) {
+            const double sum = a + b;
+            if (std::abs(sum) <= 4 * M_PI)
+                return sum;
+            const bool largerA = std::abs(a) >= std::abs(b);
+            if (largerA ? sum - a == b : sum - b == a)
+                return sum;
+            const auto reduced = [](double angle) { return std::abs(angle) <= 2 * M_PI ? angle : 2 * std::atan2(std::sin(angle / 2), std::cos(angle / 2)); };
+            return reduced(a) + reduced(b);
+        };
+
         bool changed;
 
         do
@@ -1195,6 +1211,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             std::vector<std::shared_ptr<IOperation<Time>>> newops;
             newops.reserve(operations.size());
+
+            // An angle sum can lie outside the Clifford tolerance even when both
+            // inputs are inside it. Keep the original gates in that case so the
+            // circuit stays executable on a stabilizer and retains its angles on
+            // a statevector. Named Clifford replacements (X, Z, S) already satisfy this.
+            const auto appendMerged = [&](const OperationPtr &first, const OperationPtr &second, OperationPtr merged) {
+                if (first->IsClifford() && second->IsClifford() && !merged->IsClifford())
+                    return false;
+                newops.push_back(std::move(merged));
+                return true;
+            };
 
             for (int i = 0; i < static_cast<int>(operations.size()); ++i)
             {
@@ -1309,17 +1336,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                         const auto params1 = gate->GetParams();
                                         const auto params2 = nextGate->GetParams();
 
-                                        const double param = params1[0] + params2[0];
+                                        const double param = sumAngles(params1[0], params2[0]);
                                         const auto delay = gate->GetDelay() + nextGate->GetDelay();
 
+                                        OperationPtr merged;
                                         if (gateType == QuantumGateType::kPhaseGateType)
-                                            newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<PhaseGate<Time>>(qubits[0], param, delay);
                                         else if (gateType == QuantumGateType::kRxGateType)
-                                            newops.push_back(std::make_shared<RxGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RxGate<Time>>(qubits[0], param, delay);
                                         else if (gateType == QuantumGateType::kRyGateType)
-                                            newops.push_back(std::make_shared<RyGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RyGate<Time>>(qubits[0], param, delay);
                                         else
-                                            newops.push_back(std::make_shared<RzGate<Time>>(qubits[0], param, delay));
+                                            merged = std::make_shared<RzGate<Time>>(qubits[0], param, delay);
+                                        if (!appendMerged(op, nextOp, std::move(merged)))
+                                            break;
                                     }
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
@@ -1389,8 +1419,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     else
                                         param2 = -0.25 * M_PI;
 
-                                    const auto param = gate->GetParams()[0] + param2;
-                                    newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                    const auto param = sumAngles(gate->GetParams()[0], param2);
+                                    if (!appendMerged(op, nextOp, std::make_shared<PhaseGate<Time>>(qubits[0], param, delay)))
+                                        break;
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
                                     found = true;
@@ -1411,8 +1442,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     else
                                         param1 = 0.25 * M_PI;
 
-                                    const auto param = nextGate->GetParams()[0] + param1;
-                                    newops.push_back(std::make_shared<PhaseGate<Time>>(qubits[0], param, delay));
+                                    const auto param = sumAngles(nextGate->GetParams()[0], param1);
+                                    if (!appendMerged(op, nextOp, std::make_shared<PhaseGate<Time>>(qubits[0], param, delay)))
+                                        break;
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true;
                                     found = true;
@@ -1524,17 +1556,20 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                     {
                                         const auto params1 = gate->GetParams();
                                         const auto params2 = nextGate->GetParams();
-                                        const double param = params1[0] + params2[0];
+                                        const double param = sumAngles(params1[0], params2[0]);
                                         const auto delay = gate->GetDelay() + nextGate->GetDelay();
 
+                                        OperationPtr merged;
                                         if (gateType == QuantumGateType::kCPGateType)
-                                            newops.push_back(std::make_shared<CPGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CPGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else if (gateType == QuantumGateType::kCRxGateType)
-                                            newops.push_back(std::make_shared<CRxGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRxGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else if (gateType == QuantumGateType::kCRyGateType)
-                                            newops.push_back(std::make_shared<CRyGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRyGate<Time>>(qubits[0], qubits[1], param, delay);
                                         else
-                                            newops.push_back(std::make_shared<CRzGate<Time>>(qubits[0], qubits[1], param, delay));
+                                            merged = std::make_shared<CRzGate<Time>>(qubits[0], qubits[1], param, delay);
+                                        if (!appendMerged(op, nextOp, std::move(merged)))
+                                            break;
                                     }
                                     nextOp = std::make_shared<NoOperation<Time>>();
                                     changed = true; // continue merging gates, we found one

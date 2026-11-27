@@ -96,7 +96,7 @@ class AerSimulator : public AerState
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
         if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("P gate not supported in stabilizer simulation");
+            return ApplyCliffordPhase(qubit, lambda);
 
         const Types::qubits_vector qubits = {qubit};
 

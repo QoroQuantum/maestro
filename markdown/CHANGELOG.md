@@ -328,6 +328,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed stabilizer validation in written measurement order when sampling
+  reduction is enabled. QCSim and Aer stabilizers recognize and execute
+  Clifford phase shifts consistently, including a phase produced by gate
+  simplification.
 - Aer MPS checkpoints and clones preserve native tensors, bond values and
   qubit ordering. Standalone request validation and diagnostic validation
   recognize supported channel instructions on trajectory backends.

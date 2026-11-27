@@ -713,6 +713,11 @@ void CheckStabilizerGates(const CircuitPtr &circuit, const SimulatorConfig &conf
     auto executed = circuit;
     if (networkExecuted && EffectiveOptimizeCircuit(config))
     {
+        // Simplification preserves Clifford circuits. Only a non-Clifford
+        // input needs the optimizer here to decide whether it becomes runnable.
+        const auto &input = circuit->GetOperations();
+        if (std::all_of(input.begin(), input.end(), RunsOnStabilizer))
+            return;
         // Optimize replaces operations and never enters nested circuits, so a
         // new container leaves the request's circuit unchanged.
         executed = std::make_shared<Circuit>(circuit->GetOperations());

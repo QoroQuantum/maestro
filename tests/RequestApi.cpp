@@ -842,9 +842,46 @@ void TestStabilizerNonClifford()
     rejected(Request("probabilities", 1, "h q[0]; t q[0];", "stabilizer"), "A stabilizer query accepted a T gate");
     // The network optimizes the circuit first: T;T becomes the Clifford S.
     auto merged = Request("execute", 1, "h q[0]; t q[0]; t q[0]; measure q -> c;", "stabilizer");
-    Check(Call(merged).at("shots").to_number<size_t>() == 80, "A fixed stabilizer rejected T;T, which runs as S");
-    merged["simulator"].as_object()["options"] = j::object{{"optimize_circuit", false}};
+    auto &mergedOptions = merged["simulator"].as_object()["options"].emplace_object();
+    mergedOptions["measurement_order"] = "written";
+    mergedOptions["enable_sampling_reduction"] = true;
+    Check(Call(merged, true, true).at("valid").as_bool() && Call(merged).at("shots").to_number<size_t>() == 80,
+          "A fixed stabilizer rejected T;T, which runs as S");
+    mergedOptions["optimize_circuit"] = false;
     rejected(merged, "An unoptimized fixed stabilizer accepted T;T");
+    // The four ideal gates H,S,S,H would simplify to H,Z,H. With a bit flip
+    // after every gate, the four-gate circuit measures one and H,Z,H measures zero.
+    auto phasePair = Request("execute", 1, "h q[0]; p(pi/2) q[0]; p(pi/2) q[0]; h q[0]; measure q -> c;", "stabilizer");
+    phasePair["simulator"].as_object()["options"] = j::object{{"measurement_order", "written"}, {"enable_sampling_reduction", true}};
+    phasePair["noise"] = j::object{{"evaluation", "trajectories"},
+                                   {"realizations", 1},
+                                   {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 1}}}}};
+    Check(Call(phasePair, true, true).at("valid").as_bool() && Call(phasePair).at("counts").at("1").to_number<size_t>() == 80,
+          "Stabilizer validation or simplification lost the bit flip between two Clifford phases");
+    // Each phase is within the stabilizer tolerance, but their sum is outside
+    // it. The optimizer must preserve the executable pair with any noise model.
+    auto nearPair = phasePair;
+    const j::object phase{{"name", "p"}, {"qubits", j::array{0}}, {"params", j::array{1.5707963268648966}}};
+    const j::object h{{"name", "h"}, {"qubits", j::array{0}}};
+    nearPair["circuit"] = j::object{{"format", "instructions"},
+                                    {"num_qubits", 2},
+                                    {"num_clbits", 1},
+                                    {"source", j::array{h, phase, j::object{{"name", "h"}, {"qubits", j::array{1}}}, phase, h,
+                                                        j::object{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}}}}};
+    const auto checkNearPair = [&](const char *outcome) {
+        Check(Call(nearPair, true, true).at("valid").as_bool() && Call(nearPair).at("counts").at(outcome).to_number<size_t>() == 80,
+              "Optimizing individually Clifford phase gates changed the measured outcome");
+    };
+    nearPair.erase("noise");
+    checkNearPair("1");
+    nearPair["noise"] = phasePair.at("noise");
+    checkNearPair("1");
+    auto &error = nearPair.at("noise").as_object().at("channels").as_array().front().as_object();
+    error["targets"] = j::array{1};
+    checkNearPair("1");
+    error["targets"] = j::array{0};
+    nearPair.at("circuit").as_object().at("source").as_array()[1].as_object()["noiseless"] = true;
+    checkNearPair("0");
     // A gate outside the measured cone never reaches a disjoint sampler.
     auto disjoint = Request("execute", 2, "t q[1]; h q[0]; measure q[0] -> c[0];", "stabilizer", 1);
     disjoint["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
